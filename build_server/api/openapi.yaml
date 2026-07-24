@@ -1,0 +1,220 @@
+openapi: 3.1.0
+info:
+  title: SLSG Build Service
+  version: 0.1.0
+servers:
+  - url: /v1
+security:
+  - serviceToken: []
+paths:
+  /builds:
+    post:
+      summary: Queue a build
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [scenario_id, scenario_version_id, source]
+              properties:
+                scenario_id:
+                  $ref: "#/components/schemas/ExternalID"
+                scenario_version_id:
+                  $ref: "#/components/schemas/ExternalID"
+                source:
+                  type: string
+                  format: binary
+                  description: ZIP archive, at most 64 MiB compressed.
+      responses:
+        "202":
+          description: Build queued
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Build" }
+        "200":
+          description: Existing build returned for the same idempotency key
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Build" }
+        "400":
+          $ref: "#/components/responses/Problem"
+        "401":
+          $ref: "#/components/responses/Problem"
+  /builds/{build_id}:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+    get:
+      summary: Get build status
+      responses:
+        "200":
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Build" }
+        "404":
+          $ref: "#/components/responses/Problem"
+  /builds/{build_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+    post:
+      summary: Request build cancellation
+      responses:
+        "202": { description: Cancellation accepted }
+        "409":
+          $ref: "#/components/responses/Problem"
+  /builds/{build_id}/retry:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+    post:
+      summary: Retry a failed or cancelled build
+      responses:
+        "202": { description: Retry accepted }
+        "409":
+          $ref: "#/components/responses/Problem"
+  /builds/{build_id}/events:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+    get:
+      summary: Poll build events
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Events ordered by ID
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Event" }
+  /builds/{build_id}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+    get:
+      summary: List build artifacts
+      responses:
+        "200":
+          description: Artifact metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Artifact" }
+  /builds/{build_id}/artifacts/{artifact_id}/content:
+    parameters:
+      - $ref: "#/components/parameters/BuildID"
+      - name: artifact_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      summary: Download an artifact
+      responses:
+        "200":
+          description: Artifact stream
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404":
+          $ref: "#/components/responses/Problem"
+components:
+  securitySchemes:
+    serviceToken:
+      type: http
+      scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, maxLength: 200 }
+    UserID:
+      name: X-Authenticated-User-ID
+      in: header
+      required: true
+      description: User identity asserted by the authenticated BFF.
+      schema: { type: string }
+    BuildID:
+      name: build_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Problem:
+      description: RFC 9457-style problem details
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    ExternalID:
+      type: string
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    Build:
+      type: object
+      required:
+        - build_id
+        - scenario_id
+        - scenario_version_id
+        - requested_by
+        - status
+        - progress
+        - queued_at
+        - cancel_requested
+      properties:
+        build_id: { type: string, format: uuid }
+        scenario_id: { $ref: "#/components/schemas/ExternalID" }
+        scenario_version_id: { $ref: "#/components/schemas/ExternalID" }
+        requested_by: { type: string }
+        status:
+          type: string
+          enum: [queued, validating, preparing, building, uploading, completed, failed, cancelled, retrying]
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        worker_id: { type: string }
+        queued_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        error_message: { type: string }
+        cancel_requested: { type: boolean }
+    Event:
+      type: object
+      properties:
+        build_event_id: { type: integer, format: int64 }
+        build_id: { type: string, format: uuid }
+        event_type: { type: string }
+        message: { type: string }
+        progress: { type: integer }
+        created_at: { type: string, format: date-time }
+    Artifact:
+      type: object
+      properties:
+        artifact_id: { type: string, format: uuid }
+        build_id: { type: string, format: uuid }
+        artifact_type: { type: string }
+        file_name: { type: string }
+        file_size: { type: integer, format: int64 }
+        checksum: { type: string }
+        created_at: { type: string, format: date-time }
+    Problem:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
