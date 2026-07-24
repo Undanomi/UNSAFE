@@ -34,7 +34,7 @@ pnpm dev
 pnpm build
 ```
 
-## Lint / Formatter
+## Lint / Format
 
 ```bash
 pnpm lint
