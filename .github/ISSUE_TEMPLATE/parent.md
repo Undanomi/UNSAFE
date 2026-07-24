@@ -4,7 +4,7 @@ about: "複数の子Issueをまとめて管理するためのIssueです"
 title: "[Parent] "
 labels: "親issue（assigneeなし）"
 assignees: ""
--------------
+---
 
 このIssueは、複数の子Issueをまとめて管理するためのものです。
 

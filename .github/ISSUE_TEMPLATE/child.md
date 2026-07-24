@@ -3,7 +3,7 @@ name: "🔧 子Issue"
 about: "親Issueに紐付けて管理する個別作業です"
 title: "[Child] "
 assignees: ""
--------------
+---
 
 このIssueは、親Issueに紐付く個別作業です。
 
