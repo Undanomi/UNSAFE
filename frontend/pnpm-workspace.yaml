@@ -1,0 +1,12 @@
+engineStrict: true
+
+ignoredBuiltDependencies:
+  - sharp
+
+minimumReleaseAge: 10080
+
+nodeVersion: 24.14.1
+
+onlyBuiltDependencies: []
+
+savePrefix: ''
