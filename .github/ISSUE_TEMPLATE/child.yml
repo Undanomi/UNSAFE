@@ -1,0 +1,87 @@
+name: "🔧 子Issue"
+description: "親Issueに紐付けて管理する個別作業です"
+title: "[Child] "
+labels:
+  - child
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 子Issue
+
+        このIssueは、親Issueに紐付く個別作業です。
+
+        作成後、親Issueの **Add sub-issue** から、このIssueを
+        Sub-issueとして登録してください。
+
+  - type: input
+    id: parent_issue
+    attributes:
+      label: 親Issue
+      description: このIssueを管理する親Issueの番号またはURLを入力してください。
+      placeholder: "#123 または https://github.com/OWNER/REPOSITORY/issues/123"
+    validations:
+      required: true
+
+  - type: textarea
+    id: task
+    attributes:
+      label: 対応内容
+      description: このIssueで実施する作業を具体的に記載してください。
+      placeholder: |
+        例：
+        メールアドレスとパスワードを入力するログイン画面を実装する。
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 実装方針
+      description: 想定している実装方法や変更箇所を記載してください。
+      placeholder: |
+        - `src/pages/Login.tsx` を追加する
+        - メールアドレスとパスワードの入力欄を設置する
+        - 認証APIを呼び出す
+        - エラーメッセージを表示する
+    validations:
+      required: false
+
+  - type: textarea
+    id: completion_conditions
+    attributes:
+      label: 完了条件
+      description: このIssueを完了と判断できる条件を記載してください。
+      placeholder: |
+        - [ ] ログイン画面が表示される
+        - [ ] 入力値のバリデーションが動作する
+        - [ ] 認証APIが呼び出される
+        - [ ] 認証失敗時にエラーが表示される
+        - [ ] テストが追加されている
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依存関係
+      description: 先に完了している必要があるIssueや、関連Issueがあれば記載してください。
+      placeholder: |
+        - Blocked by: #123
+        - Related to: #124
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: 参考資料や注意事項があれば記載してください。
+      placeholder: |
+        - 参考資料：
+        - 関連PR：
+        - 注意事項：
+    validations:
+      required: false
