@@ -1,7 +1,7 @@
 ---
 name: "🔧 子Issue"
 about: "親Issueに紐付けて管理する個別作業です"
-title: "[Child] "
+title: ""
 assignees: ""
 ---
 
