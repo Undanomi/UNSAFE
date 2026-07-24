@@ -1,0 +1,89 @@
+name: "📦 親Issue"
+description: "複数の子Issueをまとめて管理するためのIssueです"
+title: "[Parent] "
+labels:
+  - 親issue（assigneeなし）
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 親Issue
+
+        このIssueは、複数の子Issueをまとめて管理するためのものです。
+
+        Issue作成後、画面の **Create sub-issue** または **Add sub-issue**
+        から子Issueを追加してください。
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: 概要
+      description: この親Issue全体で達成したいことを記載してください。
+      placeholder: |
+        例：
+        ユーザー認証機能を実装し、安全にログインできる状態にする。
+    validations:
+      required: true
+
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景
+      description: この作業が必要になった背景や課題を記載してください。
+      placeholder: |
+        例：
+        現在は認証機能がなく、すべてのユーザーが同じ権限で操作できる。
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対応範囲
+      description: この親Issueに含める作業を記載してください。
+      placeholder: |
+        - ログイン画面の実装
+        - 認証APIの実装
+        - セッション管理
+        - ログアウト機能
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 対応しない範囲
+      description: 今回の作業に含めないものがあれば記載してください。
+      placeholder: |
+        - ソーシャルログイン
+        - 多要素認証
+        - パスワードリセット
+    validations:
+      required: false
+
+  - type: textarea
+    id: completion_conditions
+    attributes:
+      label: 完了条件
+      description: この親Issueを完了とする条件を記載してください。
+      placeholder: |
+        - [ ] 必要な子Issueがすべて作成されている
+        - [ ] すべての子Issueが完了している
+        - [ ] 必要なテストが完了している
+        - [ ] ドキュメントが更新されている
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 補足
+      description: 関連資料、設計上の制約、参考URLなどを記載してください。
+      placeholder: |
+        - 設計資料：
+        - 関連Issue：
+        - その他：
+    validations:
+      required: false
