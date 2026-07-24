@@ -5,10 +5,6 @@ title: "[Child] "
 assignees: ""
 ---
 
-このIssueは、親Issueに紐付く個別作業です。
-
-作成後、親Issueの **Add sub-issue** から、このIssueをSub-issueとして登録してください。
-
 # 親Issue
 
 <!--

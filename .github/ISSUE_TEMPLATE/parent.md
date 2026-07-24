@@ -1,14 +1,10 @@
 ---
 name: "📦 親Issue"
 about: "複数の子Issueをまとめて管理するためのIssueです"
-title: "[Parent] "
+title: "[親Issue] "
 labels: "親issue（assigneeなし）"
 assignees: ""
 ---
-
-このIssueは、複数の子Issueをまとめて管理するためのものです。
-
-Issue作成後、画面の **Create sub-issue** または **Add sub-issue** から子Issueを追加してください。
 
 # 概要
 
