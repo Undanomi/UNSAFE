@@ -1,5 +1,4 @@
 ---
-
 name: "📦 親Issue"
 about: "複数の子Issueをまとめて管理するためのIssueです"
 title: "[Parent] "
