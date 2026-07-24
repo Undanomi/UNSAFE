@@ -3,12 +3,9 @@
 name: "📦 親Issue"
 about: "複数の子Issueをまとめて管理するためのIssueです"
 title: "[Parent] "
-labels:
-
-* "親issue（assigneeなし）"
-  assignees: []
-
----
+labels: "親issue（assigneeなし）"
+assignees: ""
+-------------
 
 このIssueは、複数の子Issueをまとめて管理するためのものです。
 
@@ -36,18 +33,13 @@ Issue作成後、画面の **Create sub-issue** または **Add sub-issue** か�
 
 <!-- この親Issueに含める作業を記載してください。 -->
 
-* [ ] ログイン画面の実装
-* [ ] 認証APIの実装
-* [ ] セッション管理
-* [ ] ログアウト機能
+* [ ]
 
 # 対応しない範囲
 
 <!-- 今回の作業に含めないものがあれば記載してください。 -->
 
-* ソーシャルログイン
-* 多要素認証
-* パスワードリセット
+*
 
 # 完了条件
 

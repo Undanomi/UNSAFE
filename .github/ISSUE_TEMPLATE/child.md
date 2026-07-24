@@ -3,12 +3,9 @@
 name: "🔧 子Issue"
 about: "親Issueに紐付けて管理する個別作業です"
 title: "[Child] "
-labels:
-
-* "child"
-  assignees: []
-
----
+labels: "child"
+assignees: ""
+-------------
 
 このIssueは、親Issueに紐付く個別作業です。
 
@@ -37,24 +34,15 @@ https://github.com/OWNER/REPOSITORY/issues/123
 
 <!-- 想定している実装方法や変更箇所を記載してください。 -->
 
-* `src/pages/Login.tsx` を追加する
-* メールアドレスとパスワードの入力欄を設置する
-* 認証APIを呼び出す
-* エラーメッセージを表示する
+*
 
 # 完了条件
 
-* [ ] ログイン画面が表示される
-* [ ] 入力値のバリデーションが動作する
-* [ ] 認証APIが呼び出される
-* [ ] 認証失敗時にエラーが表示される
-* [ ] テストが追加されている
+* [ ]
 
 # 依存関係
 
-<!--
-先に完了している必要があるIssueや、関連Issueがあれば記載してください。
--->
+<!-- 先に完了している必要があるIssueや、関連Issueがあれば記載してください。 -->
 
 * Blocked by:
 * Related to:
