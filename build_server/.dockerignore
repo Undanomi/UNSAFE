@@ -1,0 +1,10 @@
+.git
+.env
+bin
+data
+builder/base_images
+builder/iso
+builder/packer/outputs
+targets
+*.qcow2
+*.iso

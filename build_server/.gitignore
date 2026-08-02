@@ -1,0 +1,7 @@
+*.qcow2
+*.iso
+.env
+.scenarios
+bin/
+data/
+builder/packer/outputs/
