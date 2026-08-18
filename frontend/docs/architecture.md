@@ -15,7 +15,7 @@ flowchart LR
     CC["Client Component"]
   end
 
-  subgraph Next["Next.js サーバー（BFF）"]
+  subgraph Next["アプリサーバー（Next.js）"]
     SC["Server Component"]
     SA["Server Action"]
     RH["Route Handler"]
@@ -24,10 +24,10 @@ flowchart LR
 
   AI["AIサーバー"]
   Build["ビルドサーバー"]
-  DB["BFF用データストア"]
+  DB["DB"]
 
   CC -->|"更新操作"| SA
-  CC -->|"ポーリング・ダウンロード"| RH
+  CC -->|"ポーリング・ダウンロード等"| RH
   SC -->|"データ取得"| S
   SA --> S
   RH --> S
@@ -37,15 +37,21 @@ flowchart LR
   SC -->|"HTML / RSC Payload"| CC
 ```
 
-図の破線より左側が利用者のブラウザで動くクライアント、右側が Next.js サーバー上で動く BFF である。UI コンポーネントはクライアントから Server Action または Route Handler を呼び出す。BFF 内では、それらの入口が Service を呼び出し、Service が AI サーバー、ビルドサーバー、フロント用 DB と通信する。
+ブラウザでは Client Component が動作する。Next.js アプリサーバーは Server Component の提供、BFF としての Server Action・Route Handler・Service の提供を行う。接続先外部システムとして、AI サーバー・ビルドサーバー・DB が存在する。
 
-Server Action、Route Handler、Service はいずれも Next.js サーバー上で動作する。Service は BFF 内部の処理であり、ブラウザから直接呼び出さない。
+ユーザーによる操作は Client Component から Server Action に渡し、ポーリングやダウンロードなどの HTTP を介した操作は Route Handler に渡す。
+
+Server Action と Route Handler はそれぞれ Service を経由して業務処理を行う。
+
+画面の初期表示や画面遷移時は、Server Component が Service から表示用データを取得し、SSR の結果をブラウザへ返す。
+
+Service はブラウザから直接呼び出さない BFF 内部の業務処理であり、AI サーバー・ビルドサーバー・DBとの通信を担う。
 
 ## 3. 各構成要素の役割
 
 ### 3.1 Client Component
 
-Client Component はブラウザ上で動作し、利用者との対話を担当する。画面の入力、ボタン操作、表示中のUI状態を扱う。下流システムおよび Service へ直接通信しない。
+Client Component はブラウザ上で動作し、利用者との対話を担当する。Server Component から返される HTML および React Server Components Payload を基に画面を表示し、画面の入力、ボタン操作、表示中のUI状態を扱う。下流システムおよび Service へ直接通信しない。
 
 - 画面の入力欄、ボタン、一覧の表示などを行う
 - シナリオ生成やビルド要求などの更新操作を Server Action へ渡す
@@ -56,7 +62,7 @@ Client Component はブラウザ上で動作し、利用者との対話を担当
 Server Component は Next.js サーバー上で動作し、画面の初期表示および画面遷移時のサーバー描画を担当する。必要なデータは Service を直接呼び出して取得し、HTML および React Server Components Payload としてブラウザへ返す。
 
 - 画面表示に必要なデータを取得し、画面を組み立てる
-- Client Component へ表示データを渡す
+- HTML および React Server Components Payload をブラウザへ返し、Client Component の表示に必要なデータを渡す
 - ブラウザ上のイベント処理や継続的なUI状態の管理は行わない
 
 ### 3.3 Server Action
@@ -92,10 +98,10 @@ Route Handler 自身も、下流サービスの呼び出しは Service に委譲
 
 ### 3.5 Service
 
-Service は、Next.js サーバーの内部に置くサーバー専用の処理である。Server Component、Server Action、Route Handler から呼び出され、下流システムとの通信を集約する。ブラウザから直接呼び出さない。
+Service は、Next.js サーバーの内部に置くサーバー専用の処理である。Server Component、Server Action、Route Handler から呼び出され、AI サーバー、ビルドサーバー、DBとの通信を集約する。ブラウザから直接呼び出さない。
 
 Service の責務は次のとおりである。
 
-- AI サーバー、ビルドサーバー、BFF用データストアとの通信を一箇所にまとめる
+- AI サーバー、ビルドサーバー、DB との通信を一箇所にまとめる
 - 下流サービスごとのデータ形式を、画面で利用する形式へ変換する
 - 複数の下流サービスから得た情報を必要に応じてまとめる
