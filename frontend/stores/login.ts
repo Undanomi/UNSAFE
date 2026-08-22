@@ -1,5 +1,5 @@
 // 認証基盤が未定なため、モック化しておく
-export const loginCopy = {
+export const LOGIN_COPY = {
   appName: "SLSG",
   auth: {
     googleLogin: "Google でログイン",

@@ -1,7 +1,7 @@
 import { ArrowLeft, ShieldCheck } from "lucide-react"
 import Link from "next/link"
 
-const sections = [
+const PRIVACY_SECTIONS = [
   {
     body: "SLSG は、セキュリティ学習用マシンの作成・利用に必要な範囲で情報を取り扱います。",
     title: "1. 取得する情報",
@@ -60,7 +60,7 @@ export function PrivacyPolicy() {
               必要な情報だけを取得し、学習環境の提供以外の目的では利用しません。
             </blockquote>
 
-            {sections.map((section) => (
+            {PRIVACY_SECTIONS.map((section) => (
               <section key={section.title}>
                 <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
                   {section.title}

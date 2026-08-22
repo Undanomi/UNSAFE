@@ -11,7 +11,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
-import { chatSessions } from "@/stores/chat"
+import { CHAT_SESSIONS } from "@/stores/chat"
 
 export function SiteSidebar() {
   const [isChatListOpen, setIsChatListOpen] = useState(false)
@@ -71,7 +71,7 @@ export function SiteSidebar() {
             className="grid max-h-[156px] gap-[5px] overflow-y-auto pr-0.5"
             id="sidebar-chat-list"
           >
-            {chatSessions.map((session) => (
+            {CHAT_SESSIONS.map((session) => (
               <Link
                 className="overflow-hidden rounded-[10px] px-[9px] py-2 text-[0.78rem] font-bold text-[#c5c4bd] text-ellipsis whitespace-nowrap hover:bg-[#3a3934] hover:text-white"
                 href={`/machines/chat/${session.id}`}

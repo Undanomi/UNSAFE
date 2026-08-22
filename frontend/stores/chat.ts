@@ -19,9 +19,9 @@ export const CHAT_CONFIG = {
   stepIncrement: 1,
 } as const
 
-export const visibilityOptions = ["非公開", "公開"] as const
-export const difficultyOptions = ["Very Easy", "Easy", "Medium", "High"] as const
-export const themeSuggestions = [
+export const VISIBILITY_OPTIONS = ["非公開", "公開"] as const
+export const DIFFICULTY_OPTIONS = ["Very Easy", "Easy", "Medium", "High"] as const
+export const THEME_SUGGESTIONS = [
   "Web セキュリティ",
   "ログ調査",
   "認証・認可",
@@ -29,8 +29,8 @@ export const themeSuggestions = [
   "ネットワーク",
 ] as const
 
-export type ChatVisibility = (typeof visibilityOptions)[number]
-export type ChatDifficulty = (typeof difficultyOptions)[number]
+export type ChatVisibility = (typeof VISIBILITY_OPTIONS)[number]
+export type ChatDifficulty = (typeof DIFFICULTY_OPTIONS)[number]
 
 export type ChatSession = {
   id: string
@@ -51,7 +51,7 @@ export type ChatAnswers = {
   systemFlagDetails: string
 }
 
-export const emptyChatAnswers: ChatAnswers = {
+export const EMPTY_CHAT_ANSWERS: ChatAnswers = {
   name: "",
   visibility: "",
   theme: "",
@@ -62,7 +62,7 @@ export const emptyChatAnswers: ChatAnswers = {
   systemFlagDetails: "",
 }
 
-export const chatCopy = {
+export const CHAT_COPY = {
   assistantLabel: "AI",
   basicReadyPrompt: {
     help: "フラグの指示を行わない場合は、このまま作成できます。",
@@ -118,7 +118,7 @@ export const chatCopy = {
   },
 } as const
 
-export const chatPrompts: Record<number, { help: string; question: string }> = {
+export const CHAT_PROMPTS: Record<number, { help: string; question: string }> = {
   [CHAT_STEPS.machineName]: {
     help: `一覧で見分けやすい名前を、${CHAT_CONFIG.machineNameMaxLength}文字以内で付けてください。`,
     question: "マシン名を入力してください。",
@@ -153,14 +153,14 @@ export const chatPrompts: Record<number, { help: string; question: string }> = {
   },
 }
 
-export const newChatSession: ChatSession = {
+export const NEW_CHAT_SESSION: ChatSession = {
   id: "session-new",
   name: "新しいマシン",
   status: "入力中",
   initialStep: CHAT_STEPS.machineName,
 }
 
-export const chatSessions: ChatSession[] = [
+export const CHAT_SESSIONS: ChatSession[] = [
   {
     id: "session-nginx",
     name: "Nginx Engine",

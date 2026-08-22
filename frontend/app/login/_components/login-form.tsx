@@ -4,7 +4,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { FcGoogle } from "react-icons/fc"
-import { loginCopy } from "@/stores/login"
+import { LOGIN_COPY } from "@/stores/login"
 
 type AuthMode = "login" | "register"
 
@@ -16,7 +16,7 @@ export function LoginForm() {
   const [error, setError] = useState("")
 
   const isRegistering = authMode === "register"
-  const authCopy = loginCopy.auth[authMode]
+  const authCopy = LOGIN_COPY.auth[authMode]
 
   function switchAuthMode() {
     setAuthMode((mode) => (mode === "login" ? "register" : "login"))
@@ -40,13 +40,13 @@ export function LoginForm() {
           <span className="grid size-[34px] place-items-center rounded-xl bg-white text-[1rem] tracking-normal text-[#20201e]">
             S
           </span>
-          <span>{loginCopy.appName}</span>
+          <span>{LOGIN_COPY.appName}</span>
         </div>
         <h1 className="mt-[78px] max-w-[9ch] text-[clamp(2.8rem,6vw,5.4rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-          {loginCopy.title}
+          {LOGIN_COPY.title}
         </h1>
         <p className="mt-[22px] max-w-[31rem] leading-[1.8] text-[#cbc9c2]">
-          {loginCopy.description}
+          {LOGIN_COPY.description}
         </p>
         <div aria-hidden="true" className="mt-[58px] flex gap-2.5">
           <span className="h-2 w-[62px] rounded-full bg-white" />
@@ -66,15 +66,15 @@ export function LoginForm() {
           <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[0.82rem] text-[#61605b]">
             <span>
               {isRegistering
-                ? loginCopy.auth.switch.loginPrompt
-                : loginCopy.auth.switch.registerPrompt}
+                ? LOGIN_COPY.auth.switch.loginPrompt
+                : LOGIN_COPY.auth.switch.registerPrompt}
             </span>
             <button
               className="border-b border-current bg-transparent p-0 text-[inherit] font-extrabold text-[#20201e] hover:text-[#61605b]"
               onClick={switchAuthMode}
               type="button"
             >
-              {isRegistering ? loginCopy.auth.switch.login : loginCopy.auth.switch.register}
+              {isRegistering ? LOGIN_COPY.auth.switch.login : LOGIN_COPY.auth.switch.register}
             </button>
           </div>
           <form className="mt-7 grid gap-5" onSubmit={handleSubmit}>
@@ -117,7 +117,7 @@ export function LoginForm() {
             type="button"
           >
             <FcGoogle aria-hidden="true" size={18} />
-            {isRegistering ? loginCopy.auth.googleRegistration : loginCopy.auth.googleLogin}
+            {isRegistering ? LOGIN_COPY.auth.googleRegistration : LOGIN_COPY.auth.googleLogin}
           </button>
           <p className="mt-6 text-center text-[0.78rem] leading-6 text-[#61605b]">
             続行すると、サービスのデータ取り扱いに同意したものとみなされます。{" "}

@@ -15,7 +15,7 @@ export type MachineSummary = {
   difficulty: MachineDifficulty
 }
 
-export const machineList: MachineSummary[] = [
+export const MACHINE_LIST: MachineSummary[] = [
   {
     id: "nginx-engine",
     name: "Nginx Engine",

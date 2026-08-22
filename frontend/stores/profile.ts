@@ -14,7 +14,7 @@ export type UserProfile = {
   solvedMachines: ProfileMachine[]
 }
 
-export const profileData: UserProfile = {
+export const PROFILE_DATA: UserProfile = {
   id: "tanaka",
   name: "Tanaka",
   initial: "T",
@@ -42,8 +42,8 @@ export const profileData: UserProfile = {
   ],
 }
 
-export const userProfiles: Record<string, UserProfile> = {
-  tanaka: profileData,
+export const USER_PROFILES: Record<string, UserProfile> = {
+  tanaka: PROFILE_DATA,
   suzuki: {
     id: "suzuki",
     name: "Suzuki",

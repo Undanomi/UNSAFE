@@ -1,4 +1,4 @@
-import { type MachineSummary, machineList } from "@/stores/machine-list"
+import { MACHINE_LIST, type MachineSummary } from "@/stores/machine-list"
 
 export type FlagDefinition = {
   label: string
@@ -20,8 +20,8 @@ export type MachineDetail = Pick<
   systemFlag: FlagDefinition
 }
 
-const defaultMachineDetails = Object.fromEntries(
-  machineList.map((machine) => [
+const DEFAULT_MACHINE_DETAILS = Object.fromEntries(
+  MACHINE_LIST.map((machine) => [
     machine.id,
     {
       id: machine.id,
@@ -43,6 +43,6 @@ const defaultMachineDetails = Object.fromEntries(
   ]),
 )
 
-export const machineDetails: Record<string, MachineDetail> = {
-  ...defaultMachineDetails,
+export const MACHINE_DETAILS: Record<string, MachineDetail> = {
+  ...DEFAULT_MACHINE_DETAILS,
 }

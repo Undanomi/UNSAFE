@@ -1,6 +1,6 @@
 import { ProfileEditor } from "@/app/profile/_components/profile-editor"
 import { AppShell } from "@/components/app-shell"
-import { userProfiles } from "@/stores/profile"
+import { USER_PROFILES } from "@/stores/profile"
 
 type UserPageProps = {
   params: Promise<{ userId: string }>
@@ -8,7 +8,7 @@ type UserPageProps = {
 
 export default async function UserPage({ params }: UserPageProps) {
   const { userId } = await params
-  const profile = userProfiles[userId]
+  const profile = USER_PROFILES[userId]
 
   return (
     <AppShell>

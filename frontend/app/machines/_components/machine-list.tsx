@@ -11,18 +11,18 @@ import {
 import Link from "next/link"
 import { useState } from "react"
 import type { MachineSummary } from "@/stores/machine-list"
-import { userProfiles } from "@/stores/profile"
+import { USER_PROFILES } from "@/stores/profile"
 
 type MachineListProps = {
   machines: MachineSummary[]
 }
 
-const pageSize = 10
+const PAGE_SIZE = 10
 
 export function MachineList({ machines }: MachineListProps) {
   const [currentPage, setCurrentPage] = useState(0)
-  const pages = Array.from({ length: Math.ceil(machines.length / pageSize) }, (_, pageIndex) =>
-    machines.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize),
+  const pages = Array.from({ length: Math.ceil(machines.length / PAGE_SIZE) }, (_, pageIndex) =>
+    machines.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE),
   )
   const hasMachines = pages.length > 0
   const visibleMachines = pages[currentPage] ?? []
@@ -141,7 +141,7 @@ export function MachineList({ machines }: MachineListProps) {
                         aria-hidden="true"
                         className="grid size-7 place-items-center rounded-full bg-[#20201e] text-[0.72rem] text-white"
                       >
-                        {userProfiles[machine.authorId]?.initial ?? machine.author.slice(0, 1)}
+                        {USER_PROFILES[machine.authorId]?.initial ?? machine.author.slice(0, 1)}
                       </span>
                       {machine.author}
                     </Link>

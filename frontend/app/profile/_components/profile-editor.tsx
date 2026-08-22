@@ -4,7 +4,7 @@ import { ArrowLeft, ImageUp, Pencil } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
 import { type ChangeEvent, useRef, useState } from "react"
-import { type ProfileMachine, profileData, type UserProfile } from "@/stores/profile"
+import { PROFILE_DATA, type ProfileMachine, type UserProfile } from "@/stores/profile"
 
 type ProfileEditorProps = {
   profile?: UserProfile
@@ -13,7 +13,7 @@ type ProfileEditorProps = {
 }
 
 export function ProfileEditor({
-  profile = profileData,
+  profile = PROFILE_DATA,
   canEdit = true,
   showBackLink = true,
 }: ProfileEditorProps) {

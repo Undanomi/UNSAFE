@@ -5,15 +5,15 @@ import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import {
   CHAT_CONFIG,
+  CHAT_COPY,
+  CHAT_PROMPTS,
   CHAT_STEPS,
   type ChatAnswers,
   type ChatSession,
-  chatCopy,
-  chatPrompts,
-  difficultyOptions,
-  emptyChatAnswers,
-  themeSuggestions,
-  visibilityOptions,
+  DIFFICULTY_OPTIONS,
+  EMPTY_CHAT_ANSWERS,
+  THEME_SUGGESTIONS,
+  VISIBILITY_OPTIONS,
 } from "@/stores/chat"
 
 type ChatWorkspaceProps = {
@@ -21,7 +21,7 @@ type ChatWorkspaceProps = {
 }
 
 function buildInitialAnswers(session: ChatSession): ChatAnswers {
-  return { ...emptyChatAnswers, ...session.initialAnswers }
+  return { ...EMPTY_CHAT_ANSWERS, ...session.initialAnswers }
 }
 
 function isChatStepComplete(step: number, answers: ChatAnswers) {
@@ -62,17 +62,17 @@ function getNextChatStep(step: number, answers: ChatAnswers) {
 
 function getChatValidationMessage(step: number) {
   return step === CHAT_STEPS.machineName
-    ? chatCopy.errors.machineName
-    : chatCopy.errors.answerRequired
+    ? CHAT_COPY.errors.machineName
+    : CHAT_COPY.errors.answerRequired
 }
 
 function getChatPrompt(step: number, isBasicReady: boolean) {
-  if (isBasicReady) return chatCopy.basicReadyPrompt
-  return chatPrompts[step] ?? chatCopy.completePrompt
+  if (isBasicReady) return CHAT_COPY.basicReadyPrompt
+  return CHAT_PROMPTS[step] ?? CHAT_COPY.completePrompt
 }
 
 function buildChatSummary(answers: ChatAnswers) {
-  const { labels } = chatCopy.summary
+  const { labels } = CHAT_COPY.summary
   return [
     [labels.machineName, answers.name],
     [labels.visibility, answers.visibility],
@@ -94,7 +94,7 @@ function buildChatTranscript(currentStep: number, isBasicReady: boolean, answers
     })
     .map((step) => ({
       answer: getChatAnswer(step, answers),
-      prompt: chatPrompts[step],
+      prompt: CHAT_PROMPTS[step],
       step,
     }))
 }
@@ -124,7 +124,7 @@ function getChatAnswer(step: number, answers: ChatAnswers) {
 
 function formatFlagSetting(value: boolean | null) {
   if (value === null) return ""
-  return value ? chatCopy.yesNo.yes : chatCopy.yesNo.no
+  return value ? CHAT_COPY.yesNo.yes : CHAT_COPY.yesNo.no
 }
 
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
@@ -217,7 +217,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                 中止する
               </Link>
               <span className="rounded-full border border-[#d6d6d2] bg-[#f8f8f7] px-3 py-1.5 text-[0.75rem] font-extrabold text-[#61605b]">
-                {chatCopy.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
+                {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
               </span>
             </div>
           </div>
@@ -243,7 +243,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               onClick={() => setIsSummaryOpen((open) => !open)}
               type="button"
             >
-              <span>{chatCopy.summary.title}</span>
+              <span>{CHAT_COPY.summary.title}</span>
               {isSummaryOpen ? (
                 <ChevronUp aria-hidden="true" size={17} strokeWidth={2} />
               ) : (
@@ -290,14 +290,14 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                 onClick={handleMachineCreation}
                 type="button"
               >
-                {chatCopy.buttons.createBasic}
+                {CHAT_COPY.buttons.createBasic}
               </button>
               <button
                 className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px"
                 onClick={continueDetails}
                 type="button"
               >
-                {chatCopy.buttons.continueDetails}
+                {CHAT_COPY.buttons.continueDetails}
               </button>
             </div>
           ) : isFinalStep ? (
@@ -306,7 +306,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               onClick={handleMachineCreation}
               type="button"
             >
-              {chatCopy.buttons.createComplete}
+              {CHAT_COPY.buttons.createComplete}
             </button>
           ) : (
             <button
@@ -315,10 +315,10 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               type="button"
             >
               {step === CHAT_STEPS.difficulty ? (
-                chatCopy.buttons.setBasic
+                CHAT_COPY.buttons.setBasic
               ) : (
                 <>
-                  {chatCopy.buttons.next}
+                  {CHAT_COPY.buttons.next}
                   <ArrowRight aria-hidden="true" size={16} strokeWidth={2} />
                 </>
               )}
@@ -334,7 +334,7 @@ function AssistantMessage({ prompt }: { prompt: { help: string; question: string
   return (
     <div className="flex items-start gap-3">
       <span
-        aria-label={chatCopy.assistantLabel}
+        aria-label={CHAT_COPY.assistantLabel}
         className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#20201e] text-white"
         role="img"
       >
@@ -355,7 +355,7 @@ function UserMessage({ answer, onEdit }: { answer: string; onEdit: () => void })
     <div className="ml-auto flex max-w-[80%] flex-col items-end gap-1">
       <div className="w-full rounded-2xl rounded-tr-sm bg-[#20201e] px-4 py-3 text-white">
         <span className="text-[0.7rem] font-bold tracking-wide text-[#c5c4bd]">
-          {chatCopy.userLabel}
+          {CHAT_COPY.userLabel}
         </span>
         <p className="mt-1 text-[0.9rem] leading-[1.55]">{answer}</p>
       </div>
@@ -410,12 +410,12 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
   if (step === CHAT_STEPS.machineName) {
     return (
       <label className="grid gap-2 text-[0.86rem] font-extrabold">
-        <span>{chatCopy.fields.machineName}</span>
+        <span>{CHAT_COPY.fields.machineName}</span>
         <input
           className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none placeholder:text-[#8a8984] focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
           onChange={(event) => onChange({ name: event.target.value })}
-          placeholder={chatCopy.fields.machineNamePlaceholder}
+          placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
         />
         <small className="text-right text-[0.75rem] font-normal text-[#61605b]">
@@ -428,7 +428,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
     return (
       <OptionButtons
         onSelect={(visibility) => onChange({ visibility })}
-        options={visibilityOptions}
+        options={VISIBILITY_OPTIONS}
         value={answers.visibility}
       />
     )
@@ -437,7 +437,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
     return (
       <div className="grid gap-3">
         <div className="flex flex-wrap gap-2">
-          {themeSuggestions.map((theme) => (
+          {THEME_SUGGESTIONS.map((theme) => (
             <button
               className={`rounded-full border px-2.5 py-1 text-[0.78rem] font-bold transition ${
                 answers.theme === theme
@@ -453,11 +453,11 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
           ))}
         </div>
         <label className="grid gap-2 text-[0.86rem] font-extrabold">
-          <span>{chatCopy.fields.freeInput}</span>
+          <span>{CHAT_COPY.fields.freeInput}</span>
           <input
             className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none placeholder:text-[#8a8984] focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
             onChange={(event) => onChange({ theme: event.target.value })}
-            placeholder={chatCopy.fields.themePlaceholder}
+            placeholder={CHAT_COPY.fields.themePlaceholder}
             value={answers.theme}
           />
         </label>
@@ -468,7 +468,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
     return (
       <OptionButtons
         onSelect={(difficulty) => onChange({ difficulty })}
-        options={difficultyOptions}
+        options={DIFFICULTY_OPTIONS}
         value={answers.difficulty}
       />
     )
@@ -484,9 +484,9 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
   if (step === CHAT_STEPS.userFlagDetails) {
     return (
       <DetailInput
-        label={chatCopy.fields.userFlagDetails}
+        label={CHAT_COPY.fields.userFlagDetails}
         onChange={(userFlagDetails) => onChange({ userFlagDetails })}
-        placeholder={chatCopy.fields.userFlagDetailsPlaceholder}
+        placeholder={CHAT_COPY.fields.userFlagDetailsPlaceholder}
         value={answers.userFlagDetails}
       />
     )
@@ -501,9 +501,9 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
   }
   return (
     <DetailInput
-      label={chatCopy.fields.systemFlagDetails}
+      label={CHAT_COPY.fields.systemFlagDetails}
       onChange={(systemFlagDetails) => onChange({ systemFlagDetails })}
-      placeholder={chatCopy.fields.systemFlagDetailsPlaceholder}
+      placeholder={CHAT_COPY.fields.systemFlagDetailsPlaceholder}
       value={answers.systemFlagDetails}
     />
   )
@@ -580,7 +580,7 @@ function YesNoButtons({
         onClick={() => onSelect(true)}
         type="button"
       >
-        {chatCopy.yesNo.yes}
+        {CHAT_COPY.yesNo.yes}
       </button>
       <button
         className={`min-h-11 rounded-xl border px-3 text-left text-[0.82rem] font-extrabold transition ${
@@ -591,7 +591,7 @@ function YesNoButtons({
         onClick={() => onSelect(false)}
         type="button"
       >
-        {chatCopy.yesNo.no}
+        {CHAT_COPY.yesNo.no}
       </button>
     </div>
   )
@@ -603,7 +603,7 @@ function AnswerSummary({ answers }: { answers: ChatAnswers }) {
       {buildChatSummary(answers).map(([label, value]) => (
         <div className="rounded-xl bg-[#f8f8f7] p-3" key={label}>
           <dt className="text-[0.72rem] font-bold text-[#61605b]">{label}</dt>
-          <dd className="mt-1 text-[0.88rem] font-bold">{value || chatCopy.summary.empty}</dd>
+          <dd className="mt-1 text-[0.88rem] font-bold">{value || CHAT_COPY.summary.empty}</dd>
         </div>
       ))}
     </dl>
@@ -614,14 +614,14 @@ export function MissingChatSession() {
   return (
     <section className="grid gap-4 rounded-3xl border border-[#e5e5e2] bg-white p-8 shadow-sm">
       <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-        {chatCopy.missingSession.title}
+        {CHAT_COPY.missingSession.title}
       </h1>
-      <p className="leading-[1.65] text-[#61605b]">{chatCopy.missingSession.message}</p>
+      <p className="leading-[1.65] text-[#61605b]">{CHAT_COPY.missingSession.message}</p>
       <Link
         className="inline-flex w-fit min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
         href={CHAT_CONFIG.newChatPath}
       >
-        {chatCopy.missingSession.action}
+        {CHAT_COPY.missingSession.action}
       </Link>
     </section>
   )
