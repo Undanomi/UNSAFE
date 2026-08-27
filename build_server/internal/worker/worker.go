@@ -100,6 +100,10 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	if err := copyTree(sourceDir, filepath.Join(workspaceDir, "source")); err != nil {
 		return fmt.Errorf("copy scenario source: %w", err)
 	}
+	baseImage, err := resolveBaseImage(sourceDir, w.cfg.BaseImageRoot)
+	if err != nil {
+		return err
+	}
 
 	logPath := filepath.Join(logDir, "packer.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
@@ -111,7 +115,7 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusBuilding, 20, "packer build started"); err != nil {
 		return err
 	}
-	if err := w.runPacker(ctx, workspaceDir, temporaryDir, logFile, logger); err != nil {
+	if err := w.runPacker(ctx, workspaceDir, temporaryDir, baseImage, logFile, logger); err != nil {
 		return err
 	}
 	if err := logFile.Sync(); err != nil {
@@ -134,9 +138,17 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	return nil
 }
 
-func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, logFile *os.File, logger *slog.Logger) error {
+func (w *Worker) runPacker(
+	ctx context.Context,
+	workspaceDir string,
+	outputDir string,
+	baseImage string,
+	logFile *os.File,
+	logger *slog.Logger,
+) error {
 	command := exec.CommandContext(ctx, w.cfg.PackerBinary, "build",
 		"-color=false",
+		"-var", "base_image="+baseImage,
 		"-var", "source_dir="+filepath.Join(workspaceDir, "source"),
 		"-var", "output_dir="+outputDir,
 		w.cfg.PackerTemplate,
@@ -152,9 +164,15 @@ func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, 
 	}
 	scanner := bufio.NewScanner(io.TeeReader(stdout, logFile))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	diagnostic := ""
+	diagnosticScore := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		logger.Info("packer", "message", line)
+		if score := packerDiagnosticScore(line); score > diagnosticScore {
+			diagnostic = strings.TrimSpace(line)
+			diagnosticScore = score
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read packer output: %w", err)
@@ -163,9 +181,28 @@ func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if diagnostic != "" {
+			return fmt.Errorf("packer build: %w: %s", err, diagnostic)
+		}
 		return fmt.Errorf("packer build: %w", err)
 	}
 	return nil
+}
+
+func packerDiagnosticScore(line string) int {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "unable to locate"):
+		return 100
+	case strings.Contains(lower, "job for ") && strings.Contains(lower, " failed"):
+		return 90
+	case strings.Contains(lower, "command not found") || strings.Contains(lower, "no such file"):
+		return 85
+	case strings.Contains(lower, "error:"):
+		return 80
+	default:
+		return 0
+	}
 }
 
 func (w *Worker) registerArtifacts(ctx context.Context, buildID, artifactDir string) error {

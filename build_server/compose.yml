@@ -64,6 +64,7 @@ services:
       WORKER_ID: worker-1
       SCENARIO_ROOT: /var/lib/slsg/scenarios
       BUILD_ROOT: /var/lib/slsg/builds
+      BASE_IMAGE_ROOT: /opt/slsg/base_images
       PACKER_TEMPLATE: /opt/slsg/packer/build.pkr.hcl
       PACKER_LOG: "1"
       BUILD_TIMEOUT: 2h

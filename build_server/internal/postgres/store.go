@@ -18,6 +18,11 @@ var migrations embed.FS
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("conflict")
 
+// migrationLockID serializes schema setup across independently started API and
+// worker processes. PostgreSQL's CREATE TABLE IF NOT EXISTS does not prevent
+// concurrent catalog creation races by itself.
+const migrationLockID int64 = 6000282982617766212
+
 type Store struct{ pool *pgxpool.Pool }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -39,10 +44,23 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 func (s *Store) Migrate(ctx context.Context) error {
 	body, err := migrations.ReadFile("migrations/001_init.sql")
 	if err != nil {
-		return err
+		return fmt.Errorf("read migration: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, string(body))
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		return fmt.Errorf("apply migration: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
 }
 
 const buildColumns = `build_id::text, scenario_id, scenario_version_id, requested_by,

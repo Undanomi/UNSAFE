@@ -30,8 +30,13 @@ a filesystem path. The archive must contain `build.sh`, either at its root, in
 
 ## Local development
 
-KVM must be available at `/dev/kvm`. Put the base image at
-`builder/base_images/ubuntu-26.04-server.qcow2`, then start the stack:
+KVM must be available at `/dev/kvm`. The worker reads `target_os` from
+`contents/scenario_manifest.json` and selects a base image named
+`builder/base_images/ubuntu-<version>-server.qcow2`. For example, Ubuntu 24.04
+uses `ubuntu-24.04-server.qcow2`. A missing `target_os` defaults to Ubuntu 26.04.
+
+The current Packer communicator supports Ubuntu images. Put every Ubuntu version
+you intend to build under `builder/base_images/`, then start the stack:
 
 ```sh
 cp .env.example .env

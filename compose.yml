@@ -1,0 +1,5 @@
+name: slsg
+
+include:
+  - path: build_server/compose.yml
+  - path: ai_server/compose.yml
