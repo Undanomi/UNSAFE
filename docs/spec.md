@@ -259,6 +259,8 @@ ScenarioVersion
 ├── scenario_id
 ├── version
 ├── scenario_definition
+├── target_os
+├── attack_graph
 ├── generated_code_path
 ├── generated_code_checksum
 ├── created_by

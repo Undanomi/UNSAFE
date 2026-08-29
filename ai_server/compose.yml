@@ -36,14 +36,20 @@ services:
       GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-65536}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-600}
       CVE_MIN_YEAR: ${CVE_MIN_YEAR:-2024}
-      CVE_SELECTION_ATTEMPTS: ${CVE_SELECTION_ATTEMPTS:-5}
+      SCENARIO_GENERATION_ATTEMPTS: ${SCENARIO_GENERATION_ATTEMPTS:-5}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       DATABASE_URL: postgresql://ai_service:local-development-only@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
+      SQLADMIN_ENABLED: ${SQLADMIN_ENABLED:-false}
+      SQLADMIN_USERNAME: ${SQLADMIN_USERNAME:-}
+      SQLADMIN_PASSWORD: ${SQLADMIN_PASSWORD:-}
+      SQLADMIN_SESSION_SECRET: ${SQLADMIN_SESSION_SECRET:-}
+      SQLADMIN_SECURE_COOKIES: ${SQLADMIN_SECURE_COOKIES:-false}
       # Use a Compose-specific override so a host-side BUILD_SERVER_URL such as
       # http://localhost:8080 cannot leak into the container network.
       BUILD_SERVER_URL: ${AI_BUILD_SERVER_URL:-http://server:8080}
       BUILD_SERVER_TOKEN: ${BUILD_SERVER_TOKEN:-local-development-token}
+      BUILD_REPAIR_MAX_ATTEMPTS: ${BUILD_REPAIR_MAX_ATTEMPTS:-3}
     depends_on:
       ai-postgres:
         condition: service_healthy

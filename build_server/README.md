@@ -83,5 +83,6 @@ operations are:
 - `POST /v1/builds/{build_id}/cancel`
 - `POST /v1/builds/{build_id}/retry`
 - `GET /v1/builds/{build_id}/events?after={event_id}`
+- `GET /v1/builds/{build_id}/logs/packer`
 - `GET /v1/builds/{build_id}/artifacts`
 - `GET /v1/builds/{build_id}/artifacts/{artifact_id}/content`

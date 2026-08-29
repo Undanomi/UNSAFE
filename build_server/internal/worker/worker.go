@@ -13,11 +13,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
 	"github.com/Undanomi/SLSG/build_server/internal/config"
 	"github.com/Undanomi/SLSG/build_server/internal/domain"
 	"github.com/Undanomi/SLSG/build_server/internal/identity"
 	"github.com/Undanomi/SLSG/build_server/internal/postgres"
+)
+
+const (
+	storedErrorRunes = 16_000
 )
 
 type Worker struct {
@@ -164,15 +170,9 @@ func (w *Worker) runPacker(
 	}
 	scanner := bufio.NewScanner(io.TeeReader(stdout, logFile))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	diagnostic := ""
-	diagnosticScore := 0
 	for scanner.Scan() {
 		line := scanner.Text()
 		logger.Info("packer", "message", line)
-		if score := packerDiagnosticScore(line); score > diagnosticScore {
-			diagnostic = strings.TrimSpace(line)
-			diagnosticScore = score
-		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read packer output: %w", err)
@@ -181,28 +181,21 @@ func (w *Worker) runPacker(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if diagnostic != "" {
-			return fmt.Errorf("packer build: %w: %s", err, diagnostic)
+		if syncErr := logFile.Sync(); syncErr != nil {
+			logger.Warn("could not sync packer log", "error", syncErr)
+		}
+		logTail, tailErr := buildlog.Tail(
+			logFile.Name(), buildlog.TailBytes, buildlog.TailLines,
+		)
+		if tailErr != nil {
+			logger.Warn("could not read packer log tail", "error", tailErr)
+		}
+		if logTail != "" {
+			return fmt.Errorf("packer build: %w\nrecent packer output:\n%s", err, logTail)
 		}
 		return fmt.Errorf("packer build: %w", err)
 	}
 	return nil
-}
-
-func packerDiagnosticScore(line string) int {
-	lower := strings.ToLower(line)
-	switch {
-	case strings.Contains(lower, "unable to locate"):
-		return 100
-	case strings.Contains(lower, "job for ") && strings.Contains(lower, " failed"):
-		return 90
-	case strings.Contains(lower, "command not found") || strings.Contains(lower, "no such file"):
-		return 85
-	case strings.Contains(lower, "error:"):
-		return 80
-	default:
-		return 0
-	}
 }
 
 func (w *Worker) registerArtifacts(ctx context.Context, buildID, artifactDir string) error {
@@ -343,9 +336,18 @@ func artifactType(name string) string {
 }
 
 func sanitizeError(err error) string {
-	message := strings.ReplaceAll(err.Error(), "\n", " ")
-	if len(message) > 2000 {
-		return message[:2000]
+	message := strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\t' || !unicode.IsControl(character) {
+			return character
+		}
+		return ' '
+	}, err.Error())
+	runes := []rune(strings.TrimSpace(message))
+	if len(runes) > storedErrorRunes {
+		const prefixRunes = 2_000
+		return string(runes[:prefixRunes]) +
+			"\n...[older output truncated]...\n" +
+			string(runes[len(runes)-(storedErrorRunes-prefixRunes):])
 	}
-	return message
+	return string(runes)
 }

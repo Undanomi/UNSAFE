@@ -34,6 +34,12 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
 ai_server ホスト上で実行することはありません。
 
+シナリオは、人間向けの `scenario_definition`（Markdown）と、ビルド・検証用の
+`attack_graph`（JSON）を同じバージョンに保存します。攻撃グラフは可変長のステップ、
+ステップ間の依存関係、user/system flagの到達目標を持ちます。CVEは攻撃ステップの任意の
+種類の1つであり、Web脆弱性、設定不備、認証情報、ロジック不備なども組み合わせられます。
+CVEを使うステップだけ、公式レコードと対象OSへの適合性を追加検証します。
+
 ## uv で起動
 
 Python 3.13 と uv が必要です。最初に PostgreSQL を起動します。
@@ -54,6 +60,10 @@ VMコード生成はシナリオ生成より応答が大きくなるため、Gem
 `AI_TIMEOUT_SECONDS`（既定値600秒）を使用します。出力上限は
 `GEMINI_MAX_OUTPUT_TOKENS`（既定値65536）で変更できます。build_serverとの内部通信には
 別の `BUILD_TIMEOUT_SECONDS` を使用します。
+攻撃グラフの生成失敗時の再試行回数は `SCENARIO_GENERATION_ATTEMPTS`（既定値5）、
+CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定値2024）で変更できます。
+Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPTS`（既定値3）で変更でき、
+`0` を指定すると自動修正を無効化できます。
 
 ## Docker で起動
 
@@ -113,14 +123,38 @@ curl "http://localhost:8000/v1/sessions/$SESSION_ID" \
 
 build_serverへの接続だけが失敗した場合は、同じ `POST /machines` を再実行できます。生成済みの
 `source.zip` が残っていれば、AIコード生成を繰り返さずにビルド依頼から再開します。
-Packerビルド自体が失敗またはキャンセルされた場合は、同じ操作でビルドエラーをAIへ渡し、
-失敗に関係するファイルだけを差分修正して新しいビルドを作成します。修正履歴は
+Packerビルド自体が失敗またはキャンセルされた場合は、ai_serverがバックグラウンドで失敗を
+検知し、ビルドエラーをAIへ渡して、失敗に関係するファイルだけを自動で差分修正します。
+新しいビルドも継続して監視するため、クライアントからの状態ポーリングが止まっても次の修正へ
+進みます。既定では3回まで行い、上限に達した場合は `failed` になります。修正履歴は
 `repair_report.json` で確認できます。
+上限到達後に同じ `POST /machines` を明示的に再実行すると、修正回数をリセットして新たな
+3回分の自動修正を開始します。状態確認の `GET` だけでは再開しません。
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
 build_server の内部 URL をブラウザへ露出せず、成果物をストリーミングします。
 
 OpenAPI UI は `http://localhost:8000/docs` で確認できます。
+
+## SQLAdmin 管理画面
+
+セッション、シナリオ、シナリオバージョン、生成ジョブを確認・編集できる
+SQLAdminを `/admin` に用意しています。通常は無効です。有効にする場合は `.env` に
+次の値を設定してai_serverを再起動します。
+
+```dotenv
+SQLADMIN_ENABLED=true
+SQLADMIN_USERNAME=admin
+SQLADMIN_PASSWORD=<十分に長いランダムなパスワード>
+SQLADMIN_SESSION_SECRET=<32文字以上のランダム値>
+SQLADMIN_SECURE_COOKIES=false
+```
+
+起動後は `http://localhost:8000/admin` からログインできます。本番環境ではHTTPSを使用し、
+`SQLADMIN_SECURE_COOKIES=true` にしてください。認証値が不足している場合やセッション秘密鍵が
+32文字未満の場合、ai_serverは設定エラーで起動しません。管理画面から既存レコードを編集できますが、
+主キーと作成日時の変更、およびレコードの作成・削除は無効化しています。ステータスや外部IDの
+編集は実行中のワークフローへ影響するため、運用上必要な場合に限って変更してください。
 
 各エンドポイントの役割、入出力、SSEイベント、状態遷移、エラー条件は
 [`docs/endpoints.md`](docs/endpoints.md) にまとめています。

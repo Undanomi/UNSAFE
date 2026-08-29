@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,13 +78,9 @@ func TestResolveBaseImageDefaultsToUbuntu2604(t *testing.T) {
 	}
 }
 
-func TestPackerDiagnosticScorePrefersActionableFailure(t *testing.T) {
-	serviceFailure := "Job for nginx.service failed because the control process exited"
-	pluginNoise := "failed to unlock port lockfile"
-	if packerDiagnosticScore(serviceFailure) <= packerDiagnosticScore(pluginNoise) {
-		t.Fatal("service failure should outrank plugin cleanup noise")
-	}
-	if packerDiagnosticScore("Error: Unable to locate package tomcat9") <= packerDiagnosticScore(serviceFailure) {
-		t.Fatal("missing package should be the most actionable diagnostic")
+func TestSanitizeErrorPreservesMultilineContext(t *testing.T) {
+	got := sanitizeError(errors.New("build failed\ncommand context\nerror detail"))
+	if got != "build failed\ncommand context\nerror detail" {
+		t.Fatalf("sanitizeError() = %q", got)
 	}
 }

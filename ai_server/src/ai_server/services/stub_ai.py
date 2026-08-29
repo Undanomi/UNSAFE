@@ -3,13 +3,80 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-from ..models import GeneratedSource, MachineInformation, ScenarioDraft, SourceFile, SourcePatch
+from ..models import (
+    AttackGraph,
+    AttackObjective,
+    AttackStep,
+    GeneratedSource,
+    MachineInformation,
+    ScenarioDraft,
+    SourceFile,
+    SourcePatch,
+)
 
 
 class StubGenerator:
     """Deterministic generator for local integration tests without an API key."""
 
     async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft:
+        objectives = []
+        initial_achievements = []
+        system_achievements = []
+        if machine.needs_user_flag:
+            objectives.append(
+                AttackObjective(
+                    objective_id="user-flag",
+                    objective_type="user_flag",
+                    description=machine.user_flag_details,
+                )
+            )
+            initial_achievements.append("user-flag")
+        if machine.needs_system_flag:
+            objectives.append(
+                AttackObjective(
+                    objective_id="system-flag",
+                    objective_type="system_flag",
+                    description=machine.system_flag_details,
+                )
+            )
+            system_achievements.append("system-flag")
+        steps = [
+            AttackStep(
+                step_id="enumerate-service",
+                title="公開サービスの列挙",
+                kind="reconnaissance",
+                phase="reconnaissance",
+                description="公開サービスと設定情報を調査します。",
+                installation_method="provisioning script",
+                implementation_steps=["演習用サービスと確認可能なバナーを配置する"],
+            ),
+            AttackStep(
+                step_id="abuse-web-config",
+                title="Web設定不備の悪用",
+                kind="misconfiguration",
+                phase="initial_access",
+                description="意図的な設定不備から演習ユーザーの権限を取得します。",
+                requires=["enumerate-service"],
+                achieves=initial_achievements,
+                installation_method="provisioning script",
+                implementation_steps=["隔離された教材用の設定不備を作成する"],
+            ),
+        ]
+        if machine.needs_system_flag:
+            steps.append(
+                AttackStep(
+                    step_id="abuse-local-permission",
+                    title="ローカル権限設定の悪用",
+                    kind="misconfiguration",
+                    phase="privilege_escalation",
+                    description="ローカル権限設定を調査して管理者権限を取得します。",
+                    requires=["abuse-web-config"],
+                    achieves=system_achievements,
+                    installation_method="provisioning script",
+                    implementation_steps=["教材用の最小権限違反を構成する"],
+                )
+            )
+        attack_graph = AttackGraph(objectives=objectives, steps=steps)
         definition = f"""# {machine.name} シナリオ設計書
 
 ## 1. 基本情報 (Metadata)
@@ -20,13 +87,16 @@ class StubGenerator:
 ## 2. 背景ストーリー & コンテキスト
 隔離された演習環境で、設定確認と最小権限の考え方を学びます。
 
-## 3. 初期潜入フェーズ
-SSHで演習ユーザーとしてログインし、公開情報とサービス設定を調査します。
+## 3. 到達目標
+設定されたuser/system flagを攻撃グラフに沿って取得します。
 
-## 4. 権限昇格フェーズ (Privilege Escalation)
-意図的に用意したローカル設定を調査し、管理者権限の境界を確認します。
+## 4. 攻撃グラフ
+公開サービスの列挙からWeb設定不備へ進み、必要な場合はローカル権限設定を調査します。
 
-## 5. 教育的価値
+## 5. 環境実装計画
+すべての弱点は隔離された演習VM内にプロビジョニングします。
+
+## 6. 教育的価値
 列挙、設定監査、証跡確認という基本的な調査手順を学べます。
 """
         return ScenarioDraft(
@@ -34,6 +104,7 @@ SSHで演習ユーザーとしてログインし、公開情報とサービス�
             title=machine.name,
             definition=definition,
             target_os=machine.operating_system,
+            attack_graph=attack_graph,
         )
 
     async def generate_source(
@@ -72,6 +143,19 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                 "acceptance_tests": [{"command": "test -f /opt/slsg-scenario/README.md"}],
                 "expected_vulnerabilities": [{"name": "local demonstration setting"}],
                 "health_checks": [{"command": "test -f /etc/motd.d/90-slsg-scenario"}],
+                "attack_steps": [
+                    {
+                        "step_id": step.step_id,
+                        "kind": step.kind,
+                        "requires": step.requires,
+                        "achieves": step.achieves,
+                    }
+                    for step in scenario.attack_graph.steps
+                ],
+                "objectives": [
+                    objective.model_dump(mode="json")
+                    for objective in scenario.attack_graph.objectives
+                ],
             },
             ensure_ascii=False,
             indent=2,

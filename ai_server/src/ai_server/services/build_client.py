@@ -52,6 +52,13 @@ class BuildClient:
         self._raise(response)
         return response.json()
 
+    async def packer_log(self, build_id: str) -> str:
+        response = await self.client.get(
+            f"{self.base_url}/v1/builds/{build_id}/logs/packer", headers=self.headers
+        )
+        self._raise(response)
+        return response.text
+
     async def artifacts(self, build_id: str) -> list[Artifact]:
         response = await self.client.get(
             f"{self.base_url}/v1/builds/{build_id}/artifacts", headers=self.headers

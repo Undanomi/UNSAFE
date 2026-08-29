@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import os
+from uuid import UUID
 
 import pytest
+from sqlalchemy import delete
 
+from ai_server.database import AISessionRecord, ScenarioRecord, ScenarioVersionRecord
 from ai_server.models import (
     Artifact,
-    CVEInstallationPlan,
+    AttackGraph,
+    AttackObjective,
+    AttackStep,
     MachineInformation,
     ScenarioDraft,
     SessionStatus,
@@ -38,18 +43,33 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             title="Postgres Test",
             definition="# persisted scenario",
             target_os="Ubuntu 24.04",
-            cve_installation=[
-                CVEInstallationPlan(
-                    cve_id="CVE-2024-0001",
-                    role="initial_access",
-                    software="test-service",
-                    vulnerable_version="1.0",
-                    os_compatible=True,
-                    compatibility_reason="test evidence",
-                    installation_method="apt snapshot",
-                    installation_steps=["install test-service=1.0"],
-                )
-            ],
+            attack_graph=AttackGraph(
+                objectives=[
+                    AttackObjective(
+                        objective_id="user-flag",
+                        objective_type="user_flag",
+                        description="read the user flag",
+                    )
+                ],
+                steps=[
+                    AttackStep(
+                        step_id="web-entry",
+                        title="Web entry",
+                        kind="cve",
+                        phase="initial_access",
+                        description="exploit the training service",
+                        achieves=["user-flag"],
+                        implementation_steps=["install test-service=1.0"],
+                        installation_method="apt snapshot",
+                        references=[],
+                        os_compatible=True,
+                        compatibility_reason="test evidence",
+                        cve_id="CVE-2024-0001",
+                        software="test-service",
+                        vulnerable_version="1.0",
+                    )
+                ],
+            ),
         )
         loaded.status = SessionStatus.SCENARIO_READY
         await repository.save(loaded)
@@ -57,13 +77,14 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         assert persisted.scenario is not None
         assert persisted.scenario.definition == "# persisted scenario"
         assert persisted.scenario.target_os == "Ubuntu 24.04"
-        assert persisted.scenario.cve_installation[0].vulnerable_version == "1.0"
+        assert persisted.scenario.attack_graph.steps[0].vulnerable_version == "1.0"
 
         persisted.source_path = "/tmp/generated/source"
         persisted.source_checksum = "a" * 64
         persisted.build_id = "a49f148e-1f8c-4703-97bb-d0aa180682ae"
         persisted.build_status = "completed"
         persisted.build_progress = 100
+        persisted.build_repair_attempts = 2
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
             artifact_type="qcow2",
@@ -74,17 +95,20 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         await repository.save(persisted)
         completed = await repository.get(state.session_id)
         assert completed.source_checksum == "a" * 64
+        assert completed.build_repair_attempts == 2
         assert completed.artifact is not None
         assert completed.artifact.file_name == "image.qcow2"
     finally:
-        assert repository.pool is not None
-        await repository.pool.execute(
-            "DELETE FROM ai_sessions WHERE session_id=$1::uuid", state.session_id
-        )
-        await repository.pool.execute(
-            "DELETE FROM scenario_versions WHERE scenario_id='scenario-postgres-test'"
-        )
-        await repository.pool.execute(
-            "DELETE FROM scenarios WHERE scenario_id='scenario-postgres-test'"
-        )
+        async with repository.session_factory.begin() as session:
+            await session.execute(
+                delete(AISessionRecord).where(AISessionRecord.session_id == UUID(state.session_id))
+            )
+            await session.execute(
+                delete(ScenarioVersionRecord).where(
+                    ScenarioVersionRecord.scenario_id == "scenario-postgres-test"
+                )
+            )
+            await session.execute(
+                delete(ScenarioRecord).where(ScenarioRecord.scenario_id == "scenario-postgres-test")
+            )
         await repository.close()

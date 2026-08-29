@@ -50,22 +50,100 @@ class MachineInformation(BaseModel):
         return self
 
 
-class CVEInstallationPlan(BaseModel):
-    cve_id: str
-    role: Literal["initial_access", "privilege_escalation"]
-    software: str
-    vulnerable_version: str
-    os_compatible: bool
-    compatibility_reason: str
-    installation_method: str | None = None
-    installation_steps: list[str] = Field(default_factory=list)
-    references: list[str] = Field(default_factory=list)
+class AttackObjective(BaseModel):
+    objective_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    objective_type: Literal["user_flag", "system_flag"]
+    description: str = Field(min_length=1, max_length=4000)
+
+
+class AttackStep(BaseModel):
+    step_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    title: str = Field(min_length=1, max_length=200)
+    kind: str = Field(min_length=1, max_length=64)
+    phase: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=4000)
+    requires: list[str] = Field(default_factory=list, max_length=20)
+    achieves: list[str] = Field(default_factory=list, max_length=10)
+    cve_id: str | None = Field(default=None, pattern=r"^CVE-\d{4}-\d{4,7}$")
+    software: str | None = Field(default=None, max_length=200)
+    vulnerable_version: str | None = Field(default=None, max_length=200)
+    os_compatible: bool | None = None
+    compatibility_reason: str | None = Field(default=None, max_length=2000)
+    installation_method: str | None = Field(default=None, max_length=500)
+    implementation_steps: list[str] = Field(min_length=1, max_length=50)
+    references: list[str] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
-    def require_installation_for_compatible_cve(self) -> CVEInstallationPlan:
-        if self.os_compatible and (not self.installation_method or not self.installation_steps):
-            raise ValueError("compatible CVE requires installation_method and installation_steps")
+    def validate_cve_fields(self) -> AttackStep:
+        if self.kind == "cve" and not self.cve_id:
+            raise ValueError("a cve attack step requires cve_id")
+        if self.kind != "cve" and self.cve_id:
+            raise ValueError("cve_id is only valid when kind is cve")
         return self
+
+
+class AttackGraph(BaseModel):
+    objectives: list[AttackObjective] = Field(default_factory=list, max_length=10)
+    steps: list[AttackStep] = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_graph(self) -> AttackGraph:
+        objective_ids = [objective.objective_id for objective in self.objectives]
+        if len(objective_ids) != len(set(objective_ids)):
+            raise ValueError("attack objective IDs must be unique")
+        objective_types = [objective.objective_type for objective in self.objectives]
+        if len(objective_types) != len(set(objective_types)):
+            raise ValueError("attack objective types must be unique")
+
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("attack step IDs must be unique")
+        known_steps = set(step_ids)
+        known_objectives = set(objective_ids)
+        for step in self.steps:
+            if len(step.requires) != len(set(step.requires)):
+                raise ValueError(f"attack step {step.step_id} has duplicate requirements")
+            if len(step.achieves) != len(set(step.achieves)):
+                raise ValueError(f"attack step {step.step_id} has duplicate objectives")
+            if step.step_id in step.requires:
+                raise ValueError(f"attack step {step.step_id} cannot require itself")
+            unknown_steps = set(step.requires) - known_steps
+            if unknown_steps:
+                raise ValueError(
+                    f"attack step {step.step_id} has unknown requirements: {sorted(unknown_steps)}"
+                )
+            unknown_objectives = set(step.achieves) - known_objectives
+            if unknown_objectives:
+                raise ValueError(
+                    f"attack step {step.step_id} has unknown objectives: "
+                    f"{sorted(unknown_objectives)}"
+                )
+
+        self._validate_acyclic_graph()
+        achieved = {objective for step in self.steps for objective in step.achieves}
+        missing = known_objectives - achieved
+        if missing:
+            raise ValueError(f"attack objectives are not achieved by any step: {sorted(missing)}")
+        return self
+
+    def _validate_acyclic_graph(self) -> None:
+        dependencies = {step.step_id: step.requires for step in self.steps}
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(step_id: str) -> None:
+            if step_id in visiting:
+                raise ValueError(f"attack graph contains a cycle at {step_id}")
+            if step_id in visited:
+                return
+            visiting.add(step_id)
+            for dependency in dependencies[step_id]:
+                visit(dependency)
+            visiting.remove(step_id)
+            visited.add(step_id)
+
+        for step_id in dependencies:
+            visit(step_id)
 
 
 class ScenarioDraft(BaseModel):
@@ -74,9 +152,7 @@ class ScenarioDraft(BaseModel):
     title: str
     definition: str
     target_os: str = "Ubuntu 26.04"
-    initial_cve: str | None = None
-    privilege_escalation_cve: str | None = None
-    cve_installation: list[CVEInstallationPlan] = Field(default_factory=list)
+    attack_graph: AttackGraph
 
 
 class SourceFile(BaseModel):
@@ -113,6 +189,7 @@ class SessionState(BaseModel):
     build_id: str | None = None
     build_status: str | None = None
     build_progress: int = 0
+    build_repair_attempts: int = Field(default=0, ge=0)
     artifact: Artifact | None = None
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

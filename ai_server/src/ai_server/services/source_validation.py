@@ -5,6 +5,8 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
+from ..models import AttackGraph
+
 REQUIRED_FILES = {
     "contents/README.md",
     "contents/scenario_manifest.json",
@@ -17,10 +19,36 @@ MANIFEST_LISTS = {
     "acceptance_tests",
     "expected_vulnerabilities",
     "health_checks",
+    "attack_steps",
 }
+UNAVAILABLE_PACKAGE_PATTERNS = (
+    re.compile(r"unable to locate package\s+([a-z0-9][a-z0-9+.-]*)", re.IGNORECASE),
+    re.compile(
+        r"package\s+['\"]([a-z0-9][a-z0-9+.-]*)['\"]\s+has no installation candidate",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"couldn't find any package by (?:glob|regex)\s+['\"]([a-z0-9][a-z0-9+.-]*)['\"]",
+        re.IGNORECASE,
+    ),
+)
+MISSING_SYSTEMD_UNIT_PATTERNS = (
+    re.compile(
+        r"unit\s+([a-z0-9@_.:-]+\.(?:service|socket|timer|target|path|mount))"
+        r"\s+does not exist",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"unit\s+([a-z0-9@_.:-]+\.(?:service|socket|timer|target|path|mount))"
+        r"\s+(?:could not be found|not found)",
+        re.IGNORECASE,
+    ),
+)
 
 
-def validate_source(root: Path) -> dict:
+def validate_source(
+    root: Path, attack_graph: AttackGraph, repair_history: list[dict] | None = None
+) -> dict:
     checks: list[dict[str, str]] = []
 
     def add(status: str, name: str, message: str) -> None:
@@ -30,8 +58,9 @@ def validate_source(root: Path) -> dict:
         add("pass" if (root / relative).is_file() else "fail", f"required:{relative}", "exists")
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
     _validate_manifest(root, manifest, add)
+    _validate_attack_graph(manifest, attack_graph, add)
     _validate_build(root / "contents/build.sh", add)
-    _validate_base_image_compatibility(root / "contents", manifest, add)
+    _validate_base_image_compatibility(root / "contents", repair_history or [], add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
             try:
@@ -49,6 +78,13 @@ def validate_source(root: Path) -> dict:
             "warnings": sum(check["status"] == "warn" for check in checks),
         },
         "checks": checks,
+    }
+
+
+def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:
+    return {
+        "unavailable_apt_packages": sorted(_extract_unavailable_packages(repair_history)),
+        "missing_systemd_units": sorted(_extract_missing_systemd_units(repair_history)),
     }
 
 
@@ -78,6 +114,12 @@ def _validate_manifest(root: Path, manifest: dict, add) -> None:
         value = manifest.get(field)
         status = "pass" if isinstance(value, list) and value else "fail"
         add(status, f"manifest:{field}", "non-empty list required")
+    objectives = manifest.get("objectives")
+    add(
+        "pass" if isinstance(objectives, list) else "fail",
+        "manifest:objectives",
+        "objectives must be a list",
+    )
     for item in manifest.get("required_files", []):
         if not isinstance(item, str):
             add("fail", "manifest:file", "path must be a string")
@@ -110,21 +152,99 @@ def _validate_build(path: Path, add) -> None:
     )
 
 
-def _validate_base_image_compatibility(contents: Path, manifest: dict, add) -> None:
+def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> None:
+    expected_steps = {
+        step.step_id: {
+            "kind": step.kind,
+            "requires": sorted(step.requires),
+            "achieves": sorted(step.achieves),
+        }
+        for step in attack_graph.steps
+    }
+    actual_steps = {}
+    for item in manifest.get("attack_steps", []):
+        if not isinstance(item, dict) or not isinstance(item.get("step_id"), str):
+            continue
+        requires = item.get("requires")
+        achieves = item.get("achieves")
+        if not isinstance(requires, list) or not isinstance(achieves, list):
+            continue
+        actual_steps[item["step_id"]] = {
+            "kind": item.get("kind"),
+            "requires": sorted(requires),
+            "achieves": sorted(achieves),
+        }
+    add(
+        "pass" if actual_steps == expected_steps else "fail",
+        "manifest:attack_graph_steps",
+        "attack_steps must match the verified attack graph",
+    )
+
+    expected_objectives = {
+        objective.objective_id: objective.objective_type for objective in attack_graph.objectives
+    }
+    actual_objectives = {}
+    for item in manifest.get("objectives", []):
+        if not isinstance(item, dict) or not isinstance(item.get("objective_id"), str):
+            continue
+        actual_objectives[item["objective_id"]] = item.get("objective_type")
+    add(
+        "pass" if actual_objectives == expected_objectives else "fail",
+        "manifest:attack_graph_objectives",
+        "objectives must match the verified attack graph",
+    )
+
+
+def _validate_base_image_compatibility(
+    contents: Path, repair_history: list[dict], add
+) -> None:
     if not contents.is_dir():
         return
     scripts = list(contents.rglob("*.sh"))
     combined = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in scripts)
-    target_os = str(manifest.get("target_os", "Ubuntu 26.04"))
-    unsupported = "ubuntu 26.04" in target_os.lower() and re.search(
-        r"\bapt(?:-get)?\s+install\b[^\n]*\btomcat9\b", combined
+    shell_lines = combined.replace("\\\n", " ")
+    install_commands = "\n".join(
+        match.group(0)
+        for match in re.finditer(
+            r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\b[^\n]*", shell_lines
+        )
     )
+    systemctl_commands = "\n".join(
+        match.group(0) for match in re.finditer(r"\bsystemctl\b[^\n]*", shell_lines)
+    )
+    unavailable_packages = _extract_unavailable_packages(repair_history)
+    repeated_packages = [
+        package
+        for package in sorted(unavailable_packages)
+        if re.search(
+            rf"(?<![a-z0-9+.-]){re.escape(package)}(?![a-z0-9+.-])",
+            install_commands,
+            re.IGNORECASE,
+        )
+    ]
     add(
-        "fail" if unsupported else "pass",
-        "base_image:unsupported_apt_packages",
-        "tomcat9 is unavailable on the Ubuntu 26.04 base image"
-        if unsupported
-        else "no known unsupported APT package is requested",
+        "fail" if repeated_packages else "pass",
+        "base_image:previously_unavailable_apt_packages",
+        f"previously unavailable APT packages are requested: {', '.join(repeated_packages)}"
+        if repeated_packages
+        else "no package previously reported as unavailable is requested",
+    )
+    missing_units = _extract_missing_systemd_units(repair_history)
+    repeated_units = [
+        unit
+        for unit in sorted(missing_units)
+        if re.search(
+            rf"(?<![a-z0-9@_.:-]){re.escape(unit)}(?![a-z0-9@_.:-])",
+            systemctl_commands,
+            re.IGNORECASE,
+        )
+    ]
+    add(
+        "fail" if repeated_units else "pass",
+        "base_image:previously_missing_systemd_units",
+        f"previously missing systemd units are requested: {', '.join(repeated_units)}"
+        if repeated_units
+        else "no systemd unit previously reported as missing is requested",
     )
     full_upgrade = re.search(r"\bapt(?:-get)?\s+(?:-\S+\s+)*upgrade\b", combined)
     add(
@@ -134,3 +254,21 @@ def _validate_base_image_compatibility(contents: Path, manifest: dict, add) -> N
         if full_upgrade
         else "no full OS upgrade is requested",
     )
+
+
+def _extract_unavailable_packages(repair_history: list[dict]) -> set[str]:
+    history_text = json.dumps(repair_history, ensure_ascii=False)
+    return {
+        match.group(1).lower()
+        for pattern in UNAVAILABLE_PACKAGE_PATTERNS
+        for match in pattern.finditer(history_text)
+    }
+
+
+def _extract_missing_systemd_units(repair_history: list[dict]) -> set[str]:
+    history_text = json.dumps(repair_history, ensure_ascii=False)
+    return {
+        match.group(1).lower()
+        for pattern in MISSING_SYSTEMD_UNIT_PATTERNS
+        for match in pattern.finditer(history_text)
+    }

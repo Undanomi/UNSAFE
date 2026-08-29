@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-import asyncpg
+from sqlalchemy import and_, select, text, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from .database import (
+    AISessionRecord,
+    ScenarioRecord,
+    ScenarioVersionRecord,
+    create_database_engine,
+    create_session_factory,
+)
 from .models import (
     Artifact,
-    CVEInstallationPlan,
+    AttackGraph,
     MachineInformation,
     ScenarioDraft,
     SessionState,
@@ -23,174 +31,188 @@ class SessionNotFoundError(Exception):
 
 class SessionRepository:
     def __init__(self, database_url: str, min_size: int = 1, max_size: int = 10) -> None:
-        self.database_url = database_url
-        self.min_size = min_size
-        self.max_size = max_size
-        self.pool: asyncpg.Pool | None = None
+        self.engine: AsyncEngine = create_database_engine(database_url, min_size, max_size)
+        self.session_factory: async_sessionmaker = create_session_factory(self.engine)
 
     async def initialize(self) -> None:
-        if self.pool is None:
-            self.pool = await asyncpg.create_pool(
-                self.database_url, min_size=self.min_size, max_size=self.max_size
-            )
         migration = Path(__file__).with_name("migrations").joinpath("001_init.sql").read_text()
-        async with self.pool.acquire() as connection:
-            await connection.execute(migration)
+        statements = (statement.strip() for statement in migration.split(";"))
+        async with self.engine.begin() as connection:
+            for statement in statements:
+                if statement:
+                    await connection.exec_driver_sql(statement)
 
     async def close(self) -> None:
-        if self.pool is not None:
-            await self.pool.close()
-            self.pool = None
+        await self.engine.dispose()
 
     async def ping(self) -> None:
-        assert self.pool is not None
-        await self.pool.fetchval("SELECT 1")
+        async with self.session_factory() as session:
+            await session.execute(text("SELECT 1"))
 
     async def create(self, owner_user_id: str) -> SessionState:
-        assert self.pool is not None
         state = SessionState(session_id=str(uuid4()), owner_user_id=owner_user_id)
-        await self.pool.execute(
-            """INSERT INTO ai_sessions
-               (session_id, owner_user_id, status, created_at, updated_at)
-               VALUES ($1::uuid, $2, $3, $4, $4)""",
-            state.session_id,
-            state.owner_user_id,
-            state.status.value,
-            state.created_at,
+        record = AISessionRecord(
+            session_id=UUID(state.session_id),
+            owner_user_id=state.owner_user_id,
+            status=state.status.value,
+            created_at=state.created_at,
+            updated_at=state.updated_at,
         )
+        async with self.session_factory.begin() as session:
+            session.add(record)
         return state
 
     async def get(self, session_id: str) -> SessionState:
-        assert self.pool is not None
-        row = await self.pool.fetchrow(
-            """SELECT s.*, sc.title, sv.scenario_definition, sv.target_os,
-                      sv.initial_cve, sv.privilege_escalation_cve, sv.cve_installation
-               FROM ai_sessions s
-               LEFT JOIN scenarios sc ON sc.scenario_id = s.scenario_id
-               LEFT JOIN scenario_versions sv
-                 ON sv.scenario_id = s.scenario_id
-                AND sv.scenario_version_id = s.scenario_version_id
-               WHERE s.session_id = $1::uuid""",
-            session_id,
+        try:
+            parsed_session_id = UUID(session_id)
+        except ValueError as error:
+            raise SessionNotFoundError(session_id) from error
+        statement = (
+            select(
+                AISessionRecord,
+                ScenarioRecord.title,
+                ScenarioVersionRecord.scenario_definition,
+                ScenarioVersionRecord.target_os,
+                ScenarioVersionRecord.attack_graph,
+            )
+            .outerjoin(ScenarioRecord, ScenarioRecord.scenario_id == AISessionRecord.scenario_id)
+            .outerjoin(
+                ScenarioVersionRecord,
+                and_(
+                    ScenarioVersionRecord.scenario_id == AISessionRecord.scenario_id,
+                    ScenarioVersionRecord.scenario_version_id
+                    == AISessionRecord.scenario_version_id,
+                ),
+            )
+            .where(AISessionRecord.session_id == parsed_session_id)
         )
+        async with self.session_factory() as session:
+            row = (await session.execute(statement)).one_or_none()
         if row is None:
             raise SessionNotFoundError(session_id)
+        record = row[0]
         scenario = None
-        if row["scenario_id"]:
+        if record.scenario_id:
             scenario = ScenarioDraft(
-                scenario_id=row["scenario_id"],
-                scenario_version_id=row["scenario_version_id"],
-                title=row["title"],
-                definition=row["scenario_definition"],
-                target_os=row["target_os"],
-                initial_cve=row["initial_cve"],
-                privilege_escalation_cve=row["privilege_escalation_cve"],
-                cve_installation=self._cve_plans(row["cve_installation"]),
+                scenario_id=record.scenario_id,
+                scenario_version_id=record.scenario_version_id or "v1",
+                title=row[1],
+                definition=row[2],
+                target_os=row[3],
+                attack_graph=AttackGraph.model_validate(row[4]),
             )
         return SessionState(
-            session_id=str(row["session_id"]),
-            owner_user_id=row["owner_user_id"],
-            status=SessionStatus(row["status"]),
-            machine_information=self._json_model(row["machine_information"], MachineInformation),
+            session_id=str(record.session_id),
+            owner_user_id=record.owner_user_id,
+            status=SessionStatus(record.status),
+            machine_information=self._json_model(record.machine_information, MachineInformation),
             scenario=scenario,
-            source_path=row["generated_code_path"],
-            source_checksum=row["generated_code_checksum"],
-            build_id=str(row["build_id"]) if row["build_id"] else None,
-            build_status=row["build_status"],
-            build_progress=row["build_progress"],
-            artifact=self._json_model(row["artifact"], Artifact),
-            error_message=row["error_message"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            source_path=record.generated_code_path,
+            source_checksum=record.generated_code_checksum,
+            build_id=str(record.build_id) if record.build_id else None,
+            build_status=record.build_status,
+            build_progress=record.build_progress,
+            build_repair_attempts=record.build_repair_attempts,
+            artifact=self._json_model(record.artifact, Artifact),
+            error_message=record.error_message,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
 
     async def save(self, state: SessionState) -> SessionState:
-        assert self.pool is not None
+        try:
+            session_id = UUID(state.session_id)
+            build_id = UUID(state.build_id) if state.build_id else None
+        except ValueError as error:
+            raise SessionNotFoundError(state.session_id) from error
         state.updated_at = utcnow()
-        async with self.pool.acquire() as connection, connection.transaction():
+        async with self.session_factory.begin() as session:
             if state.scenario:
-                await self._save_scenario(connection, state)
-            result = await connection.execute(
-                """UPDATE ai_sessions SET
-                     status=$2, machine_information=$3::jsonb,
-                     scenario_id=$4, scenario_version_id=$5,
-                     generated_code_path=$6, generated_code_checksum=$7,
-                     build_id=$8::uuid, build_status=$9, build_progress=$10,
-                     artifact=$11::jsonb, error_message=$12, updated_at=$13
-                   WHERE session_id=$1::uuid""",
-                state.session_id,
-                state.status.value,
-                state.machine_information.model_dump_json() if state.machine_information else None,
-                state.scenario.scenario_id if state.scenario else None,
-                state.scenario.scenario_version_id if state.scenario else None,
-                state.source_path,
-                state.source_checksum,
-                state.build_id,
-                state.build_status,
-                state.build_progress,
-                state.artifact.model_dump_json() if state.artifact else None,
-                state.error_message,
-                state.updated_at,
+                await self._save_scenario(session, state)
+            result = await session.execute(
+                update(AISessionRecord)
+                .where(AISessionRecord.session_id == session_id)
+                .values(
+                    status=state.status.value,
+                    machine_information=(
+                        state.machine_information.model_dump(mode="json")
+                        if state.machine_information
+                        else None
+                    ),
+                    scenario_id=state.scenario.scenario_id if state.scenario else None,
+                    scenario_version_id=(
+                        state.scenario.scenario_version_id if state.scenario else None
+                    ),
+                    generated_code_path=state.source_path,
+                    generated_code_checksum=state.source_checksum,
+                    build_id=build_id,
+                    build_status=state.build_status,
+                    build_progress=state.build_progress,
+                    build_repair_attempts=state.build_repair_attempts,
+                    artifact=state.artifact.model_dump(mode="json") if state.artifact else None,
+                    error_message=state.error_message,
+                    updated_at=state.updated_at,
+                )
             )
-        if result == "UPDATE 0":
-            raise SessionNotFoundError(state.session_id)
+            if result.rowcount == 0:
+                raise SessionNotFoundError(state.session_id)
         return state
 
-    async def _save_scenario(self, connection: asyncpg.Connection, state: SessionState) -> None:
+    @staticmethod
+    async def _save_scenario(session: AsyncSession, state: SessionState) -> None:
         assert state.scenario and state.machine_information
-        await connection.execute(
-            """INSERT INTO scenarios
-                 (scenario_id, owner_user_id, title, description, difficulty, status,
-                  current_version, created_at, updated_at)
-               VALUES ($1,$2,$3,$4,$5,'draft',1,$6,$6)
-               ON CONFLICT (scenario_id) DO UPDATE SET title=EXCLUDED.title,
-                 description=EXCLUDED.description, difficulty=EXCLUDED.difficulty,
-                 updated_at=EXCLUDED.updated_at""",
-            state.scenario.scenario_id,
-            state.owner_user_id,
-            state.scenario.title,
-            state.machine_information.theme,
-            state.machine_information.difficulty,
-            state.updated_at,
+        scenario_insert = insert(ScenarioRecord).values(
+            scenario_id=state.scenario.scenario_id,
+            owner_user_id=state.owner_user_id,
+            title=state.scenario.title,
+            description=state.machine_information.theme,
+            difficulty=state.machine_information.difficulty,
+            status="draft",
+            current_version=1,
+            created_at=state.updated_at,
+            updated_at=state.updated_at,
         )
-        await connection.execute(
-            """INSERT INTO scenario_versions
-                 (scenario_version_id, scenario_id, version, scenario_definition,
-                  target_os, initial_cve, privilege_escalation_cve, cve_installation,
-                  generated_code_path, generated_code_checksum, created_by, created_at)
-               VALUES ($1,$2,1,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11)
-               ON CONFLICT (scenario_id, scenario_version_id) DO UPDATE SET
-                 scenario_definition=EXCLUDED.scenario_definition,
-                 target_os=EXCLUDED.target_os,
-                 initial_cve=EXCLUDED.initial_cve,
-                 privilege_escalation_cve=EXCLUDED.privilege_escalation_cve,
-                 cve_installation=EXCLUDED.cve_installation,
-                 generated_code_path=EXCLUDED.generated_code_path,
-                 generated_code_checksum=EXCLUDED.generated_code_checksum""",
-            state.scenario.scenario_version_id,
-            state.scenario.scenario_id,
-            state.scenario.definition,
-            state.scenario.target_os,
-            state.scenario.initial_cve,
-            state.scenario.privilege_escalation_cve,
-            json.dumps([item.model_dump(mode="json") for item in state.scenario.cve_installation]),
-            state.source_path,
-            state.source_checksum,
-            state.owner_user_id,
-            state.updated_at,
+        await session.execute(
+            scenario_insert.on_conflict_do_update(
+                index_elements=[ScenarioRecord.scenario_id],
+                set_={
+                    "title": scenario_insert.excluded.title,
+                    "description": scenario_insert.excluded.description,
+                    "difficulty": scenario_insert.excluded.difficulty,
+                    "updated_at": scenario_insert.excluded.updated_at,
+                },
+            )
+        )
+        version_insert = insert(ScenarioVersionRecord).values(
+            scenario_version_id=state.scenario.scenario_version_id,
+            scenario_id=state.scenario.scenario_id,
+            version=1,
+            scenario_definition=state.scenario.definition,
+            target_os=state.scenario.target_os,
+            attack_graph=state.scenario.attack_graph.model_dump(mode="json"),
+            generated_code_path=state.source_path,
+            generated_code_checksum=state.source_checksum,
+            created_by=state.owner_user_id,
+            created_at=state.updated_at,
+        )
+        await session.execute(
+            version_insert.on_conflict_do_update(
+                index_elements=[
+                    ScenarioVersionRecord.scenario_id,
+                    ScenarioVersionRecord.scenario_version_id,
+                ],
+                set_={
+                    "scenario_definition": version_insert.excluded.scenario_definition,
+                    "target_os": version_insert.excluded.target_os,
+                    "attack_graph": version_insert.excluded.attack_graph,
+                    "generated_code_path": version_insert.excluded.generated_code_path,
+                    "generated_code_checksum": version_insert.excluded.generated_code_checksum,
+                },
+            )
         )
 
     @staticmethod
     def _json_model(value, model_type):
         if value is None:
             return None
-        if isinstance(value, str):
-            return model_type.model_validate_json(value)
         return model_type.model_validate(value)
-
-    @staticmethod
-    def _cve_plans(value) -> list[CVEInstallationPlan]:
-        if not value:
-            return []
-        items = json.loads(value) if isinstance(value, str) else value
-        return [CVEInstallationPlan.model_validate(item) for item in items]

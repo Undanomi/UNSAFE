@@ -6,9 +6,29 @@ import httpx
 import pytest
 
 from ai_server.config import Settings
-from ai_server.models import CVEInstallationPlan, MachineInformation, ScenarioDraft
-from ai_server.services.ai import GeminiGenerator
+from ai_server.models import (
+    AttackGraph,
+    AttackStep,
+    MachineInformation,
+    ScenarioDraft,
+)
+from ai_server.services.ai import CVEVerification, GeminiGenerator
 from ai_server.services.errors import exception_detail
+
+
+def graph_without_objectives() -> AttackGraph:
+    return AttackGraph(
+        steps=[
+            AttackStep(
+                step_id="enumerate-web",
+                title="Enumerate web service",
+                kind="reconnaissance",
+                phase="reconnaissance",
+                description="Inspect the training service",
+                implementation_steps=["Expose a deterministic training service"],
+            )
+        ]
+    )
 
 
 @pytest.mark.asyncio
@@ -26,24 +46,19 @@ async def test_vm_source_generation_uses_large_output_budget() -> None:
                 }
             ]
         }
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "finishReason": "STOP",
-                        "content": {"parts": [{"text": json.dumps(generated)}]},
-                    }
-                ]
-            },
-        )
+        return gemini_response(generated)
 
     settings = Settings(gemini_api_key="test-key", gemini_max_output_tokens=65536)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(settings, client)
         result = await generator.generate_source(
             MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy"),
-            ScenarioDraft(scenario_id="scenario-test", title="Test", definition="# Test"),
+            ScenarioDraft(
+                scenario_id="scenario-test",
+                title="Test",
+                definition="# Test",
+                attack_graph=graph_without_objectives(),
+            ),
         )
 
     assert result.files[0].path == "contents/build.sh"
@@ -52,58 +67,73 @@ async def test_vm_source_generation_uses_large_output_budget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cve_selection_rejects_candidates_before_minimum_year() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        selected = {
-            "initial_cve": "CVE-2023-1234",
-            "privesc_cve": "CVE-2024-5678",
-        }
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "finishReason": "STOP",
-                        "content": {"parts": [{"text": json.dumps(selected)}]},
-                    }
-                ]
+async def test_attack_graph_generation_allows_non_cve_attack_chain() -> None:
+    graph = {
+        "objectives": [
+            {
+                "objective_id": "user-flag",
+                "objective_type": "user_flag",
+                "description": "/home/student/user.txt",
+            }
+        ],
+        "steps": [
+            {
+                "step_id": "upload-bypass",
+                "title": "Upload validation bypass",
+                "kind": "web_vulnerability",
+                "phase": "initial_access",
+                "description": "Bypass extension validation in the training application",
+                "requires": [],
+                "achieves": [],
+                "cve_id": None,
+                "implementation_steps": ["Implement intentionally weak extension validation"],
             },
-        )
+            {
+                "step_id": "read-user-flag",
+                "title": "Read user flag",
+                "kind": "credential",
+                "phase": "objective",
+                "description": "Use the application identity to read the user flag",
+                "requires": ["upload-bypass"],
+                "achieves": ["user-flag"],
+                "cve_id": None,
+                "implementation_steps": ["Grant the training identity access to the flag"],
+            },
+        ],
+    }
 
-    settings = Settings(gemini_api_key="test-key", cve_min_year=2024)
-    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        generator = GeminiGenerator(settings, client)
-        with pytest.raises(ValueError, match="older than minimum year 2024"):
-            await generator._select_cves(machine, [])
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: gemini_response(graph))
+    ) as client:
+        generator = GeminiGenerator(Settings(gemini_api_key="test-key"), client)
+        machine = MachineInformation(
+            name="Test",
+            visibility="private",
+            theme="Web",
+            difficulty="Easy",
+            needs_user_flag=True,
+            user_flag_details="/home/student/user.txt",
+            needs_system_flag=False,
+        )
+        parsed = await generator._draft_attack_graph(machine, [])
+
+    assert [step.kind for step in parsed.steps] == ["web_vulnerability", "credential"]
+    assert all(step.cve_id is None for step in parsed.steps)
 
 
 @pytest.mark.asyncio
-async def test_cve_selection_accepts_candidates_from_minimum_year() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
-        selected = {
-            "initial_cve": "CVE-2024-1234",
-            "privesc_cve": "CVE-2025-5678",
-        }
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "finishReason": "STOP",
-                        "content": {"parts": [{"text": json.dumps(selected)}]},
-                    }
-                ]
-            },
-        )
+async def test_cve_candidate_rejects_id_before_minimum_year() -> None:
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(Settings(cve_min_year=2024), client)
+        with pytest.raises(ValueError, match="older than minimum year 2024"):
+            generator._validate_cve_id("CVE-2023-1234")
 
-    settings = Settings(gemini_api_key="test-key", cve_min_year=2024)
-    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        generator = GeminiGenerator(settings, client)
-        selected = await generator._select_cves(machine, [])
 
-    assert selected == ("CVE-2024-1234", "CVE-2025-5678")
+@pytest.mark.asyncio
+async def test_cve_candidate_accepts_id_from_minimum_year() -> None:
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(Settings(cve_min_year=2024), client)
+        generator._validate_cve_id("CVE-2024-1234")
 
 
 def test_empty_exception_message_still_has_diagnostic_value() -> None:
@@ -148,15 +178,13 @@ async def test_ubuntu_osv_evidence_is_filtered_by_target_release() -> None:
 
 
 def test_kernel_cve_requires_target_release_osv_evidence() -> None:
-    plan = CVEInstallationPlan(
-        cve_id="CVE-2016-5195",
-        role="privilege_escalation",
+    verification = CVEVerification(
         software="Linux kernel",
         vulnerable_version="4.4.0",
         os_compatible=True,
         compatibility_reason="candidate",
         installation_method="package",
-        installation_steps=["install"],
+        implementation_steps=["install"],
     )
     evidence = {
         "descriptions": [{"value": "A race condition in the Linux kernel"}],
@@ -168,129 +196,128 @@ def test_kernel_cve_requires_target_release_osv_evidence() -> None:
         },
     }
 
-    GeminiGenerator._enforce_kernel_evidence([plan], [evidence])
+    GeminiGenerator._enforce_kernel_evidence(verification, evidence)
 
-    assert plan.os_compatible is False
-    assert "Ubuntu:26.04:LTS" in plan.compatibility_reason
+    assert verification.os_compatible is False
+    assert "Ubuntu:26.04:LTS" in verification.compatibility_reason
 
 
-def test_incompatible_cve_can_explain_rejection_without_install_steps() -> None:
-    plan = CVEInstallationPlan(
-        cve_id="CVE-2016-5195",
-        role="privilege_escalation",
-        software="Linux kernel",
-        vulnerable_version="before 4.8.3",
-        os_compatible=False,
-        compatibility_reason="not affected on target OS",
-        installation_method=None,
-        installation_steps=[],
+@pytest.mark.asyncio
+async def test_only_cve_steps_are_enriched_with_external_evidence() -> None:
+    verification = {
+        "software": "Example service",
+        "vulnerable_version": "1.2.3",
+        "os_compatible": True,
+        "compatibility_reason": "The release archive runs on the target OS",
+        "installation_method": "release archive",
+        "implementation_steps": ["download 1.2.3", "configure", "verify"],
+        "references": ["https://www.cve.org/CVERecord?id=CVE-2026-1234"],
+    }
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host or "")
+        if request.url.host == "cveawg.mitre.org":
+            return httpx.Response(
+                200,
+                json={
+                    "containers": {
+                        "cna": {
+                            "descriptions": [{"value": "Example application issue"}],
+                            "affected": [{"product": "Example service"}],
+                            "references": [],
+                        }
+                    }
+                },
+            )
+        if request.url.host == "api.osv.dev":
+            return httpx.Response(404)
+        if request.url.host == "api.github.com":
+            return httpx.Response(200, json={"items": []})
+        return gemini_response(verification)
+
+    graph = AttackGraph(
+        steps=[
+            AttackStep(
+                step_id="web-cve",
+                title="Exploit example service",
+                kind="cve",
+                phase="initial_access",
+                description="Exploit the isolated training service",
+                cve_id="CVE-2026-1234",
+                implementation_steps=["candidate plan"],
+            ),
+            AttackStep(
+                step_id="reuse-credential",
+                title="Reuse credential",
+                kind="credential",
+                phase="post_exploitation",
+                description="Use the credential exposed by the first step",
+                requires=["web-cve"],
+                implementation_steps=["provision a training credential"],
+            ),
+        ]
     )
-    assert plan.os_compatible is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("wrapped", [True, False])
-async def test_installation_plans_accepts_wrapped_or_bare_array(wrapped: bool) -> None:
-    plans = [
-        {
-            "cve_id": "CVE-2024-1234",
-            "role": "initial_access",
-            "software": "Example web app",
-            "vulnerable_version": "1.0.0",
-            "os_compatible": True,
-            "compatibility_reason": "source build works on the target OS",
-            "installation_method": "source build",
-            "installation_steps": ["download 1.0.0", "build", "start and verify"],
-            "references": [],
-        },
-        {
-            "cve_id": "CVE-2024-5678",
-            "role": "privilege_escalation",
-            "software": "Example helper",
-            "vulnerable_version": "2.0.0",
-            "os_compatible": True,
-            "compatibility_reason": "binary runs on the target OS",
-            "installation_method": "release archive",
-            "installation_steps": ["download 2.0.0", "install", "start and verify"],
-            "references": [],
-        },
-    ]
-    payload = {"plans": plans} if wrapped else plans
-
-    def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "finishReason": "STOP",
-                        "content": {"parts": [{"text": json.dumps(payload)}]},
-                    }
-                ]
-            },
-        )
-
-    settings = Settings(gemini_api_key="test-key")
     machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    evidence = [
-        {"cve_id": "CVE-2024-1234", "descriptions": [], "affected": []},
-        {"cve_id": "CVE-2024-5678", "descriptions": [], "affected": []},
-    ]
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        generator = GeminiGenerator(settings, client)
-        parsed = await generator._installation_plans(machine, *evidence)
+        verified = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", cve_min_year=2024), client
+        )._verify_attack_graph(machine, graph)
 
-    assert [plan.cve_id for plan in parsed] == ["CVE-2024-1234", "CVE-2024-5678"]
+    assert verified.steps[0].software == "Example service"
+    assert verified.steps[0].implementation_steps[0] == "download 1.2.3"
+    assert verified.steps[1] == graph.steps[1]
+    assert requested_hosts.count("cveawg.mitre.org") == 1
 
 
 @pytest.mark.asyncio
-async def test_installation_plans_normalizes_order_and_roles_from_selected_cves() -> None:
-    plans = [
-        {
-            "cve_id": "CVE-2024-5678",
-            "role": "initial_access",
-            "software": "Example helper",
-            "vulnerable_version": "2.0.0",
-            "os_compatible": True,
-            "compatibility_reason": "binary runs on the target OS",
-            "installation_method": "release archive",
-            "installation_steps": ["download", "install", "verify"],
-        },
-        {
-            "cve_id": "CVE-2024-1234",
-            "role": "privilege_escalation",
-            "software": "Example web app",
-            "vulnerable_version": "1.0.0",
-            "os_compatible": True,
-            "compatibility_reason": "source build works on the target OS",
-            "installation_method": "source build",
-            "installation_steps": ["download", "build", "verify"],
-        },
-    ]
+async def test_generate_scenario_without_cve_does_not_request_cve_services() -> None:
+    requests: list[str] = []
+    graph = {
+        "objectives": [],
+        "steps": [
+            {
+                "step_id": "weak-web-route",
+                "title": "Weak web route",
+                "kind": "logic_flaw",
+                "phase": "initial_access",
+                "description": "Abuse application logic",
+                "requires": [],
+                "achieves": [],
+                "cve_id": None,
+                "implementation_steps": ["Implement the intentional logic flaw"],
+            }
+        ],
+    }
 
-    def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "candidates": [
-                    {
-                        "finishReason": "STOP",
-                        "content": {"parts": [{"text": json.dumps({"plans": plans})}]},
-                    }
-                ]
-            },
-        )
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        if len(requests) == 1:
+            return gemini_response(graph)
+        return gemini_response("# Generated scenario")
 
-    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    evidence = [
-        {"cve_id": "CVE-2024-1234", "descriptions": [], "affected": []},
-        {"cve_id": "CVE-2024-5678", "descriptions": [], "affected": []},
-    ]
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(Settings(gemini_api_key="test-key"), client)
-        parsed = await generator._installation_plans(machine, *evidence)
+        scenario = await generator.generate_scenario(
+            MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+        )
 
-    assert [(plan.cve_id, plan.role) for plan in parsed] == [
-        ("CVE-2024-1234", "initial_access"),
-        ("CVE-2024-5678", "privilege_escalation"),
-    ]
+    assert scenario.definition == "# Generated scenario"
+    assert scenario.attack_graph.steps[0].kind == "logic_flaw"
+    assert len(requests) == 2
+    assert all("cveawg" not in url and "osv.dev" not in url for url in requests)
+
+
+def gemini_response(value) -> httpx.Response:
+    generated_text = value if isinstance(value, str) else json.dumps(value)
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": generated_text}]},
+                }
+            ]
+        },
+    )

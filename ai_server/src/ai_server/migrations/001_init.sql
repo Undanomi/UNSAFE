@@ -16,9 +16,7 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
     version integer NOT NULL,
     scenario_definition text NOT NULL,
     target_os text NOT NULL DEFAULT 'Ubuntu 26.04',
-    initial_cve text,
-    privilege_escalation_cve text,
-    cve_installation jsonb NOT NULL DEFAULT '[]'::jsonb,
+    attack_graph jsonb NOT NULL,
     generated_code_path text,
     generated_code_checksum char(64),
     created_by text NOT NULL,
@@ -52,6 +50,7 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
     build_id uuid,
     build_status text,
     build_progress integer NOT NULL DEFAULT 0 CHECK (build_progress BETWEEN 0 AND 100),
+    build_repair_attempts integer NOT NULL DEFAULT 0 CHECK (build_repair_attempts >= 0),
     artifact jsonb,
     error_message text,
     created_at timestamptz NOT NULL,
@@ -63,7 +62,6 @@ CREATE INDEX IF NOT EXISTS ai_sessions_owner_updated_idx
 CREATE INDEX IF NOT EXISTS generation_jobs_session_idx
     ON generation_jobs (session_id, started_at DESC);
 
-ALTER TABLE scenario_versions
-    ADD COLUMN IF NOT EXISTS target_os text NOT NULL DEFAULT 'Ubuntu 26.04';
-ALTER TABLE scenario_versions
-    ADD COLUMN IF NOT EXISTS cve_installation jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE ai_sessions
+    ADD COLUMN IF NOT EXISTS build_repair_attempts integer NOT NULL DEFAULT 0
+    CHECK (build_repair_attempts >= 0);

@@ -61,6 +61,7 @@ X-Authenticated-User-ID: user-123
   "build_id": null,
   "build_status": null,
   "build_progress": 0,
+  "build_repair_attempts": 0,
   "artifact": null,
   "error_message": null,
   "created_at": "2026-08-27T11:26:46.058333Z",
@@ -144,18 +145,19 @@ build_serverへ依頼済みの場合は変更できません。
 送信します。GETである理由は、ブラウザの `EventSource` やSSEプロキシから扱いやすくする
 ためです。生成条件は先に `machine-information` へ保存します。
 
-シナリオ生成前に、選択したCVEの公式MITREレコードを取得します。Ubuntuの場合はさらに
-Canonicalが公開するOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
-OS自体のCVEが対象リリースに該当しない場合や、アプリケーションの脆弱版を固定して導入する
-具体的方法がない場合は、そのCVE案を破棄して選び直します。完成した `scenario` には
-`target_os` と構造化された `cve_installation` が含まれ、Markdown本文にも入手元と導入手順を
-記載します。
-`cve_installation` の順序と `role` は、選定済みのCVE IDを基準にサーバ側で正規化します。
-そのため、AIが導入計画を逆順で返したりroleを取り違えたりしても、CVE IDが一致していれば
-`initial_access`、`privilege_escalation` を正しく割り当てます。
+最初に、可変長の攻撃ステップ、依存関係、user/system flagの到達目標を持つ `attack_graph` を
+生成します。攻撃ステップはCVEに限定せず、Web脆弱性、設定不備、認証情報、ロジック不備などを
+組み合わせられます。循環依存、存在しない前提ステップ、到達不能なflag目標はサーバ側で拒否します。
+
+`kind=cve` のステップが含まれる場合だけ、公式MITREレコードを取得します。Ubuntuの場合はさらに
+CanonicalのOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
+対象OSへ脆弱版を固定導入できないCVEが含まれる案は破棄し、攻撃グラフ全体を生成し直します。
 既定では2024年以降のCVEだけを候補にし、`CVE_MIN_YEAR` で下限年を変更できます。
-対象OSへの適合確認で棄却された場合は、既定で最大5回まで別候補を探します
-（`CVE_SELECTION_ATTEMPTS` で変更できます）。
+攻撃グラフの生成・検証に失敗した場合は既定で最大5回まで別案を作ります
+（`SCENARIO_GENERATION_ATTEMPTS` で変更できます）。
+
+完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
+VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
 
 ```sh
 curl -N http://localhost:8000/v1/sessions/{session_id}/scenarios/events \
@@ -216,10 +218,16 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 保存済みの `source.zip` とチェックサムが有効な場合、AIによるコード生成は繰り返さず、そのZIPを
 build_serverへ再送します。
 
-一方、build_serverがPackerビルドを `failed` または `cancelled` で終了した場合は、同じ
-エンドポイントへの再試行時に保存済みソースとビルドエラーをAIへ渡します。AIは失敗に関係する
-ファイルだけを差分修正し、再検証後に異なる冪等性キーで新しいビルドとして依頼します。
-差分履歴は生成ソース内の `repair_report.json` に保存されます。
+一方、build_serverがPackerビルドを `failed` または `cancelled` で終了した場合は、
+ai_serverのバックグラウンド監視が失敗を検知し、保存済みソースとビルドエラーをAIへ渡します。
+AIは失敗に関係するファイルだけを差分修正し、再検証後に異なる冪等性キーで新しいビルドとして
+自動依頼します。新しいビルドも継続監視するため、クライアントの状態ポーリングには依存しません。
+既定では3回まで行い、`BUILD_REPAIR_MAX_ATTEMPTS` で上限を変更できます（`0` で無効）。
+実行済み回数は `build_repair_attempts`、差分履歴は生成ソース内の `repair_report.json` で
+確認できます。
+上限到達後に同じ `POST /machines` を明示的に再実行した場合は、`build_repair_attempts` を
+リセットして新たな上限まで自動修正します。`GET /sessions/{session_id}` による状態確認だけでは
+再開しないため、ポーリングによって無限に修正されることはありません。
 
 ## セッションとビルド状態を取得する
 
@@ -282,8 +290,8 @@ readiness checkや内部ロードバランサーからの確認に使用しま�
 | `502 Bad Gateway` | 状態取得時にbuild_serverとの通信または応答処理に失敗した |
 
 コード生成やbuild_serverへの依頼は非同期です。そのため `POST /machines` が `202` を返した
-後に失敗する場合があります。その場合は `GET /sessions/{session_id}` の `status=failed` と
-`error_message` で確認します。
+後に失敗する場合があります。Packerビルド失敗時は設定回数まで自動差分修正され、上限到達後は
+`GET /sessions/{session_id}` の `status=failed` と `error_message` で確認できます。
 
 ## OpenAPI
 
