@@ -47,23 +47,6 @@ class ScenarioVersionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class GenerationJobRecord(Base):
-    __tablename__ = "generation_jobs"
-    __table_args__ = (Index("generation_jobs_session_idx", "session_id", "started_at"),)
-
-    generation_job_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
-    session_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), nullable=False)
-    scenario_id: Mapped[str | None] = mapped_column(String(128))
-    generation_type: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(Text, nullable=False)
-    input: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    output: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
-    model_name: Mapped[str | None] = mapped_column(Text)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    error_message: Mapped[str | None] = mapped_column(Text)
-
-
 class AISessionRecord(Base):
     __tablename__ = "ai_sessions"
     __table_args__ = (Index("ai_sessions_owner_updated_idx", "owner_user_id", "updated_at"),)
@@ -82,6 +65,7 @@ class AISessionRecord(Base):
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     build_repair_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    machine_access: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     artifact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

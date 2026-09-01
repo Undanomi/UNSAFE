@@ -52,31 +52,29 @@ stat -c '%g' /dev/kvm
 
 The default is `993`, matching the development host used by this repository.
 
-Create a build:
+The build server is an internal service. Its port is exposed only to the Compose
+network and the AI server is its sole application-level caller. Users create and
+inspect machines through the AI server API, then download a completed image with:
 
 ```sh
-curl -i http://localhost:8080/v1/builds \
-  -H 'Authorization: Bearer local-development-token' \
-  -H 'X-Authenticated-User-ID: user-123' \
-  -H 'Idempotency-Key: request-001' \
-  -F 'scenario_id=scenario-1' \
-  -F 'scenario_version_id=v1' \
-  -F 'source=@scenario-source.zip;type=application/zip'
+curl -L -o image.qcow2 \
+  http://localhost:8000/v1/sessions/{session_id}/download \
+  -H 'X-Authenticated-User-ID: user-123'
 ```
 
 Archives are limited to 64 MiB compressed, 512 MiB expanded, 100 MiB per file,
 and 10,000 entries. Absolute paths, parent traversal, symbolic links, and
 non-regular files are rejected.
 
-The BFF must authenticate the end user and call this API with a service token.
-Production deployments should replace the development token with a short-lived,
-audience-restricted internal JWT or enforce equivalent authentication at the
-service proxy. TLS is expected to terminate at the internal ingress/proxy.
+The AI server authenticates the user context and calls this API with a service
+token. Production deployments should replace the development token with a
+short-lived, audience-restricted internal JWT or enforce equivalent authentication
+at the service boundary.
 
 ## API
 
-The contract is documented in [`api/openapi.yaml`](api/openapi.yaml). Important
-operations are:
+The internal contract used by the AI server is documented in
+[`api/openapi.yaml`](api/openapi.yaml). Important operations are:
 
 - `POST /v1/builds`
 - `GET /v1/builds/{build_id}`
@@ -86,3 +84,9 @@ operations are:
 - `GET /v1/builds/{build_id}/logs/packer`
 - `GET /v1/builds/{build_id}/artifacts`
 - `GET /v1/builds/{build_id}/artifacts/{artifact_id}/content`
+
+After the scenario `build.sh` succeeds, the worker replaces the base image's
+`ubuntu` user password with a cryptographically random value. A completed build's
+authenticated `GET /v1/builds/{build_id}` response includes that value in
+`machine_password`. The AI server copies it to its session's `machine_access`
+field. Treat both fields as secrets and do not write them to logs.

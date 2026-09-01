@@ -9,8 +9,10 @@ from ai_server.config import Settings
 from ai_server.models import (
     AttackGraph,
     AttackStep,
+    GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    SourceFile,
 )
 from ai_server.services.ai import CVEVerification, GeminiGenerator
 from ai_server.services.errors import exception_detail
@@ -64,6 +66,55 @@ async def test_vm_source_generation_uses_large_output_budget() -> None:
     assert result.files[0].path == "contents/build.sh"
     assert requests[0]["generationConfig"]["maxOutputTokens"] == 65536
     assert requests[0]["generationConfig"]["responseMimeType"] == "application/json"
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    assert schema["properties"]["files"]["minItems"] == 1
+    assert "maxItems" not in schema["properties"]["files"]
+    assert schema["$defs"]["SourceFile"]["properties"]["mode"]["enum"] == ["0644", "0755"]
+    assert "default" not in schema["$defs"]["SourceFile"]["properties"]["mode"]
+
+
+@pytest.mark.asyncio
+async def test_vm_source_repair_uses_source_patch_schema() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "files": [
+                    {
+                        "path": "contents/scripts/provision.sh",
+                        "content": "#!/bin/bash\nprintf '%s\\n' repaired\n",
+                        "mode": "0755",
+                    }
+                ],
+                "delete_paths": [],
+            }
+        )
+
+    machine = MachineInformation(
+        name="Test", visibility="private", theme="Web", difficulty="Easy"
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/scripts/provision.sh", content="exit 1")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await GeminiGenerator(
+            Settings(gemini_api_key="test-key"), client
+        ).repair_source(machine, scenario, current, {"error": "build failed"})
+
+    assert result.files[0].content.endswith("repaired\n")
+    assert requests[0]["generationConfig"]["responseMimeType"] == "application/json"
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    assert "maxItems" not in schema["properties"]["files"]
+    assert "maxItems" not in schema["properties"]["delete_paths"]
+    assert "default" not in schema["properties"]["delete_paths"]
 
 
 @pytest.mark.asyncio
@@ -101,10 +152,13 @@ async def test_attack_graph_generation_allows_non_cve_attack_chain() -> None:
             },
         ],
     }
+    requests: list[dict] = []
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda _: gemini_response(graph))
-    ) as client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(graph)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(Settings(gemini_api_key="test-key"), client)
         machine = MachineInformation(
             name="Test",
@@ -119,6 +173,30 @@ async def test_attack_graph_generation_allows_non_cve_attack_chain() -> None:
 
     assert [step.kind for step in parsed.steps] == ["web_vulnerability", "credential"]
     assert all(step.cve_id is None for step in parsed.steps)
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    schema_json = json.dumps(schema)
+    assert "$defs" in schema
+    for filtered_key in ("default", "maxItems", "maxLength", "minLength", "pattern"):
+        assert f'"{filtered_key}":' not in schema_json
+
+
+@pytest.mark.asyncio
+async def test_gemini_http_error_includes_response_detail() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": "Invalid JSON schema"}})
+
+    settings = Settings(gemini_api_key="test-key", scenario_generation_attempts=1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = GeminiGenerator(settings, client)
+        with pytest.raises(RuntimeError, match="Invalid JSON schema"):
+            await generator.generate_scenario(
+                MachineInformation(
+                    name="Test",
+                    visibility="private",
+                    theme="Web",
+                    difficulty="Easy",
+                )
+            )
 
 
 @pytest.mark.asyncio

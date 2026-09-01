@@ -12,7 +12,6 @@ from starlette.requests import Request
 from .config import Settings
 from .database import (
     AISessionRecord,
-    GenerationJobRecord,
     ScenarioRecord,
     ScenarioVersionRecord,
 )
@@ -160,35 +159,6 @@ class ScenarioVersionAdmin(EditableModelView, model=ScenarioVersionRecord):
             AttackGraph.model_validate(data["attack_graph"])
 
 
-class GenerationJobAdmin(EditableModelView, model=GenerationJobRecord):
-    name = "Generation job"
-    name_plural = "Generation jobs"
-    icon = "fa-solid fa-gears"
-    category = "AI server"
-    column_list = (
-        GenerationJobRecord.generation_job_id,
-        GenerationJobRecord.session_id,
-        GenerationJobRecord.generation_type,
-        GenerationJobRecord.status,
-        GenerationJobRecord.model_name,
-        GenerationJobRecord.started_at,
-        GenerationJobRecord.completed_at,
-    )
-    column_searchable_list = (
-        GenerationJobRecord.generation_type,
-        GenerationJobRecord.status,
-        GenerationJobRecord.model_name,
-    )
-    column_sortable_list = (
-        GenerationJobRecord.generation_type,
-        GenerationJobRecord.status,
-        GenerationJobRecord.started_at,
-        GenerationJobRecord.completed_at,
-    )
-    column_default_sort = (GenerationJobRecord.started_at, True)
-    column_details_list = "__all__"
-
-
 def configure_sqladmin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin | None:
     if not settings.sqladmin_enabled:
         return None
@@ -199,6 +169,6 @@ def configure_sqladmin(app: FastAPI, engine: AsyncEngine, settings: Settings) ->
         base_url="/admin",
         authentication_backend=AdminAuthentication(settings),
     )
-    for view in (AISessionAdmin, ScenarioAdmin, ScenarioVersionAdmin, GenerationJobAdmin):
+    for view in (AISessionAdmin, ScenarioAdmin, ScenarioVersionAdmin):
         admin.add_view(view)
     return admin

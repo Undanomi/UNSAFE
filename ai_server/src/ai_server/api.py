@@ -42,7 +42,7 @@ def _response(request: Request, state) -> SessionResponse:
 
 
 def _authorize(state, user_id: str | None) -> None:
-    if user_id is not None and user_id != state.owner_user_id:
+    if (user_id or "local-user") != state.owner_user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
 
@@ -155,10 +155,15 @@ async def download_machine(
     state = await workflow.synchronize(state)
     if state.status != SessionStatus.COMPLETED or not state.artifact or not state.build_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{state.artifact.file_name}"',
+    }
+    if state.artifact.file_size > 0:
+        headers["Content-Length"] = str(state.artifact.file_size)
     return StreamingResponse(
         workflow.build_client.download(state.build_id, state.artifact.artifact_id),
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{state.artifact.file_name}"'},
+        headers=headers,
     )
 
 

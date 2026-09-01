@@ -3,7 +3,9 @@ package worker
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +25,8 @@ import (
 )
 
 const (
-	storedErrorRunes = 16_000
+	storedErrorRunes     = 16_000
+	machinePasswordBytes = 24
 )
 
 type Worker struct {
@@ -121,8 +124,17 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusBuilding, 20, "packer build started"); err != nil {
 		return err
 	}
-	if err := w.runPacker(ctx, workspaceDir, temporaryDir, baseImage, logFile, logger); err != nil {
+	machinePassword, err := newMachinePassword()
+	if err != nil {
+		return fmt.Errorf("generate machine password: %w", err)
+	}
+	if err := w.runPacker(
+		ctx, workspaceDir, temporaryDir, baseImage, machinePassword, logFile, logger,
+	); err != nil {
 		return err
+	}
+	if err := w.store.SetMachinePassword(ctx, build.ID, machinePassword); err != nil {
+		return fmt.Errorf("store machine password: %w", err)
 	}
 	if err := logFile.Sync(); err != nil {
 		return err
@@ -149,6 +161,7 @@ func (w *Worker) runPacker(
 	workspaceDir string,
 	outputDir string,
 	baseImage string,
+	machinePassword string,
 	logFile *os.File,
 	logger *slog.Logger,
 ) error {
@@ -164,7 +177,11 @@ func (w *Worker) runPacker(
 		return err
 	}
 	command.Stderr = logFile
-	command.Env = append(os.Environ(), "CHECKPOINT_DISABLE=1")
+	command.Env = append(
+		os.Environ(),
+		"CHECKPOINT_DISABLE=1",
+		"PKR_VAR_machine_password="+machinePassword,
+	)
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start packer: %w", err)
 	}
@@ -196,6 +213,14 @@ func (w *Worker) runPacker(
 		return fmt.Errorf("packer build: %w", err)
 	}
 	return nil
+}
+
+func newMachinePassword() (string, error) {
+	value := make([]byte, machinePasswordBytes)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func (w *Worker) registerArtifacts(ctx context.Context, buildID, artifactDir string) error {

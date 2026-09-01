@@ -191,6 +191,11 @@ components:
         started_at: { type: string, format: date-time }
         completed_at: { type: string, format: date-time }
         error_message: { type: string }
+        machine_password:
+          type: string
+          minLength: 32
+          maxLength: 32
+          description: Random password assigned to the ubuntu user after provisioning succeeds.
         cancel_requested: { type: boolean }
     Event:
       type: object

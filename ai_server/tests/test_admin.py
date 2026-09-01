@@ -136,6 +136,8 @@ async def test_sqladmin_lists_sessions_from_postgres() -> None:
                         "build_id": "",
                         "build_status": "",
                         "build_progress": "0",
+                        "build_repair_attempts": "0",
+                        "machine_access": "",
                         "artifact": "",
                         "error_message": "",
                         "updated_at": state.updated_at.strftime("%Y-%m-%d %H:%M:%S"),

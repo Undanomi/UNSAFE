@@ -60,6 +60,7 @@ class FakeBuildClient:
         self.submitted_requests: list[dict] = []
         self.get_response: dict | None = None
         self.packer_log_response = ""
+        self.download_requests: list[tuple[str, str]] = []
 
     async def submit(self, **request) -> dict:
         self.submitted_request = request
@@ -79,7 +80,12 @@ class FakeBuildClient:
     async def get(self, build_id: str) -> dict:
         if self.get_response is not None:
             return {"build_id": build_id, **self.get_response}
-        return {"build_id": build_id, "status": "completed", "progress": 100}
+        return {
+            "build_id": build_id,
+            "status": "completed",
+            "progress": 100,
+            "machine_password": "test-generated-machine-password",
+        }
 
     async def packer_log(self, build_id: str) -> str:
         return self.packer_log_response
@@ -96,6 +102,7 @@ class FakeBuildClient:
         ]
 
     async def download(self, build_id: str, artifact_id: str) -> AsyncIterator[bytes]:
+        self.download_requests.append((build_id, artifact_id))
         yield b"disk"
 
 
@@ -164,12 +171,23 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     completed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
     assert completed.status_code == 200
     assert completed.json()["status"] == "completed"
+    assert completed.json()["machine_access"] == {
+        "username": "ubuntu",
+        "password": "test-generated-machine-password",
+    }
     assert completed.json()["download_url"].endswith(f"/v1/sessions/{session_id}/download")
 
     download = await http.get(f"/v1/sessions/{session_id}/download", headers=headers)
     assert download.status_code == 200
     assert download.content == b"disk"
     assert download.headers["content-disposition"] == 'attachment; filename="image.qcow2"'
+    assert download.headers["content-length"] == "4"
+    assert fake_build.download_requests == [
+        (
+            "a49f148e-1f8c-4703-97bb-d0aa180682ae",
+            "3a3c16bd-6d41-49e1-98c3-927138f8a271",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -181,6 +199,9 @@ async def test_session_owner_is_not_disclosed(client) -> None:
         f"/v1/sessions/{session_id}", headers={"X-Authenticated-User-ID": "other"}
     )
     assert response.status_code == 404
+
+    missing_identity = await http.get(f"/v1/sessions/{session_id}")
+    assert missing_identity.status_code == 404
 
 
 @pytest.mark.asyncio

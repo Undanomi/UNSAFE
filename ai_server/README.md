@@ -82,9 +82,10 @@ docker compose up --build
 全サービス起動では build worker が `/dev/kvm` とベースイメージを必要とします。
 詳細は `build_server/README.md` を参照してください。
 
-Compose内のai_serverは既定で `http://server:8080` へ接続します。ホスト上でuv起動するための
-`BUILD_SERVER_URL=http://localhost:8080` がシェルや `.env` に設定されていても、Composeには
-引き継ぎません。Composeから別のbuild serverを使う場合は `AI_BUILD_SERVER_URL` で上書きします。
+Compose内のai_serverは既定で `http://server:8080` へ接続します。build_serverの8080番ポートは
+ホストへ公開せず、利用者からの状態取得と成果物ダウンロードはai_serverが中継します。
+Composeから別のbuild serverを使う場合は `AI_BUILD_SERVER_URL` で上書きします。ai_serverだけを
+ホスト上でuv起動する場合は、build_serverへ到達できる内部URLを `BUILD_SERVER_URL` に指定します。
 
 ## API の利用例
 
@@ -132,13 +133,15 @@ Packerビルド自体が失敗またはキャンセルされた場合は、ai_se
 3回分の自動修正を開始します。状態確認の `GET` だけでは再開しません。
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
-build_server の内部 URL をブラウザへ露出せず、成果物をストリーミングします。
+build_server の内部 URL をブラウザへ露出せず、成果物をストリーミングします。同時に、ランダム化
+された `ubuntu` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
+ダウンロード応答には成果物サイズを `Content-Length` として設定します。
 
 OpenAPI UI は `http://localhost:8000/docs` で確認できます。
 
 ## SQLAdmin 管理画面
 
-セッション、シナリオ、シナリオバージョン、生成ジョブを確認・編集できる
+セッション、シナリオ、シナリオバージョンを確認・編集できる
 SQLAdminを `/admin` に用意しています。通常は無効です。有効にする場合は `.env` に
 次の値を設定してai_serverを再起動します。
 

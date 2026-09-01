@@ -62,6 +62,7 @@ X-Authenticated-User-ID: user-123
   "build_status": null,
   "build_progress": 0,
   "build_repair_attempts": 0,
+  "machine_access": null,
   "artifact": null,
   "error_message": null,
   "created_at": "2026-08-27T11:26:46.058333Z",
@@ -71,7 +72,9 @@ X-Authenticated-User-ID: user-123
 }
 ```
 
-`download_url` は、ビルドが完了して成果物が確定した場合だけ設定されます。
+`download_url` は、ビルドが完了して成果物が確定した場合だけ設定されます。新しく完了した
+ビルドでは `machine_access` に `{"username":"ubuntu","password":"..."}` が設定され、
+ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報として扱ってください。
 
 ### セッション状態
 
@@ -244,15 +247,19 @@ curl http://localhost:8000/v1/sessions/{session_id} \
 
 build_serverの状態が `completed` になると、ai_serverは成果物一覧を取得し、qcow2を優先して
 ダウンロード対象に選びます。その後、セッション状態が `completed` となり、`download_url`
-が設定されます。
+が設定されます。build_serverが返したランダムなマシンパスワードも `machine_access` として
+同じセッションへ保存されます。変更前に完了したビルドなど、パスワード情報がない場合は
+`machine_access` は `null` のままです。
 
 ## 完成したマシンをダウンロードする
 
 ### `GET /v1/sessions/{session_id}/download`
 
 build_serverの内部URLを利用者へ公開せず、選択済み成果物をai_server経由でストリーミング
-します。レスポンスは `application/octet-stream` で、ファイル名は
-`Content-Disposition` ヘッダーに設定されます。
+します。build_serverのポートはホストへ公開しないため、利用者はこのエンドポイントを使用します。
+レスポンスは `application/octet-stream` で、ファイル名は
+`Content-Disposition` ヘッダーに設定されます。成果物メタデータにファイルサイズがある場合は
+`Content-Length` も返すため、curlなどのクライアントが進捗率と残り時間を表示できます。
 
 ```sh
 curl -L -o image.qcow2 \

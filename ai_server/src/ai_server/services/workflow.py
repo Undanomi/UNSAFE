@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from ..models import GeneratedSource, SessionState, SessionStatus
+from ..models import GeneratedSource, MachineAccess, SessionState, SessionStatus
 from ..repository import SessionRepository
 from .ai import AIGenerator
 from .build_client import BuildClient
@@ -112,6 +112,7 @@ class MachineWorkflow:
         )
         state.build_repair_attempts += 1
         state.build_progress = 0
+        state.machine_access = None
         state.artifact = None
         state.status = SessionStatus.GENERATING_CODE
         await self.repository.save(state)
@@ -203,6 +204,7 @@ class MachineWorkflow:
             state.build_id = None
             state.build_status = None
             state.build_progress = 0
+            state.machine_access = None
             state.error_message = None
             await self.repository.save(state)
             build = await self.build_client.submit(
@@ -249,6 +251,7 @@ class MachineWorkflow:
             state.build_status = build["status"]
             state.build_progress = build.get("progress", state.build_progress)
             if build["status"] == "completed":
+                self._capture_machine_access(state, build)
                 artifacts = await self.build_client.artifacts(build_id)
                 if not artifacts:
                     raise RuntimeError("build completed without an artifact")
@@ -300,6 +303,7 @@ class MachineWorkflow:
         state.build_status = build["status"]
         state.build_progress = build.get("progress", state.build_progress)
         if build["status"] == "completed":
+            self._capture_machine_access(state, build)
             artifacts = await self.build_client.artifacts(state.build_id)
             if not artifacts:
                 raise RuntimeError("build completed without an artifact")
@@ -317,6 +321,12 @@ class MachineWorkflow:
         else:
             state.status = SessionStatus.BUILD_QUEUED
         return await self.repository.save(state)
+
+    @staticmethod
+    def _capture_machine_access(state: SessionState, build: dict) -> None:
+        password = build.get("machine_password")
+        if isinstance(password, str) and password:
+            state.machine_access = MachineAccess(username="ubuntu", password=password)
 
 
 def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:

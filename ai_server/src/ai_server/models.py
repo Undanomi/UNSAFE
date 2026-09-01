@@ -178,6 +178,11 @@ class Artifact(BaseModel):
     checksum: str
 
 
+class MachineAccess(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=500)
+
+
 class SessionState(BaseModel):
     session_id: str
     owner_user_id: str
@@ -190,6 +195,7 @@ class SessionState(BaseModel):
     build_status: str | None = None
     build_progress: int = 0
     build_repair_attempts: int = Field(default=0, ge=0)
+    machine_access: MachineAccess | None = None
     artifact: Artifact | None = None
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utcnow)

@@ -4,7 +4,7 @@ import os
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, text
 
 from ai_server.database import AISessionRecord, ScenarioRecord, ScenarioVersionRecord
 from ai_server.models import (
@@ -12,6 +12,7 @@ from ai_server.models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    MachineAccess,
     MachineInformation,
     ScenarioDraft,
     SessionStatus,
@@ -85,6 +86,9 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted.build_status = "completed"
         persisted.build_progress = 100
         persisted.build_repair_attempts = 2
+        persisted.machine_access = MachineAccess(
+            username="ubuntu", password="generated-password"
+        )
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
             artifact_type="qcow2",
@@ -96,8 +100,16 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         completed = await repository.get(state.session_id)
         assert completed.source_checksum == "a" * 64
         assert completed.build_repair_attempts == 2
+        assert completed.machine_access == MachineAccess(
+            username="ubuntu", password="generated-password"
+        )
         assert completed.artifact is not None
         assert completed.artifact.file_name == "image.qcow2"
+        async with repository.session_factory() as session:
+            generation_jobs = await session.scalar(
+                text("SELECT to_regclass('public.generation_jobs')")
+            )
+        assert generation_jobs is None
     finally:
         async with repository.session_factory.begin() as session:
             await session.execute(

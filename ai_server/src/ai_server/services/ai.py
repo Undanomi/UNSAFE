@@ -22,6 +22,45 @@ from ..models import (
 from ..prompts import attack_graph_prompt, code_prompt, repair_prompt, scenario_prompt
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
+GEMINI_JSON_SCHEMA_KEYS = {
+    "$anchor",
+    "$defs",
+    "$id",
+    "$ref",
+    "additionalProperties",
+    "anyOf",
+    "description",
+    "enum",
+    "format",
+    "items",
+    "maximum",
+    "minItems",
+    "minimum",
+    "oneOf",
+    "prefixItems",
+    "properties",
+    "propertyOrdering",
+    "required",
+    "title",
+    "type",
+}
+
+
+def _gemini_json_schema(value):
+    if isinstance(value, list):
+        return [_gemini_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    schema = {}
+    for key, item in value.items():
+        if key not in GEMINI_JSON_SCHEMA_KEYS:
+            continue
+        if key in {"$defs", "properties"}:
+            schema[key] = {name: _gemini_json_schema(child) for name, child in item.items()}
+        else:
+            schema[key] = _gemini_json_schema(item)
+    return schema
 
 
 class CVEVerification(BaseModel):
@@ -66,6 +105,7 @@ class GeminiGenerator:
         prompt: str,
         *,
         json_output: bool = False,
+        response_schema: type[BaseModel] | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
         if not self.settings.gemini_api_key:
@@ -74,7 +114,13 @@ class GeminiGenerator:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.settings.gemini_model}:generateContent"
         )
-        generation_config = {"responseMimeType": "application/json"} if json_output else {}
+        generation_config: dict[str, object] = {}
+        if json_output or response_schema is not None:
+            generation_config["responseMimeType"] = "application/json"
+        if response_schema is not None:
+            generation_config["responseJsonSchema"] = _gemini_json_schema(
+                response_schema.model_json_schema()
+            )
         if max_output_tokens is not None:
             generation_config["maxOutputTokens"] = max_output_tokens
         response = await self.client.post(
@@ -85,7 +131,16 @@ class GeminiGenerator:
                 "generationConfig": generation_config,
             },
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            detail = response.text.strip()[:2000]
+            message = f"{error}; Gemini response: {detail}" if detail else str(error)
+            raise httpx.HTTPStatusError(
+                message,
+                request=error.request,
+                response=error.response,
+            ) from error
         candidates = response.json().get("candidates", [])
         if not candidates:
             raise RuntimeError("Gemini returned no candidates")
@@ -104,6 +159,7 @@ class GeminiGenerator:
         response = await self._generate(
             attack_graph_prompt(machine, rejected, self.settings.cve_min_year),
             json_output=True,
+            response_schema=AttackGraph,
             max_output_tokens=self.settings.gemini_max_output_tokens,
         )
         value = json.loads(response)
@@ -235,7 +291,11 @@ JSONのみを返してください:
 - referencesは証拠に含まれるURLだけを使用する
 """
         verification = CVEVerification.model_validate_json(
-            await self._generate(prompt, json_output=True)
+            await self._generate(
+                prompt,
+                json_output=True,
+                response_schema=CVEVerification,
+            )
         )
         self._enforce_kernel_evidence(verification, evidence)
         if not verification.os_compatible:
@@ -316,6 +376,7 @@ JSONのみを返してください:
                 response = await self._generate(
                     code_prompt(machine, scenario),
                     json_output=True,
+                    response_schema=GeneratedSource,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
                 return GeneratedSource.model_validate_json(response)
@@ -336,6 +397,7 @@ JSONのみを返してください:
                 response = await self._generate(
                     repair_prompt(machine, scenario, current, failure_report),
                     json_output=True,
+                    response_schema=SourcePatch,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
                 return SourcePatch.model_validate_json(response)

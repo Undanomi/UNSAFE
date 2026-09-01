@@ -17,6 +17,7 @@ from .database import (
 from .models import (
     Artifact,
     AttackGraph,
+    MachineAccess,
     MachineInformation,
     ScenarioDraft,
     SessionState,
@@ -113,6 +114,7 @@ class SessionRepository:
             build_status=record.build_status,
             build_progress=record.build_progress,
             build_repair_attempts=record.build_repair_attempts,
+            machine_access=self._json_model(record.machine_access, MachineAccess),
             artifact=self._json_model(record.artifact, Artifact),
             error_message=record.error_message,
             created_at=record.created_at,
@@ -149,6 +151,11 @@ class SessionRepository:
                     build_status=state.build_status,
                     build_progress=state.build_progress,
                     build_repair_attempts=state.build_repair_attempts,
+                    machine_access=(
+                        state.machine_access.model_dump(mode="json")
+                        if state.machine_access
+                        else None
+                    ),
                     artifact=state.artifact.model_dump(mode="json") if state.artifact else None,
                     error_message=state.error_message,
                     updated_at=state.updated_at,

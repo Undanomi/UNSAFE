@@ -4,9 +4,49 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestNewMachinePassword(t *testing.T) {
+	first, err := newMachinePassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newMachinePassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`).MatchString(first) {
+		t.Fatalf("newMachinePassword() = %q, want 32 URL-safe characters", first)
+	}
+	if first == second {
+		t.Fatal("newMachinePassword() returned the same value twice")
+	}
+}
+
+func TestPackerChangesUbuntuPasswordAfterScenarioBuild(t *testing.T) {
+	template, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(template)
+	buildIndex := strings.Index(text, `"./build.sh"`)
+	passwordIndex := strings.Index(text, `ubuntu '${var.machine_password}' | chpasswd`)
+	if buildIndex < 0 || passwordIndex < 0 || passwordIndex <= buildIndex {
+		t.Fatal("Packer must change the ubuntu password after build.sh succeeds")
+	}
+	for _, required := range []string{
+		`variable "machine_password"`,
+		`sensitive   = true`,
+		`shutdown_command = "echo '${var.machine_password}' | sudo -S shutdown -P now"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("Packer template is missing %q", required)
+		}
+	}
+}
 
 func TestCopyTreeRejectsSymlink(t *testing.T) {
 	source := t.TempDir()

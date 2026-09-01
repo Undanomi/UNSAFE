@@ -24,20 +24,6 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
     PRIMARY KEY (scenario_id, scenario_version_id)
 );
 
-CREATE TABLE IF NOT EXISTS generation_jobs (
-    generation_job_id uuid PRIMARY KEY,
-    session_id uuid NOT NULL,
-    scenario_id varchar(128),
-    generation_type text NOT NULL,
-    status text NOT NULL,
-    input jsonb NOT NULL,
-    output jsonb,
-    model_name text,
-    started_at timestamptz,
-    completed_at timestamptz,
-    error_message text
-);
-
 CREATE TABLE IF NOT EXISTS ai_sessions (
     session_id uuid PRIMARY KEY,
     owner_user_id text NOT NULL,
@@ -51,6 +37,7 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
     build_status text,
     build_progress integer NOT NULL DEFAULT 0 CHECK (build_progress BETWEEN 0 AND 100),
     build_repair_attempts integer NOT NULL DEFAULT 0 CHECK (build_repair_attempts >= 0),
+    machine_access jsonb,
     artifact jsonb,
     error_message text,
     created_at timestamptz NOT NULL,
@@ -59,9 +46,12 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
 
 CREATE INDEX IF NOT EXISTS ai_sessions_owner_updated_idx
     ON ai_sessions (owner_user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS generation_jobs_session_idx
-    ON generation_jobs (session_id, started_at DESC);
 
 ALTER TABLE ai_sessions
     ADD COLUMN IF NOT EXISTS build_repair_attempts integer NOT NULL DEFAULT 0
     CHECK (build_repair_attempts >= 0);
+
+ALTER TABLE ai_sessions
+    ADD COLUMN IF NOT EXISTS machine_access jsonb;
+
+DROP TABLE IF EXISTS generation_jobs;

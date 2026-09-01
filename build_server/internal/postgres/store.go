@@ -64,13 +64,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 const buildColumns = `build_id::text, scenario_id, scenario_version_id, requested_by,
-status, progress, worker_id, queued_at, started_at, completed_at, error_message, cancel_requested`
+status, progress, worker_id, queued_at, started_at, completed_at, error_message,
+machine_password, cancel_requested`
 
 func scanBuild(row pgx.Row) (domain.Build, error) {
 	var b domain.Build
 	err := row.Scan(&b.ID, &b.ScenarioID, &b.ScenarioVersionID, &b.RequestedBy,
 		&b.Status, &b.Progress, &b.WorkerID, &b.QueuedAt, &b.StartedAt,
-		&b.CompletedAt, &b.ErrorMessage, &b.CancelRequested)
+		&b.CompletedAt, &b.ErrorMessage, &b.MachinePassword, &b.CancelRequested)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -141,7 +142,8 @@ func (s *Store) Retry(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback(ctx)
 	tag, err := tx.Exec(ctx, `UPDATE build_jobs SET status='retrying',progress=0,worker_id=NULL,
-		started_at=NULL,completed_at=NULL,error_message=NULL,cancel_requested=false,queued_at=now()
+		started_at=NULL,completed_at=NULL,error_message=NULL,machine_password=NULL,
+		cancel_requested=false,queued_at=now()
 		WHERE build_id=$1::uuid AND status IN ('failed','cancelled')`, id)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrConflict
@@ -192,6 +194,15 @@ func (s *Store) SetStatus(ctx context.Context, id string, status domain.Status, 
 		WHERE build_id=$1::uuid`, id, status, progress, completed, nullIfEmpty(message))
 	if err == nil {
 		err = s.AddEvent(ctx, id, string(status), message, progress)
+	}
+	return err
+}
+
+func (s *Store) SetMachinePassword(ctx context.Context, id, password string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE build_jobs SET machine_password=$2 WHERE build_id=$1::uuid`,
+		id, password)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return err
 }

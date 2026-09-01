@@ -4,6 +4,54 @@ import json
 
 from .models import GeneratedSource, MachineInformation, ScenarioDraft
 
+HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
+- 攻略経路にハッシュクラックを含める場合、平文パスワードは標準的なrockyou.txtに
+  変形なしで完全一致するエントリから選ぶ
+- 攻略者がrockyou.txtだけを指定した辞書攻撃で発見できるようにし、追加辞書、ルール、
+  マスク攻撃、総当たり、外部サービスを必須にしない
+- 一般的な開発用PC上のHashcatまたはJohn the Ripperで、適切な形式を指定した辞書攻撃を
+  開始してから約3分以内にクラックできるハッシュ方式と平文を使う
+- 内部用の攻撃グラフとシナリオ仕様書には、選んだ平文パスワード、完全なハッシュ、
+  ハッシュ方式、HashcatのモードまたはJohnの形式、再現用コマンドを明確に記載する
+- 実装する認証情報は仕様書に記載した値と完全に一致させ、受け入れテストでも検証できるようにする
+- この条件を確実に満たせない場合は、ハッシュクラックを攻略の必須ステップにしない
+"""
+
+DEPLOYMENT_VERIFICATION_CONSTRAINTS = """デプロイ結果の共通検証制約:
+- パッケージ、ファイル、プロセス、待受ポートの存在だけで完成と判断せず、プロビジョニング後に
+  攻撃者が利用するプロトコルと入口から意図した機能を実際に呼び出して応答を検証する
+- OSやパッケージが配置する既定ページ、サンプルアプリ、既定VirtualHost、初期設定などが
+  意図したアプリより優先されないよう、不要なものを削除または無効化する
+- WebのDirectoryIndex、VirtualHost、リバースプロキシのルート順序、名前ベースのHost、
+  リダイレクト先、サービスのポート・socket競合など、入口の選択と優先順位を明示的に確認する
+- HTTPでは正しいscheme、Host、port、pathを使って必要ならリダイレクトを追跡し、期待する
+  statusとアプリ固有の本文または挙動を肯定確認する。同時に既定ページ、サンプル、プレースホルダー、
+  別サービスの応答ではないことを否定確認する
+- HTTP以外でも単なる接続成功ではなく、対象プロトコルの応答、バナー、認証、データ取得など
+  攻略経路に必要な観測可能な挙動を検証する
+- 肯定確認と否定確認を、失敗時に非ゼロ終了するコマンドとしてbuild.shおよび
+  scenario_manifest.jsonのhealth_checksとacceptance_testsへ記載する
+"""
+
+FLAG_PLACEMENT_CONSTRAINTS = """フラグ配置と到達性の共通制約:
+- User flagまたはSystem flagの詳細で配置パスが指定されている場合、そのパスを変更、短縮、
+  読み替えせず、最終VM内の正規の配置先として厳密に使用する
+- 同じフラグ内容を指定パス以外の永続ファイル、別名ファイル、バックアップ、データベース、
+  環境変数、ログ、サービス応答、バナーへ複製しない
+- 指定パスへの別経路を作るシンボリックリンク、ハードリンク、bind mountを使用せず、
+  一時ファイル、生成元、シェル履歴、プロビジョニング用コピーを最終VMに残さない
+- 内部用のシナリオ仕様書とビルド入力にフラグ値を記載することは許可するが、最終VMでは
+  指定パス以外から同じ値を取得できない状態にする
+- 指定パスの所有者、group、modeと全親ディレクトリの探索権限を、対応する攻撃グラフの
+  ステップを完了した主体だけが読み取れるように設計する。意図した攻略前に読める権限にしない
+- User flagとSystem flagを同じ内容や同じファイルにせず、それぞれ指定された場所と権限境界を守る
+- 受け入れテストでは、指定パス、通常ファイルであること、リンク数、所有者、group、mode、
+  正しい内容、想定主体からの可読性、未権限主体からの非可読性を検証する
+- さらに疑似ファイルシステムとビルド時だけの領域を除く最終VMの永続領域を検索し、
+  同じフラグ内容を取得できる場所が指定パスの1か所だけであることを検証する
+- 指定パス以外に同じ内容があることを理由に要件を満たしたと判断してはいけない
+"""
+
 
 def attack_graph_prompt(machine: MachineInformation, rejected: list[str], cve_min_year: int) -> str:
     objectives = []
@@ -76,6 +124,12 @@ JSONのみを返してください:
 - 非CVEステップではcve_idをnullにする
 - 各ステップのimplementation_stepsに、VMへ意図的な教材状態を構築する具体的手順を含める
 - 実環境を攻撃する手順ではなく、隔離された演習VMで再現できる構成にする
+
+{HASH_CRACKING_CONSTRAINTS}
+
+{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{FLAG_PLACEMENT_CONSTRAINTS}
 """
 
 
@@ -109,6 +163,12 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 記載してください。CVEステップではCVE-ID、対象コンポーネント、脆弱な厳密バージョン、
 対象OSとの適合根拠、入手元とリファレンスも記載してください。攻撃グラフの情報を省略せず、
 存在しないURLを追加しないでください。
+
+{HASH_CRACKING_CONSTRAINTS}
+
+{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{FLAG_PLACEMENT_CONSTRAINTS}
 """
 
 
@@ -152,6 +212,12 @@ JSON以外は返さないでください。形式:
 - 何度実行しても壊れにくい処理にする
 - User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 - System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
+
+{HASH_CRACKING_CONSTRAINTS}
+
+{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{FLAG_PLACEMENT_CONSTRAINTS}
 """
 
 
@@ -205,4 +271,10 @@ JSON以外は返さないでください。形式:
 - 対象OSのリポジトリにないパッケージとフルOSアップグレードを使わない
 - 既存のシナリオ意図、flag、manifestの整合性を維持する
 - Markdownと攻撃グラフに矛盾がある場合は攻撃グラフを正とする
+
+{HASH_CRACKING_CONSTRAINTS}
+
+{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{FLAG_PLACEMENT_CONSTRAINTS}
 """

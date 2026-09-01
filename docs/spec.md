@@ -267,21 +267,8 @@ ScenarioVersion
 └── created_at
 ```
 
-```text
-GenerationJob
-├── generation_job_id
-├── scenario_id
-├── generation_type
-├── status
-├── input
-├── output
-├── model_name
-├── started_at
-├── completed_at
-└── error_message
-```
-
 AIサービス用データベースは、AI・シナリオサービスのみが直接操作します。
+生成処理の進捗とエラーはセッションに保持し、独立した生成ジョブテーブルは設けません。
 
 ---
 
@@ -452,7 +439,7 @@ BuildArtifact
 | ユーザーの画面表示設定  | BFF         |
 | シナリオ情報       | AI・シナリオサービス |
 | シナリオのバージョン情報 | AI・シナリオサービス |
-| AI生成履歴       | AI・シナリオサービス |
+| マシン接続情報      | AI・シナリオサービス |
 | 生成コードのメタデータ  | AI・シナリオサービス |
 | ビルドジョブ       | ビルドサービス     |
 | ビルド進捗        | ビルドサービス     |
@@ -478,7 +465,7 @@ BuildArtifact
 2. フロントエンドがBFFへ生成要求を送信する
 3. BFFがユーザー認証および入力検証を行う
 4. BFFがAI・シナリオサービスへ生成要求を送信する
-5. AI・シナリオサービスが生成ジョブを登録する
+5. AI・シナリオサービスがセッションの生成状態を更新する
 6. AI・シナリオサービスが生成AIを呼び出す
 7. 生成されたシナリオを検証する
 8. シナリオをAIサービス用データベースへ保存する
@@ -725,7 +712,6 @@ GET /api/builds/{build_id}/artifacts/{artifact_id}
 * user_id
 * scenario_id
 * scenario_version_id
-* generation_job_id
 * build_id
 * worker_id
 
