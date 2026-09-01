@@ -38,12 +38,12 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 
 - 利用者認証にはFirebase Authenticationを使用する
 - ログイン方式はGoogle SSOのみに限定する
-- 認証は、次の流れで行う
+- 認証・認可は、次の流れで行う
   1. ブラウザでGoogleログインを完了する
   2. ブラウザがFirebase ID tokenをBFFへ送信する
   3. BFFがID tokenを検証し、Firebase Session Cookieへ交換する
   4. BFFがSession Cookieに`Secure`、`HttpOnly`および適切な`SameSite`属性を付けてブラウザへ返す
-  5. SSR、Server ActionおよびRoute HandlerがSession Cookieを検証し、利用者を識別する
+  5. BFFがSession Cookieを検証し、適切な認可を行う
 - メールアドレスとパスワードによる登録、保存、再設定および認証は提供しない
 
 ### 2.3 データストア
@@ -54,11 +54,8 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 
 ### 2.4 ジョブキューとオンプレ環境
 
-- AI生成とビルドは処理特性と実行主体が異なるため、キューを分離する
-- BFFは、Firestoreにジョブ状態を登録する
-- BFFからQueueへ送信する情報は、job IDなど処理の識別に必要な最小限の情報に限定する
-- AIサーバーとビルドサーバーは、Cloudflare QueuesのHTTP Pull Consumerとして動作する
-- 各サーバーは、自身が処理可能なときだけ外向きHTTPS通信でジョブを取得する
+- AIサーバーは、Cloudflare QueuesのHTTP Pull Consumerとして動作する
+- AIサーバーは、自身が処理可能なときだけ外向きHTTPS通信でジョブを取得する
 - ジョブの入力取得、進捗通知および結果登録には、BFFの内部APIを使用する
 - 具体的な制御は、後続の Issue で定める
 
