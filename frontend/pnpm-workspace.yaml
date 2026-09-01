@@ -1,6 +1,8 @@
 engineStrict: true
 
 ignoredBuiltDependencies:
+  - '@firebase/util'
+  - protobufjs
   - sharp
 
 minimumReleaseAge: 10080
