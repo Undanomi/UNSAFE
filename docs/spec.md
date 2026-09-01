@@ -20,18 +20,17 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 | ブラウザ | Next.js クライアント | ユーザー操作 |
 | Cloudflare | Workers（Next.js + BFF） | フロントエンド機能 |
 | Cloudflare | AI Job Queue | AI 生成ジョブを AI サーバーへ非同期配する |
-| Cloudflare | Build Job Queue | ビルドジョブをビルドサーバーへ非同期配送する |
 | Firebase | Firebase Authentication | 認証基盤 |
 | Firebase | Cloud Firestore | 業務データを保存する |
 | オンプレ環境 | AI サーバー | AI Job Queue からジョブを取得し、シナリオやコードを生成する |
-| オンプレ環境 | ビルドサーバー | Build Job Queue からジョブを取得し、隔離環境で Packer を実行して成果物を生成する |
+| オンプレ環境 | ビルドサーバー | 隔離環境で Packer を実行して成果物を生成する |
 
 ### 2.1 フロントエンド／BFF
 
 - 既存のNext.js 16アプリケーションをCloudflare Workersへ配置する
 - フロントエンドとBFFは、同じNext.jsアプリケーションとして動作させる
 - フロントエンドとBFFの既存の責務は維持する
-- BFFは、ブラウザ、AIサーバー、ビルドサーバーおよびDBの間に置く境界とする
+- BFFは、ブラウザ、AIサーバーおよびDBの間に置く境界とする
 - ブラウザ、AIサーバーおよびビルドサーバーからDBを直接操作しない
 
 ### 2.2 認証基盤
