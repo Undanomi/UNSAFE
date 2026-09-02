@@ -1,4 +1,4 @@
-import { ProfileEditor } from "@/app/profile/_components/profile-editor"
+import { ProfileEditor } from "@/app/(private)/profile/profile-editor"
 import { AppShell } from "@/components/app-shell"
 import { USER_PROFILES } from "@/stores/profile"
 
