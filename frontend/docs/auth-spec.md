@@ -10,8 +10,8 @@ Firestore にはブラウザから直接アクセスしない。データ操作�
 
 1. ブラウザで Google ログインを実行する。
 2. 取得した ID トークンを `createSessionAction` に送る。
-3. `createSessionService` が ID トークンを検証し、認証時刻が 5 分以内であることを確認する。
-4. Service が Firebase Session Cookie を発行し、Action が `slsg-session` として保存する。`HttpOnly`、`SameSite=Lax`、本番環境では `Secure` とする。
+3. `createSessionService` が ID トークンを検証し、認証時刻が 1 分以内であることを確認する。
+4. Service が有効期限1日の Firebase Session Cookie を発行し、Action が `slsg-session` として保存する。ブラウザ側のCookieには `Max-Age` と `Expires` を設定せず、ブラウザ終了時に破棄されるセッションCookieとする。`HttpOnly`、`SameSite=Lax`、本番環境では `Secure` とする。
 5. 初回ログイン時はFirebase側で `users/{uid}` ドキュメントを作成する。
 
 ログアウト時は Session Cookie を削除する。クライアント側の Firebase Auth の状態はログイン後に破棄し、認証状態の正本を Cookie に一本化する。
