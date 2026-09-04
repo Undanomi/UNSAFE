@@ -56,6 +56,11 @@ build {
     destination = "/tmp/scenario"
   }
 
+  provisioner "file" {
+    source      = "${path.root}/scripts/configure-login-ip.sh"
+    destination = "/tmp/slsg-configure-login-ip.sh"
+  }
+
   provisioner "shell" {
     execute_command = "echo 'ubuntu' | sudo -S bash '{{ .Path }}'"
     inline = [
@@ -68,6 +73,8 @@ build {
       "cd \"$(dirname \"$BUILD_SH\")\"",
       "find . -type f -name '*.sh' -exec chmod +x {} \\;",
       "./build.sh",
+      "bash /tmp/slsg-configure-login-ip.sh",
+      "rm -f /tmp/slsg-configure-login-ip.sh",
       "printf '%s:%s\\n' ubuntu '${var.machine_password}' | chpasswd",
     ]
   }

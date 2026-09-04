@@ -65,6 +65,7 @@ class AISessionRecord(Base):
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     build_repair_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    build_repair_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     machine_access: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     artifact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)

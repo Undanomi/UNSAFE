@@ -257,7 +257,7 @@ func (a *API) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifact.FileName}))
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", "application/zstd")
 	http.ServeContent(w, r, artifact.FileName, artifact.CreatedAt, file)
 }
 

@@ -25,6 +25,7 @@ type Worker struct {
 	ScenarioRoot   string
 	BuildRoot      string
 	BaseImageRoot  string
+	LauncherRoot   string
 	PackerBinary   string
 	PackerTemplate string
 	PollInterval   time.Duration
@@ -68,6 +69,7 @@ func WorkerFromEnv() (Worker, error) {
 		ScenarioRoot:   value("SCENARIO_ROOT", "/var/lib/slsg/scenarios"),
 		BuildRoot:      value("BUILD_ROOT", "/var/lib/slsg/builds"),
 		BaseImageRoot:  value("BASE_IMAGE_ROOT", "/opt/slsg/base_images"),
+		LauncherRoot:   value("LAUNCHER_ROOT", "/opt/slsg/launchers"),
 		PackerBinary:   value("PACKER_BINARY", "packer"),
 		PackerTemplate: value("PACKER_TEMPLATE", "/opt/slsg/packer/build.pkr.hcl"),
 		PollInterval:   poll,

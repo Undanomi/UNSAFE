@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -27,6 +28,7 @@ import (
 const (
 	storedErrorRunes     = 16_000
 	machinePasswordBytes = 24
+	distributionFileName = "slsg-machine.tar.zst"
 )
 
 type Worker struct {
@@ -138,6 +140,12 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	}
 	if err := logFile.Sync(); err != nil {
 		return err
+	}
+	if err := copyLauncherAssets(w.cfg.LauncherRoot, temporaryDir); err != nil {
+		return fmt.Errorf("add launcher assets: %w", err)
+	}
+	if err := packageArtifacts(ctx, temporaryDir, workspaceDir); err != nil {
+		return fmt.Errorf("package build artifacts: %w", err)
 	}
 
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusUploading, 90, "registering build artifacts"); err != nil {
@@ -334,6 +342,96 @@ func copyTree(source, destination string) error {
 	})
 }
 
+func copyLauncherAssets(source, destination string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("launcher directory contains unsupported entry %q", entry.Name())
+		}
+		inputPath := filepath.Join(source, entry.Name())
+		outputPath := filepath.Join(destination, entry.Name())
+		input, err := os.Open(inputPath)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o640)
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".sh") {
+			mode = 0o750
+		}
+		output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		inputErr := input.Close()
+		outputErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inputErr != nil {
+			return inputErr
+		}
+		if outputErr != nil {
+			return outputErr
+		}
+	}
+	return nil
+}
+
+func packageArtifacts(ctx context.Context, sourceDir, workDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return errors.New("artifact directory is empty")
+	}
+	names := make([]string, 0, len(entries))
+	hasImage := false
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("artifact directory contains unsupported entry %q", entry.Name())
+		}
+		if entry.Name() == "image.qcow2" {
+			hasImage = true
+		}
+		names = append(names, entry.Name())
+	}
+	if !hasImage {
+		return errors.New("artifact directory does not contain image.qcow2")
+	}
+	sort.Strings(names)
+
+	temporaryArchive := filepath.Join(workDir, distributionFileName+".partial")
+	if err := os.Remove(temporaryArchive); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	defer os.Remove(temporaryArchive)
+	arguments := []string{
+		"--zstd", "-cf", temporaryArchive,
+		"-C", sourceDir,
+		"--transform=s|^|slsg-machine/|",
+		"--",
+	}
+	arguments = append(arguments, names...)
+	command := exec.CommandContext(ctx, "tar", arguments...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("create %s: %w: %s", distributionFileName, err, strings.TrimSpace(string(output)))
+	}
+
+	for _, name := range names {
+		if err := os.Remove(filepath.Join(sourceDir, name)); err != nil {
+			return fmt.Errorf("remove packaged artifact %q: %w", name, err)
+		}
+	}
+	return os.Rename(temporaryArchive, filepath.Join(sourceDir, distributionFileName))
+}
+
 func fileChecksum(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -348,6 +446,9 @@ func fileChecksum(path string) (string, error) {
 }
 
 func artifactType(name string) string {
+	if strings.HasSuffix(strings.ToLower(name), ".tar.zst") {
+		return "tar.zst"
+	}
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".qcow2":
 		return "qcow2"
@@ -355,6 +456,10 @@ func artifactType(name string) string {
 		return "vmdk"
 	case ".iso":
 		return "iso"
+	case ".sh", ".ps1":
+		return "launcher"
+	case ".md":
+		return "documentation"
 	default:
 		return "file"
 	}

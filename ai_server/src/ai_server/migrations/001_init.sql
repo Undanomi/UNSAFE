@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS ai_sessions (
     build_status text,
     build_progress integer NOT NULL DEFAULT 0 CHECK (build_progress BETWEEN 0 AND 100),
     build_repair_attempts integer NOT NULL DEFAULT 0 CHECK (build_repair_attempts >= 0),
+    build_repair_attempt_limit integer NOT NULL DEFAULT 0 CHECK (build_repair_attempt_limit >= 0),
     machine_access jsonb,
     artifact jsonb,
     error_message text,
@@ -50,6 +51,10 @@ CREATE INDEX IF NOT EXISTS ai_sessions_owner_updated_idx
 ALTER TABLE ai_sessions
     ADD COLUMN IF NOT EXISTS build_repair_attempts integer NOT NULL DEFAULT 0
     CHECK (build_repair_attempts >= 0);
+
+ALTER TABLE ai_sessions
+    ADD COLUMN IF NOT EXISTS build_repair_attempt_limit integer NOT NULL DEFAULT 0
+    CHECK (build_repair_attempt_limit >= 0);
 
 ALTER TABLE ai_sessions
     ADD COLUMN IF NOT EXISTS machine_access jsonb;

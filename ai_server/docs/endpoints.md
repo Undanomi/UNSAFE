@@ -211,7 +211,9 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 バックグラウンド処理の流れ:
 
 1. シナリオから `contents/` 以下のVMソースを生成
-2. 必須ファイル、manifest、Bash、XMLなどを静的検証
+2. 必須ファイル、manifest、Bash、XML、実行ファイルmodeなどを静的検証
+   - WebサービスではIP直アクセスの`/`、アプリ固有マーカー、`Index of`の否定検査を必須化
+   - Web実行ユーザーでの読み取り・探索権限と、`namei`/`stat`による配置mode検査を必須化
 3. 検証失敗時は既存ファイルと検証レポートをAIへ渡し、問題ファイルだけを差分修正
 4. `source.zip` を作成
 5. build_serverへ認証ヘッダーとZIPを送信
@@ -225,12 +227,21 @@ build_serverへ再送します。
 ai_serverのバックグラウンド監視が失敗を検知し、保存済みソースとビルドエラーをAIへ渡します。
 AIは失敗に関係するファイルだけを差分修正し、再検証後に異なる冪等性キーで新しいビルドとして
 自動依頼します。新しいビルドも継続監視するため、クライアントの状態ポーリングには依存しません。
+build_serverへ依頼する前に、決定的validationと敵対的AIレビューの両方を実行します。AIレビューは
+攻撃グラフの手法と実コードの一致、通常操作で成果物が漏れないこと、exploit固有の効果、negative
+control、requiresで指定された前提を飛ばせないことを確認します。不合格所見は構造化された
+`source_semantic_review`として同じ差分修正ループへ渡されます。
 既定では3回まで行い、`BUILD_REPAIR_MAX_ATTEMPTS` で上限を変更できます（`0` で無効）。
-実行済み回数は `build_repair_attempts`、差分履歴は生成ソース内の `repair_report.json` で
-確認できます。
-上限到達後に同じ `POST /machines` を明示的に再実行した場合は、`build_repair_attempts` を
-リセットして新たな上限まで自動修正します。`GET /sessions/{session_id}` による状態確認だけでは
-再開しないため、ポーリングによって無限に修正されることはありません。
+`build_repair_attempts`はbuild_serverへの投入に成功した修復ビルドの累積実行回数です。差分履歴は
+生成ソース内の`repair_report.json`で確認できます。生成ソースのvalidation失敗とその差分修正、
+build_serverへの接続失敗では`build_repair_attempts`は増えません。
+失敗状態のセッションへ同じ`POST /machines`を明示的に再実行した場合は、その時点の累積回数へ
+`BUILD_REPAIR_MAX_ATTEMPTS`を加えた値を新しいサイクルの上限として保存し、さらに設定回数分を
+自動修復できます。投入に成功するたび以前の`build_repair_attempts`へ1加算するため、明示的な
+再リクエストを繰り返すと`BUILD_REPAIR_MAX_ATTEMPTS`を超えます。ai_server再起動などで
+保存状態が古い場合は、build_serverの最新状態を同期してから判定します。
+`GET /sessions/{session_id}`による状態確認だけではカウンターをリセットしないため、ポーリングに
+よって修復予算が意図せず更新されることはありません。
 
 ## セッションとビルド状態を取得する
 
@@ -245,8 +256,9 @@ curl http://localhost:8000/v1/sessions/{session_id} \
   -H 'X-Authenticated-User-ID: user-123'
 ```
 
-build_serverの状態が `completed` になると、ai_serverは成果物一覧を取得し、qcow2を優先して
-ダウンロード対象に選びます。その後、セッション状態が `completed` となり、`download_url`
+build_serverの状態が `completed` になると、ai_serverは成果物一覧から`tar.zst`形式の配布物を
+ダウンロード対象に選びます。`tar.zst`がなければ旧形式へフォールバックせずエラーになります。
+選択後、セッション状態が `completed` となり、`download_url`
 が設定されます。build_serverが返したランダムなマシンパスワードも `machine_access` として
 同じセッションへ保存されます。変更前に完了したビルドなど、パスワード情報がない場合は
 `machine_access` は `null` のままです。
@@ -257,14 +269,22 @@ build_serverの状態が `completed` になると、ai_serverは成果物一覧�
 
 build_serverの内部URLを利用者へ公開せず、選択済み成果物をai_server経由でストリーミング
 します。build_serverのポートはホストへ公開しないため、利用者はこのエンドポイントを使用します。
-レスポンスは `application/octet-stream` で、ファイル名は
+レスポンスは `application/zstd` で、ファイル名は
 `Content-Disposition` ヘッダーに設定されます。成果物メタデータにファイルサイズがある場合は
 `Content-Length` も返すため、curlなどのクライアントが進捗率と残り時間を表示できます。
 
 ```sh
-curl -L -o image.qcow2 \
+curl -L -o slsg-machine.tar.zst \
   http://localhost:8000/v1/sessions/{session_id}/download \
   -H 'X-Authenticated-User-ID: user-123'
+```
+
+配布物には`image.qcow2`、Windows/macOS/Linux用起動スクリプト、各OS用READMEが含まれます。
+Linuxでは次のように展開できます。
+
+```sh
+tar --zstd -xf slsg-machine.tar.zst
+cd slsg-machine
 ```
 
 ダウンロード要求時にもbuild_serverの状態を同期します。まだ成果物が完成していない場合は

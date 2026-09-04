@@ -29,6 +29,77 @@ def scenario() -> ScenarioDraft:
     )
 
 
+def web_generated_source(
+    *,
+    complete_checks: bool = True,
+    php_path: str = "contents/app/index.php",
+    php_mode: str = "0644",
+    provision_mode: str = "0755",
+) -> GeneratedSource:
+    root_check = (
+        "body=$(curl -fsSL http://127.0.0.1/); "
+        "printf '%s' \"$body\" | grep -q 'SLSG_PORTAL'; "
+        "! grep -qi 'Index of' <<<\"$body\""
+    )
+    permission_check = (
+        "namei -l /var/www/html/index.php; runuser -u www-data -- test -r /var/www/html/index.php"
+    )
+    acceptance_tests = (
+        [{"command": root_check}, {"command": permission_check}]
+        if complete_checks
+        else [{"command": "curl http://localhost"}]
+    )
+    shell_checks = f"{root_check}\n{permission_check}\n" if complete_checks else "echo ready\n"
+    required = [
+        "contents/README.md",
+        "contents/scenario_manifest.json",
+        "contents/build.sh",
+        "contents/scripts/provision.sh",
+        php_path,
+    ]
+    manifest = json.dumps(
+        {
+            "target_os": "Ubuntu 26.04",
+            "required_files": required,
+            "services": [{"name": "web", "protocol": "http", "port": 80}],
+            "acceptance_tests": acceptance_tests,
+            "expected_vulnerabilities": ["training-only"],
+            "health_checks": acceptance_tests,
+            "attack_steps": [
+                {
+                    "step_id": "training-step",
+                    "kind": "custom",
+                    "requires": [],
+                    "achieves": [],
+                }
+            ],
+            "objectives": [],
+        }
+    )
+    php_content = (
+        "#!/usr/bin/php\n<?php echo 'SLSG_PORTAL';\n"
+        if "cgi-bin" in php_path
+        else "<?php echo 'SLSG_PORTAL';\n"
+    )
+    return GeneratedSource(
+        files=[
+            SourceFile(path="contents/README.md", content="test"),
+            SourceFile(path="contents/scenario_manifest.json", content=manifest),
+            SourceFile(
+                path="contents/build.sh",
+                content="#!/bin/bash\nset -euo pipefail\nbash ./scripts/provision.sh\n",
+                mode="0755",
+            ),
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=f"#!/bin/bash\nset -euo pipefail\n{shell_checks}",
+                mode=provision_mode,
+            ),
+            SourceFile(path=php_path, content=php_content, mode=php_mode),
+        ]
+    )
+
+
 def test_rejects_parent_traversal(tmp_path: Path) -> None:
     generated = GeneratedSource(
         files=[
@@ -42,6 +113,134 @@ def test_rejects_parent_traversal(tmp_path: Path) -> None:
             scenario(),
             generated,
         )
+
+
+def test_accepts_complete_web_entrypoint_and_runtime_permission_checks(tmp_path: Path) -> None:
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session",
+        scenario(),
+        web_generated_source(),
+    )
+    assert archive_path.is_file()
+
+
+def test_rejects_web_source_without_ip_root_quality_checks(tmp_path: Path) -> None:
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session",
+            scenario(),
+            web_generated_source(complete_checks=False),
+        )
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "web:manifest:application_identity" in failures
+    assert "web:manifest:directory_listing" in failures
+    assert "web:build:ip_root_entrypoint" in failures
+    assert "permissions:build:web_runtime_access" in failures
+
+
+def test_accepts_negated_curl_pipeline_and_failing_if_directory_checks(
+    tmp_path: Path,
+) -> None:
+    generated = web_generated_source()
+    manifest_file = next(
+        file for file in generated.files if file.path == "contents/scenario_manifest.json"
+    )
+    manifest = json.loads(manifest_file.content)
+    manifest_root_check = (
+        "curl -fsSL http://127.0.0.1/ | grep -q 'SLSG_PORTAL'; "
+        "! curl -fsSL http://127.0.0.1/ | grep -qi 'Index of'"
+    )
+    manifest["acceptance_tests"][0]["command"] = manifest_root_check
+    manifest["health_checks"][0]["command"] = manifest_root_check
+    manifest_file.content = json.dumps(manifest)
+
+    provision = next(
+        file for file in generated.files if file.path == "contents/scripts/provision.sh"
+    )
+    provision.content = provision.content.replace(
+        "! grep -qi 'Index of' <<<\"$body\"",
+        (
+            "if curl -fsSL http://127.0.0.1/ | grep -qi 'Index of'; then\n"
+            "  echo 'directory listing detected' >&2\n"
+            "  exit 1\n"
+            "fi"
+        ),
+    )
+
+    archive_path, _ = SourceArchive(tmp_path).create("session", scenario(), generated)
+    assert archive_path.is_file()
+
+
+def test_invalid_manifest_json_reports_only_the_root_parse_error(tmp_path: Path) -> None:
+    generated = web_generated_source()
+    manifest = next(
+        file for file in generated.files if file.path == "contents/scenario_manifest.json"
+    )
+    manifest.content = r'{"command":"find /tmp -exec test -f {} \;"}'
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", scenario(), generated)
+
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "manifest:json" in failures
+    assert "manifest:target_os" not in failures
+    assert "manifest:attack_graph_steps" not in failures
+    assert "manifest:attack_graph_objectives" not in failures
+
+
+def test_rejects_non_executable_shell_script(tmp_path: Path) -> None:
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session",
+            scenario(),
+            web_generated_source(provision_mode="0644"),
+        )
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "permissions:executable:scripts/provision.sh" in failures
+
+
+def test_rejects_non_executable_cgi_php(tmp_path: Path) -> None:
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session",
+            scenario(),
+            web_generated_source(php_path="contents/app/cgi-bin/index.php", php_mode="0644"),
+        )
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "permissions:php_cgi:app/cgi-bin/index.php" in failures
+
+
+def test_rejects_cgi_php_without_shebang(tmp_path: Path) -> None:
+    generated = web_generated_source(php_path="contents/app/cgi-bin/index.php", php_mode="0755")
+    php = next(file for file in generated.files if file.path.endswith("index.php"))
+    php.content = "<?php echo 'SLSG_PORTAL';\n"
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", scenario(), generated)
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "permissions:php_cgi:app/cgi-bin/index.php" in failures
+
+
+def test_rejects_unnecessary_execute_mode_on_non_cgi_php(tmp_path: Path) -> None:
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session",
+            scenario(),
+            web_generated_source(php_mode="0755"),
+        )
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "permissions:php_source:app/index.php" in failures
 
 
 def test_requires_build_entrypoint(tmp_path: Path) -> None:
@@ -123,10 +322,7 @@ def test_rejects_package_previously_reported_as_unavailable(tmp_path: Path) -> N
             ),
             SourceFile(
                 path="contents/scripts/provision.sh",
-                content=(
-                    "#!/bin/bash\nset -euo pipefail\n"
-                    "apt-get install -y example-runtime9\n"
-                ),
+                content=("#!/bin/bash\nset -euo pipefail\napt-get install -y example-runtime9\n"),
                 mode="0755",
             ),
         ]
@@ -184,8 +380,7 @@ def test_rejects_systemd_unit_previously_reported_as_missing(tmp_path: Path) -> 
             SourceFile(
                 path="contents/scripts/provision.sh",
                 content=(
-                    "#!/bin/bash\nset -euo pipefail\n"
-                    "systemctl enable example-runtime.service\n"
+                    "#!/bin/bash\nset -euo pipefail\nsystemctl enable example-runtime.service\n"
                 ),
                 mode="0755",
             ),
@@ -280,10 +475,10 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
         {
             "target_os": "Ubuntu 26.04",
             "required_files": required,
-            "services": [{"name": "web", "port": 80}],
-            "acceptance_tests": ["curl http://localhost"],
+            "services": [{"name": "ssh", "port": 22}],
+            "acceptance_tests": ["test -f /etc/passwd"],
             "expected_vulnerabilities": ["training-only"],
-            "health_checks": ["curl http://localhost"],
+            "health_checks": ["test -f /etc/passwd"],
             "attack_steps": [
                 {
                     "step_id": "training-step",
@@ -306,9 +501,7 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
                     content="#!/bin/bash\nset -euo pipefail\nbash ./scripts/provision.sh\n",
                     mode="0755",
                 ),
-                SourceFile(
-                    path="contents/scripts/provision.sh", content=provision, mode="0755"
-                ),
+                SourceFile(path="contents/scripts/provision.sh", content=provision, mode="0755"),
             ]
         )
 

@@ -17,9 +17,17 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    SourceFile,
     SourcePatch,
+    SourceReview,
 )
-from ..prompts import attack_graph_prompt, code_prompt, repair_prompt, scenario_prompt
+from ..prompts import (
+    attack_graph_prompt,
+    code_prompt,
+    repair_prompt,
+    scenario_prompt,
+    source_review_prompt,
+)
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 GEMINI_JSON_SCHEMA_KEYS = {
@@ -93,6 +101,13 @@ class AIGenerator(Protocol):
         current: GeneratedSource,
         failure_report: dict,
     ) -> SourcePatch: ...
+
+    async def review_source(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> SourceReview: ...
 
 
 class GeminiGenerator:
@@ -371,17 +386,21 @@ JSONのみを返してください:
         self, machine: MachineInformation, scenario: ScenarioDraft
     ) -> GeneratedSource:
         last_error: Exception | None = None
+        prompt = code_prompt(machine, scenario)
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(
-                    code_prompt(machine, scenario),
+                    prompt,
                     json_output=True,
                     response_schema=GeneratedSource,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
-                return GeneratedSource.model_validate_json(response)
-            except (httpx.HTTPError, RuntimeError, ValidationError) as error:
+                generated = GeneratedSource.model_validate_json(response)
+                _validate_generated_file_payload(generated.files)
+                return generated
+            except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
                 last_error = error
+                prompt = _prompt_with_rejection(prompt, error)
         raise RuntimeError(f"Could not generate valid VM source: {last_error}")
 
     async def repair_source(
@@ -392,15 +411,69 @@ JSONのみを返してください:
         failure_report: dict,
     ) -> SourcePatch:
         last_error: Exception | None = None
+        retry_report = failure_report
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(
-                    repair_prompt(machine, scenario, current, failure_report),
+                    repair_prompt(machine, scenario, current, retry_report),
                     json_output=True,
                     response_schema=SourcePatch,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
-                return SourcePatch.model_validate_json(response)
-            except (httpx.HTTPError, RuntimeError, ValidationError) as error:
+                patch = SourcePatch.model_validate_json(response)
+                _validate_generated_file_payload(patch.files)
+                return patch
+            except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
                 last_error = error
+                retry_report = {
+                    **failure_report,
+                    "model_output_validation_error": str(error),
+                }
         raise RuntimeError(f"Could not repair VM source: {last_error}")
+
+    async def review_source(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> SourceReview:
+        last_error: Exception | None = None
+        prompt = source_review_prompt(machine, scenario, current)
+        for _ in range(self.settings.generation_retries):
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=SourceReview,
+                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                )
+                return SourceReview.model_validate_json(response)
+            except (httpx.HTTPError, RuntimeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error)
+        raise RuntimeError(f"Could not review VM source: {last_error}")
+
+
+def _validate_generated_file_payload(files: list[SourceFile]) -> None:
+    paths: set[str] = set()
+    for source_file in files:
+        if source_file.path in paths:
+            raise ValueError(f"duplicate generated path: {source_file.path}")
+        paths.add(source_file.path)
+        if source_file.path != "contents/scenario_manifest.json":
+            continue
+        try:
+            manifest = json.loads(source_file.content)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"scenario_manifest.json is not valid JSON: {error}") from error
+        if not isinstance(manifest, dict):
+            raise TypeError("scenario_manifest.json root must be a JSON object")
+
+
+def _prompt_with_rejection(prompt: str, error: Exception) -> str:
+    return (
+        prompt
+        + "\n\n前回の出力は次の理由で受理できませんでした。同じ誤りを繰り返さず、"
+        + "全体を正しいJSONとして再生成してください:\n"
+        + str(error)[:2_000]
+    )

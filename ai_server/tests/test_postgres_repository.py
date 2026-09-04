@@ -86,13 +86,12 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted.build_status = "completed"
         persisted.build_progress = 100
         persisted.build_repair_attempts = 2
-        persisted.machine_access = MachineAccess(
-            username="ubuntu", password="generated-password"
-        )
+        persisted.build_repair_attempt_limit = 5
+        persisted.machine_access = MachineAccess(username="ubuntu", password="generated-password")
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
-            artifact_type="qcow2",
-            file_name="image.qcow2",
+            artifact_type="tar.zst",
+            file_name="slsg-machine.tar.zst",
             file_size=4,
             checksum="checksum",
         )
@@ -100,11 +99,12 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         completed = await repository.get(state.session_id)
         assert completed.source_checksum == "a" * 64
         assert completed.build_repair_attempts == 2
+        assert completed.build_repair_attempt_limit == 5
         assert completed.machine_access == MachineAccess(
             username="ubuntu", password="generated-password"
         )
         assert completed.artifact is not None
-        assert completed.artifact.file_name == "image.qcow2"
+        assert completed.artifact.file_name == "slsg-machine.tar.zst"
         async with repository.session_factory() as session:
             generation_jobs = await session.scalar(
                 text("SELECT to_regclass('public.generation_jobs')")

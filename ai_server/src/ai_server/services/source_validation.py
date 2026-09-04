@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
@@ -44,6 +45,8 @@ MISSING_SYSTEMD_UNIT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+WEB_SERVICE_PORTS = {80, 443, 3000, 8000, 8080, 8443}
+WEB_SERVICE_NAMES = {"apache", "caddy", "http", "https", "lighttpd", "nginx", "php", "web"}
 
 
 def validate_source(
@@ -57,9 +60,13 @@ def validate_source(
     for relative in sorted(REQUIRED_FILES):
         add("pass" if (root / relative).is_file() else "fail", f"required:{relative}", "exists")
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
-    _validate_manifest(root, manifest, add)
-    _validate_attack_graph(manifest, attack_graph, add)
+    if manifest is not None:
+        _validate_manifest(root, manifest, add)
+        _validate_attack_graph(manifest, attack_graph, add)
     _validate_build(root / "contents/build.sh", add)
+    _validate_source_modes(root / "contents", add)
+    if manifest is not None:
+        _validate_web_delivery(root / "contents", manifest, add)
     _validate_base_image_compatibility(root / "contents", repair_history or [], add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
@@ -88,17 +95,17 @@ def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:
     }
 
 
-def _load_manifest(path: Path, add) -> dict:
+def _load_manifest(path: Path, add) -> dict | None:
     if not path.is_file():
-        return {}
+        return None
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         add("fail", "manifest:json", str(error))
-        return {}
+        return None
     if not isinstance(value, dict):
         add("fail", "manifest:json", "root must be an object")
-        return {}
+        return None
     add("pass", "manifest:json", "valid JSON object")
     return value
 
@@ -152,6 +159,138 @@ def _validate_build(path: Path, add) -> None:
     )
 
 
+def _validate_source_modes(contents: Path, add) -> None:
+    if not contents.is_dir():
+        return
+    for path in sorted(contents.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(contents).as_posix()
+        mode = stat.S_IMODE(path.stat().st_mode)
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if path.suffix.lower() == ".sh":
+            add(
+                "pass" if mode & 0o111 and text.startswith("#!") else "fail",
+                f"permissions:executable:{relative}",
+                f"shell scripts must have a shebang and executable mode; mode is {mode:04o}",
+            )
+        elif text.startswith("#!"):
+            add(
+                "pass" if mode & 0o111 else "fail",
+                f"permissions:shebang:{relative}",
+                f"files with a shebang must be executable; mode is {mode:04o}",
+            )
+        if path.suffix.lower() == ".php":
+            is_cgi_path = "cgi-bin" in {part.lower() for part in path.parts}
+            has_shebang = text.startswith("#!")
+            if is_cgi_path or has_shebang:
+                add(
+                    "pass" if has_shebang and mode & 0o111 else "fail",
+                    f"permissions:php_cgi:{relative}",
+                    f"CGI PHP must have a shebang and executable mode; mode is {mode:04o}",
+                )
+            else:
+                add(
+                    "fail" if mode & 0o111 else "pass",
+                    f"permissions:php_source:{relative}",
+                    f"non-CGI PHP should be readable but not executable; mode is {mode:04o}",
+                )
+
+
+def _validate_web_delivery(contents: Path, manifest: dict, add) -> None:
+    if not _has_web_service(manifest):
+        return
+    manifest_checks = json.dumps(
+        {
+            "health_checks": manifest.get("health_checks", []),
+            "acceptance_tests": manifest.get("acceptance_tests", []),
+        },
+        ensure_ascii=False,
+    )
+    shell_checks = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in sorted(contents.rglob("*.sh"))
+    )
+    _validate_web_check_text(manifest_checks, "manifest", add)
+    _validate_web_check_text(shell_checks, "build", add)
+
+
+def _has_web_service(manifest: dict) -> bool:
+    for service in manifest.get("services", []):
+        if not isinstance(service, dict):
+            continue
+        name = str(service.get("name", "")).lower()
+        protocol = str(service.get("protocol", "")).lower()
+        try:
+            port = int(service.get("port"))
+        except (TypeError, ValueError):
+            port = None
+        if (
+            any(token in name for token in WEB_SERVICE_NAMES)
+            or protocol in {"http", "https"}
+            or port in WEB_SERVICE_PORTS
+        ):
+            return True
+    return False
+
+
+def _validate_web_check_text(text: str, location: str, add) -> None:
+    lowered = text.lower()
+    root_request = bool(
+        re.search(
+            r"curl\b[^\n]*https?://(?:127\.0\.0\.1|localhost)(?::\d+)?/?(?:[\s'\";|)]|$)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    add(
+        "pass" if root_request else "fail",
+        f"web:{location}:ip_root_entrypoint",
+        "numeric/localhost root URL must be requested",
+    )
+    add(
+        "pass" if root_request and "grep" in lowered else "fail",
+        f"web:{location}:application_identity",
+        "root response must be checked for a scenario-specific marker",
+    )
+    negative_index_check = _rejects_directory_listing(text)
+    add(
+        "pass" if negative_index_check else "fail",
+        f"web:{location}:directory_listing",
+        "root response must explicitly reject 'Index of'",
+    )
+    permission_tool = any(token in lowered for token in ("namei ", "stat ", "test -r", "test -x"))
+    runtime_identity = any(token in lowered for token in ("runuser ", "sudo -u ", "su -s "))
+    add(
+        "pass" if permission_tool and runtime_identity else "fail",
+        f"permissions:{location}:web_runtime_access",
+        "web runtime user readability/traversal and deployed modes must be checked",
+    )
+
+
+def _rejects_directory_listing(text: str) -> bool:
+    lowered = text.lower()
+    if "index of" not in lowered:
+        return False
+    if "must_not_contain" in lowered:
+        return True
+    if re.search(r"\bgrep\b[^\n;&]*(?:-[a-z]*v[a-z]*\b)[^\n;&]*index of", lowered):
+        return True
+    if re.search(
+        r"(?:^|&&|\|\||;)\s*!\s*[^\n;&]*\bgrep\b[^\n;&]*index of",
+        lowered,
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\bif\s+[^;\n]*\bgrep\b[^;\n]*index of[^;\n]*;\s*then"
+            r"(?:(?!\bfi\b).)*\bexit\s+[1-9][0-9]*\b(?:(?!\bfi\b).)*\bfi\b",
+            lowered,
+            re.DOTALL,
+        )
+    )
+
+
 def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> None:
     expected_steps = {
         step.step_id: {
@@ -195,9 +334,7 @@ def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> No
     )
 
 
-def _validate_base_image_compatibility(
-    contents: Path, repair_history: list[dict], add
-) -> None:
+def _validate_base_image_compatibility(contents: Path, repair_history: list[dict], add) -> None:
     if not contents.is_dir():
         return
     scripts = list(contents.rglob("*.sh"))
@@ -205,9 +342,7 @@ def _validate_base_image_compatibility(
     shell_lines = combined.replace("\\\n", " ")
     install_commands = "\n".join(
         match.group(0)
-        for match in re.finditer(
-            r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\b[^\n]*", shell_lines
-        )
+        for match in re.finditer(r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\b[^\n]*", shell_lines)
     )
     systemctl_commands = "\n".join(
         match.group(0) for match in re.finditer(r"\bsystemctl\b[^\n]*", shell_lines)

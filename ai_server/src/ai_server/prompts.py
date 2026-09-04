@@ -33,6 +33,31 @@ DEPLOYMENT_VERIFICATION_CONSTRAINTS = """デプロイ結果の共通検証制約
   scenario_manifest.jsonのhealth_checksとacceptance_testsへ記載する
 """
 
+WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッションの共通制約:
+- HTTP/HTTPSサービスを作る場合、攻撃者がDNS名、Hostヘッダー、隠しパスを知らなくても、
+  ブラウザへターゲットのIPアドレスだけを入力すれば意図した入口へ到達できるようにする
+- アプリを`/`で直接提供するか、`/`から正しいランディングページへリダイレクトする。名前ベースの
+  VirtualHostを使う場合も、IP宛て要求を受けるdefault_serverまたはcatch-allを必ず構成する
+- `/`にはシナリオ固有のタイトル、デザイン、自然な導線を備えた完成済みページを用意し、
+  `Index of`、Webサーバー既定ページ、素の404、ファイル一覧を利用者へ見せない
+- Apacheの`Options Indexes`やNginxの`autoindex on`などのディレクトリ一覧を無効化し、
+  indexファイルまたは明示的なルートハンドラーを設ける。意図的な脆弱性でも入口の完成度は落とさない
+- build.shから実行されるシェルとmanifestのhealth_checks/acceptance_testsの両方で、Hostを
+  上書きせず`curl -fsSL http://127.0.0.1/`相当を実行し、アプリ固有マーカーを肯定確認すると同時に
+  `Index of`とWebサーバー既定ページが含まれないことを否定確認する
+- 配置時は所有者、group、modeを偶然の既定値に任せず、`install -d -m`、`install -m`、
+  `chown`、限定的な`chmod`で明示する。ディレクトリは通常0755/0750、静的ファイルと通常の
+  PHPソースは0644/0640、秘密情報は0600/0640、実行スクリプトは0755/0750を基準にする
+- PHP-FPMやApache moduleで読むPHPは実行ビットではなくWeb実行ユーザーの読み取り権限と全親
+  ディレクトリの探索権限を保証する。CGIとして直接実行するPHPはshebangと実行ビットを必須にする
+- `.sh`、CGI、サービスのExecStart対象など実行される生成ファイルはJSONのmodeを0755にし、
+  最終配置後のモードも明示する。設定・ソース・秘密情報へ理由なく実行ビットを付けない
+- Web実行ユーザーを実際のunit/FPM pool/Apache設定から確認し、そのユーザーで`test -r`、必要なら
+  `test -x`を実行する。`namei -l`または`stat`でも所有者・mode・親ディレクトリを検査する
+- アップロード、cache、sessionなど攻略上必要な場所だけを書き込み可能にし、DocumentRoot全体への
+  `chmod -R 777`、無差別な所有者変更、world-writable化で権限問題を回避しない
+"""
+
 FLAG_PLACEMENT_CONSTRAINTS = """フラグ配置と到達性の共通制約:
 - User flagまたはSystem flagの詳細で配置パスが指定されている場合、そのパスを変更、短縮、
   読み替えせず、最終VM内の正規の配置先として厳密に使用する
@@ -50,6 +75,25 @@ FLAG_PLACEMENT_CONSTRAINTS = """フラグ配置と到達性の共通制約:
 - さらに疑似ファイルシステムとビルド時だけの領域を除く最終VMの永続領域を検索し、
   同じフラグ内容を取得できる場所が指定パスの1か所だけであることを検証する
 - 指定パス以外に同じ内容があることを理由に要件を満たしたと判断してはいけない
+"""
+
+EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない近道の共通制約:
+- 各攻撃ステップについて、前提状態、攻撃者が外部から行う具体的操作、成功時だけ得られる観測可能な
+  証拠、次ステップへ渡す成果物を明確にし、単なるサービス起動やエラー発生を攻略成功とみなさない
+- 意図した脆弱性が「存在する」だけでなく「攻略に必要」であることを保証する。通常入力、通常機能、
+  初期画面、公開ファイル、バナー、コメント、既定認証情報から同じ成果物を先に取得できる近道を作らない
+- 正常系のbenign controlでは秘密・認証情報・flag・次工程の成果物を取得できず、意図したexploitでは
+  それを取得でき、似ているが成立しないnegative controlでは取得できないことを対にして検証する
+- exploitの検証は脆弱性種別に固有の効果を証明する。SQLiなら通常検索や単なるSQLエラーではなく、
+  攻撃用入力による本来取得不能な行の抽出、パストラバーサルなら通常の公開ファイルではなく許可範囲外
+  ファイルの取得、権限昇格なら実効UIDや保護対象へのアクセス変化などを確認する
+- 攻撃グラフの各requiresについて、前段の成果物なしでは後段が成功せず、前段で得た実値を使うと
+  成功することを検証する。構築用スクリプトが成果物を知っていることを攻略可能性の証明に使わない
+- acceptance_testsには、攻撃者が利用する入口から実行するbenign control、exploit、negative controlを
+  ステップIDと対応付けて記載し、期待文字列をechoするだけ、ソースをgrepするだけ、DBを直接読むだけの
+  自己充足的なテストにしない
+- 実装または修復の完了前に、より短い別経路、情報の先出し、意図しない別種の脆弱性、前提を飛ばせる
+  権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
 """
 
 
@@ -129,6 +173,10 @@ JSONのみを返してください:
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
 
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
+
 {FLAG_PLACEMENT_CONSTRAINTS}
 """
 
@@ -168,6 +216,10 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
 
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
+
 {FLAG_PLACEMENT_CONSTRAINTS}
 """
 
@@ -198,6 +250,13 @@ JSON以外は返さないでください。形式:
 - build.sh は #!/bin/bash と set -euo pipefail を使い、
   /tmp/scenario/contents がカレントディレクトリである前提で bash ./scripts/provision.sh を呼ぶ
 - アプリは contents/app/、設定は contents/config/ に置く
+- JSONのfiles[].pathはVM内の最終配置先ではなく生成ZIP内のパスであり、必ずcontents/から始める。
+  `/var/www`、`/etc`、`/opt`などの最終配置先をfiles[].pathへ返さず、contents/app/や
+  contents/config/のファイルをcontents/scripts/provision.sh内のinstall/cpで最終配置する
+- 同じpathをfilesへ複数回含めない。特にcontents/scenario_manifest.jsonは必ず1ファイルだけにする
+- scenario_manifest.jsonのcontentはMarkdownやコメントを含まない厳密なJSON objectにし、単独で
+  Pythonのjson.loadsに成功する形式にする。command文字列内のバックスラッシュもJSON規則で
+  必ずエスケープし、セミコロンやドル記号の直前に未定義のJSONエスケープを作らない
 - OSパッケージ付属のsystemd unitを優先し、ビルド中の対話入力と再起動を避ける
 - {scenario.target_os}の標準パッケージリポジトリに存在することを確認できないパッケージ名を使わない
 - シナリオ上の要件で厳密なバージョンが必要な場合を除き、言語ランタイムやサービスは
@@ -216,6 +275,10 @@ JSON以外は返さないでください。形式:
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
 """
@@ -258,6 +321,7 @@ JSON以外は返さないでください。形式:
 
 制約:
 - filesには追加・変更が必要なファイルだけを含め、変更不要なファイルを返さない
+- 同じpathをfilesへ複数回含めない
 - delete_pathsには削除が必要な既存ファイルだけを含める
 - 失敗原因とその依存箇所を調べ、必要最小限の一貫した差分にする
 - 複数行のビルドログがある場合は最終行だけで判断せず、失敗したコマンドと前後の文脈から
@@ -268,13 +332,67 @@ JSON以外は返さないでください。形式:
 - パッケージを変更する場合は、その名前からsystemd unit、ソケット、設定パスを推測せず、
   導入後に実在する名前をパッケージ情報またはsystemdから確認して関連設定を一貫して更新する
 - パスはcontents/以下の相対パスに限定し、絶対パスと..を使わない
+- files[].pathは生成ソース内の既存パスまたは追加パスであり、VM内の最終配置先ではない。
+  `/var/www`、`/etc`、`/opt`などを直接files[].pathへ返さず、contents/app/、contents/config/、
+  contents/scripts/以下を修正し、VMへの配置変更はprovision.shのinstall/cp/chownで行う
 - 対象OSのリポジトリにないパッケージとフルOSアップグレードを使わない
 - 既存のシナリオ意図、flag、manifestの整合性を維持する
+- contents/scenario_manifest.jsonを変更する場合、そのcontentはMarkdownやコメントを含まない
+  厳密なJSON objectとし、単独でPythonのjson.loadsに成功させる。command文字列内の
+  バックスラッシュもJSON規則で必ずエスケープし、セミコロンやドル記号の直前に未定義の
+  JSONエスケープを作らない
 - Markdownと攻撃グラフに矛盾がある場合は攻撃グラフを正とする
 
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
 
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
+
 {FLAG_PLACEMENT_CONSTRAINTS}
+"""
+
+
+def source_review_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    current: GeneratedSource,
+) -> str:
+    return f"""あなたは教育用攻撃マシンの独立した敵対的レビュー担当です。
+作者の説明やmanifestの自己申告を信用せず、攻撃グラフと実装ファイルを突き合わせてください。
+セキュアに修正するレビューではなく、意図した脆弱性だけが指定経路で攻略可能かを審査します。
+
+マシン: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {scenario.target_os}
+攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+生成ファイル:
+```json
+{current.model_dump_json(indent=2)}
+```
+
+JSONのみを返してください:
+{{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
+"category":"unintended_shortcut","evidence":"ファイルと具体的挙動","remediation":"必要な修正"}}]}}
+
+審査規則:
+- 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
+- intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
+- 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
+  acceptance_test_gapのerrorにする
+- 実装された主脆弱性が攻撃グラフの種類と異なる場合はwrong_techniqueのerrorにする
+- requiresを飛ばせる、または前段の成果物が後段で実際に使われない場合はbroken_chainのerrorにする
+- コメントや名前にSQLi等と書いてあること、expected_vulnerabilitiesの宣言、READMEの攻略説明だけを
+  実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
+- errorが1件でもあればapproved=false、errorがなければapproved=trueにする
+- evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 """

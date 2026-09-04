@@ -162,7 +162,7 @@ async def download_machine(
         headers["Content-Length"] = str(state.artifact.file_size)
     return StreamingResponse(
         workflow.build_client.download(state.build_id, state.artifact.artifact_id),
-        media_type="application/octet-stream",
+        media_type="application/zstd",
         headers=headers,
     )
 

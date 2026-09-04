@@ -13,6 +13,7 @@ internal/httpapi/       HTTP transport and authentication boundary
 internal/postgres/      build repository and PostgreSQL job queue
 internal/worker/        isolated workspace and Packer orchestration
 builder/packer/         controlled Packer template
+builder/launchers/      end-user QEMU launchers and connection guides
 builder/base_images/    base VM images (not committed)
 data/scenarios/         local-development scenario inputs (not committed)
 ```
@@ -54,12 +55,15 @@ The default is `993`, matching the development host used by this repository.
 
 The build server is an internal service. Its port is exposed only to the Compose
 network and the AI server is its sole application-level caller. Users create and
-inspect machines through the AI server API, then download a completed image with:
+inspect machines through the AI server API, then download the completed distribution with:
 
 ```sh
-curl -L -o image.qcow2 \
+curl -L -o slsg-machine.tar.zst \
   http://localhost:8000/v1/sessions/{session_id}/download \
   -H 'X-Authenticated-User-ID: user-123'
+
+tar --zstd -xf slsg-machine.tar.zst
+cd slsg-machine
 ```
 
 Archives are limited to 64 MiB compressed, 512 MiB expanded, 100 MiB per file,
@@ -90,3 +94,12 @@ After the scenario `build.sh` succeeds, the worker replaces the base image's
 authenticated `GET /v1/builds/{build_id}` response includes that value in
 `machine_password`. The AI server copies it to its session's `machine_access`
 field. Treat both fields as secrets and do not write them to logs.
+
+The worker also installs `slsg-login-banner.service` as the final guest
+customization. It waits for DHCP and writes every global IPv4 address to
+`/etc/issue`, so the target address is visible before console login. End-user
+launchers and their platform-specific connection guides are copied from
+`builder/launchers/` beside `image.qcow2`. The worker packages all of these files
+under a top-level `slsg-machine/` directory in the single
+`slsg-machine.tar.zst` distribution artifact, then removes the individual files
+from the public artifact directory.

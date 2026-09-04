@@ -155,10 +155,38 @@ class ScenarioDraft(BaseModel):
     attack_graph: AttackGraph
 
 
+class SourceReviewFinding(BaseModel):
+    step_id: str | None = Field(default=None, max_length=128)
+    severity: Literal["error", "warning"]
+    category: Literal[
+        "wrong_technique",
+        "unintended_shortcut",
+        "unproven_exploit",
+        "broken_chain",
+        "acceptance_test_gap",
+        "implementation_mismatch",
+    ]
+    evidence: str = Field(min_length=1, max_length=4000)
+    remediation: str = Field(min_length=1, max_length=4000)
+
+
+class SourceReview(BaseModel):
+    approved: bool
+    summary: str = Field(min_length=1, max_length=4000)
+    findings: list[SourceReviewFinding] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def approval_matches_findings(self) -> SourceReview:
+        has_error = any(finding.severity == "error" for finding in self.findings)
+        if self.approved == has_error:
+            raise ValueError("approved must be true exactly when there are no error findings")
+        return self
+
+
 class SourceFile(BaseModel):
     path: str
     content: str
-    mode: Literal["0644", "0755"] = "0644"
+    mode: Literal["0600", "0640", "0644", "0700", "0750", "0755"] = "0644"
 
 
 class GeneratedSource(BaseModel):
@@ -194,7 +222,12 @@ class SessionState(BaseModel):
     build_id: str | None = None
     build_status: str | None = None
     build_progress: int = 0
-    build_repair_attempts: int = Field(default=0, ge=0)
+    build_repair_attempts: int = Field(
+        default=0,
+        ge=0,
+        description="Cumulative number of submitted build repair attempts",
+    )
+    build_repair_attempt_limit: int = Field(default=0, ge=0, exclude=True)
     machine_access: MachineAccess | None = None
     artifact: Artifact | None = None
     error_message: str | None = None

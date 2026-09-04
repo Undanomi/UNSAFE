@@ -34,6 +34,12 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
 ai_server ホスト上で実行することはありません。
 
+Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
+ランディングページへ到達することを必須とします。`Index of`やWebサーバー既定ページを
+表示しないこと、Packer中の実検査とmanifestの双方に肯定・否定検査があること、Web実行
+ユーザーによるファイル読み取り・親ディレクトリ探索と所有者・modeを検査することを静的検証します。
+シェルとCGIは実行可能modeを必須とし、通常のPHP-FPM用ソースは読み取り権限を検査します。
+
 シナリオは、人間向けの `scenario_definition`（Markdown）と、ビルド・検証用の
 `attack_graph`（JSON）を同じバージョンに保存します。攻撃グラフは可変長のステップ、
 ステップ間の依存関係、user/system flagの到達目標を持ちます。CVEは攻撃ステップの任意の
@@ -62,8 +68,17 @@ VMコード生成はシナリオ生成より応答が大きくなるため、Gem
 別の `BUILD_TIMEOUT_SECONDS` を使用します。
 攻撃グラフの生成失敗時の再試行回数は `SCENARIO_GENERATION_ATTEMPTS`（既定値5）、
 CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定値2024）で変更できます。
+生成ソースは構文・パーミッションなどの決定的validationに加え、攻撃グラフと実コードを比較する
+敵対的AIレビューを通過する必要があります。意図した手法を使わない近道、通常機能による成果物の
+先出し、単なるエラーや接続成功だけのexploit判定、前提ステップを飛ばせる攻撃経路は修復対象です。
+この意味レビューの不合格と再修復はbuild_serverへ投入されないため、`build_repair_attempts`を増やしません。
 Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPTS`（既定値3）で変更でき、
-`0` を指定すると自動修正を無効化できます。
+`0` を指定すると自動修正を無効化できます。`build_repair_attempts`はbuild_serverへの投入に成功した
+修復ビルドの累積実行回数で、静的validationの再試行とbuild_serverへの接続失敗では増えません。
+失敗後に`POST /machines`を明示的に再実行すると、その時点の累積回数へ
+`BUILD_REPAIR_MAX_ATTEMPTS`を加えた値を新しいサイクルの上限とし、さらに設定回数分を自動修復できます。
+投入成功ごとに以前の回数へ1加算し、値を0や上限値へリセットしません。状態確認のGETだけでは
+修復サイクルを追加しません。
 
 ## Docker で起動
 
@@ -133,9 +148,10 @@ Packerビルド自体が失敗またはキャンセルされた場合は、ai_se
 3回分の自動修正を開始します。状態確認の `GET` だけでは再開しません。
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
-build_server の内部 URL をブラウザへ露出せず、成果物をストリーミングします。同時に、ランダム化
+build_server の内部 URL をブラウザへ露出せず、`image.qcow2`、OS別起動スクリプト、READMEを
+含む`slsg-machine.tar.zst`をストリーミングします。同時に、ランダム化
 された `ubuntu` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
-ダウンロード応答には成果物サイズを `Content-Length` として設定します。
+ダウンロード応答には`application/zstd`と成果物サイズを設定します。
 
 OpenAPI UI は `http://localhost:8000/docs` で確認できます。
 

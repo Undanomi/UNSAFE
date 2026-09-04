@@ -12,6 +12,7 @@ from ..models import (
     ScenarioDraft,
     SourceFile,
     SourcePatch,
+    SourceReview,
 )
 
 
@@ -186,4 +187,15 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     + "\nRepair applied for local integration testing.\n",
                 )
             ]
+        )
+
+    async def review_source(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> SourceReview:
+        return SourceReview(
+            approved=True,
+            summary="Deterministic stub source is accepted for local integration testing.",
         )

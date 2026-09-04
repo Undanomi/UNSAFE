@@ -13,6 +13,7 @@ from ai_server.models import (
     MachineInformation,
     ScenarioDraft,
     SourceFile,
+    SourceReview,
 )
 from ai_server.services.ai import CVEVerification, GeminiGenerator
 from ai_server.services.errors import exception_detail
@@ -69,7 +70,14 @@ async def test_vm_source_generation_uses_large_output_budget() -> None:
     schema = requests[0]["generationConfig"]["responseJsonSchema"]
     assert schema["properties"]["files"]["minItems"] == 1
     assert "maxItems" not in schema["properties"]["files"]
-    assert schema["$defs"]["SourceFile"]["properties"]["mode"]["enum"] == ["0644", "0755"]
+    assert schema["$defs"]["SourceFile"]["properties"]["mode"]["enum"] == [
+        "0600",
+        "0640",
+        "0644",
+        "0700",
+        "0750",
+        "0755",
+    ]
     assert "default" not in schema["$defs"]["SourceFile"]["properties"]["mode"]
 
 
@@ -92,9 +100,7 @@ async def test_vm_source_repair_uses_source_patch_schema() -> None:
             }
         )
 
-    machine = MachineInformation(
-        name="Test", visibility="private", theme="Web", difficulty="Easy"
-    )
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
     scenario = ScenarioDraft(
         scenario_id="scenario-test",
         title="Test",
@@ -105,9 +111,9 @@ async def test_vm_source_repair_uses_source_patch_schema() -> None:
         files=[SourceFile(path="contents/scripts/provision.sh", content="exit 1")]
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await GeminiGenerator(
-            Settings(gemini_api_key="test-key"), client
-        ).repair_source(machine, scenario, current, {"error": "build failed"})
+        result = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).repair_source(
+            machine, scenario, current, {"error": "build failed"}
+        )
 
     assert result.files[0].content.endswith("repaired\n")
     assert requests[0]["generationConfig"]["responseMimeType"] == "application/json"
@@ -115,6 +121,142 @@ async def test_vm_source_repair_uses_source_patch_schema() -> None:
     assert "maxItems" not in schema["properties"]["files"]
     assert "maxItems" not in schema["properties"]["delete_paths"]
     assert "default" not in schema["properties"]["delete_paths"]
+
+
+@pytest.mark.asyncio
+async def test_vm_source_generation_retries_duplicate_embedded_paths() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        build_file = {
+            "path": "contents/build.sh",
+            "content": "#!/bin/bash\nset -euo pipefail\n",
+            "mode": "0755",
+        }
+        files = [build_file, build_file] if len(requests) == 1 else [build_file]
+        return gemini_response({"files": files})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        ).generate_source(
+            MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy"),
+            ScenarioDraft(
+                scenario_id="scenario-test",
+                title="Test",
+                definition="# Test",
+                attack_graph=graph_without_objectives(),
+            ),
+        )
+
+    assert len(result.files) == 1
+    assert len(requests) == 2
+    second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    assert "duplicate generated path: contents/build.sh" in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        manifest = (
+            r'{"command":"find /tmp -exec test -f {} \;"}'
+            if len(requests) == 1
+            else '{"target_os":"Ubuntu 26.04"}'
+        )
+        return gemini_response(
+            {
+                "files": [
+                    {
+                        "path": "contents/scenario_manifest.json",
+                        "content": manifest,
+                        "mode": "0644",
+                    }
+                ],
+                "delete_paths": [],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/scenario_manifest.json", content="{}")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        patch = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        ).repair_source(machine, scenario, current, {"error": "validation failed"})
+
+    assert json.loads(patch.files[0].content)["target_os"] == "Ubuntu 26.04"
+    assert len(requests) == 2
+    second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    assert "model_output_validation_error" in second_prompt
+    assert "scenario_manifest.json is not valid JSON" in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_vm_source_review_uses_independent_structured_verdict() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "Normal input exposes the credential before exploitation.",
+                "findings": [
+                    {
+                        "step_id": "extract-credential",
+                        "severity": "error",
+                        "category": "unintended_shortcut",
+                        "evidence": "contents/app/index.php returns the password for id=1.",
+                        "remediation": "Keep credentials out of benign responses.",
+                    }
+                ],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/app/index.php", content="<?php echo 'test';")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            machine, scenario, current
+        )
+
+    assert review == SourceReview.model_validate(
+        {
+            "approved": False,
+            "summary": "Normal input exposes the credential before exploitation.",
+            "findings": [
+                {
+                    "step_id": "extract-credential",
+                    "severity": "error",
+                    "category": "unintended_shortcut",
+                    "evidence": "contents/app/index.php returns the password for id=1.",
+                    "remediation": "Keep credentials out of benign responses.",
+                }
+            ],
+        }
+    )
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    assert schema["properties"]["approved"]["type"] == "boolean"
+    assert "unintended_shortcut" in json.dumps(schema)
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,14 @@ import asyncio
 import logging
 from pathlib import Path
 
-from ..models import GeneratedSource, MachineAccess, SessionState, SessionStatus
+from ..models import (
+    Artifact,
+    GeneratedSource,
+    MachineAccess,
+    SessionState,
+    SessionStatus,
+    SourceReview,
+)
 from ..repository import SessionRepository
 from .ai import AIGenerator
 from .build_client import BuildClient
@@ -15,6 +22,7 @@ from .source_validation import known_failed_resources
 
 logger = logging.getLogger(__name__)
 BUILD_POLL_INTERVAL_SECONDS = 5
+DISTRIBUTION_ARTIFACT_TYPE = "tar.zst"
 
 
 class InvalidSessionStateError(ValueError):
@@ -47,14 +55,24 @@ class MachineWorkflow:
             )
         if scenario_id and scenario_id != state.scenario.scenario_id:
             raise InvalidSessionStateError("scenario_id does not belong to this session")
-        if session_id in self.tasks:
-            return state
+        active_task = self.tasks.get(session_id)
+        if active_task is not None:
+            if not active_task.done():
+                return state
+            self.tasks.pop(session_id, None)
+        if state.build_id and state.build_status not in {"completed", "failed", "cancelled"}:
+            state = await self.synchronize(state, auto_repair=False, force=True)
         if state.build_id:
             if state.build_status not in {"failed", "cancelled"}:
                 return state
-            if state.build_repair_attempts >= self.build_repair_max_attempts:
-                state.build_repair_attempts = 0
+            state.build_repair_attempt_limit = (
+                state.build_repair_attempts + self.build_repair_max_attempts
+            )
+            await self.repository.save(state)
             return await self._start_build_repair(state)
+        state.build_repair_attempt_limit = (
+            state.build_repair_attempts + self.build_repair_max_attempts
+        )
         state.status = SessionStatus.GENERATING_CODE
         await self.repository.save(state)
         self._create_task(session_id)
@@ -70,7 +88,7 @@ class MachineWorkflow:
     async def _prepare_build_repair(
         self, state: SessionState
     ) -> tuple[GeneratedSource, dict, list[dict]] | None:
-        if state.build_repair_attempts >= self.build_repair_max_attempts:
+        if state.build_repair_attempts >= state.build_repair_attempt_limit:
             state.status = SessionStatus.FAILED
             await self.repository.save(state)
             return None
@@ -110,7 +128,6 @@ class MachineWorkflow:
             if archive_path is not None
             else self.source_archive.load_repair_history(state.source_path or "")
         )
-        state.build_repair_attempts += 1
         state.build_progress = 0
         state.machine_access = None
         state.artifact = None
@@ -139,6 +156,7 @@ class MachineWorkflow:
         existing_repair_history: list[dict] | None = None,
     ) -> None:
         try:
+            is_build_repair = failure_report is not None
             state = await self.repository.get(session_id)
             assert state.machine_information is not None and state.scenario is not None
             archive_path = self._existing_archive(state) if failure_report is None else None
@@ -168,7 +186,12 @@ class MachineWorkflow:
                         generated,
                         repair_context,
                     )
-                    generated = apply_source_patch(generated, patch)
+                    try:
+                        generated = apply_source_patch(generated, patch)
+                    except InvalidSourceError as error:
+                        last_validation_error = error
+                        failure_report = _invalid_source_report(error, "source_patch_validation")
+                        continue
                     patch_applied = True
                     repair_history.append(
                         {
@@ -182,19 +205,38 @@ class MachineWorkflow:
                     archive_path, checksum = self.source_archive.create(
                         session_id, state.scenario, generated, repair_history
                     )
-                    break
                 except InvalidSourceError as error:
                     last_validation_error = error
-                    failed_count = int(error.report.get("summary", {}).get("failed", 0))
+                    failed_count = _validation_failed_count(error.report)
                     if (
                         patch_applied
                         and best_validation_failures is not None
+                        and failed_count is not None
                         and failed_count >= best_validation_failures
                     ):
                         generated = retry_base
-                    else:
+                    elif failed_count is not None:
                         best_validation_failures = failed_count
-                    failure_report = error.report
+                    failure_report = _invalid_source_report(error, "source_validation")
+                    continue
+                review = await self.generator.review_source(
+                    state.machine_information,
+                    state.scenario,
+                    generated,
+                )
+                if review.approved:
+                    logger.info(
+                        "source semantic review approved",
+                        extra={"session_id": session_id, "summary": review.summary},
+                    )
+                    break
+                review_report = _source_review_report(review)
+                last_validation_error = InvalidSourceError(
+                    f"source semantic review failed: {review.summary}", review_report
+                )
+                failure_report = review_report
+                archive_path = None
+                checksum = None
             if archive_path is None or checksum is None:
                 raise RuntimeError(
                     f"source validation failed after retries: {last_validation_error}"
@@ -214,6 +256,8 @@ class MachineWorkflow:
                 idempotency_key=f"ai-session-{session_id}-{checksum[:16]}",
                 archive_path=archive_path,
             )
+            if is_build_repair:
+                state.build_repair_attempts += 1
             state.build_id = build["build_id"]
             state.build_status = build["status"]
             state.build_progress = build.get("progress", 0)
@@ -255,9 +299,7 @@ class MachineWorkflow:
                 artifacts = await self.build_client.artifacts(build_id)
                 if not artifacts:
                     raise RuntimeError("build completed without an artifact")
-                state.artifact = next(
-                    (item for item in artifacts if item.artifact_type == "qcow2"), artifacts[0]
-                )
+                state.artifact = self._distribution_artifact(artifacts)
                 state.status = SessionStatus.COMPLETED
                 await self.repository.save(state)
                 return
@@ -286,15 +328,22 @@ class MachineWorkflow:
         archive_path = Path(state.source_path).parent / "source.zip"
         return archive_path if archive_path.is_file() else None
 
-    async def synchronize(self, state: SessionState) -> SessionState:
+    async def synchronize(
+        self,
+        state: SessionState,
+        *,
+        auto_repair: bool = True,
+        force: bool = False,
+    ) -> SessionState:
         if (
             not state.build_id
             or state.session_id in self.tasks
             or (
-                state.status == SessionStatus.FAILED
+                not force
+                and state.status == SessionStatus.FAILED
                 and (
                     state.build_status not in {"failed", "cancelled"}
-                    or state.build_repair_attempts >= self.build_repair_max_attempts
+                    or state.build_repair_attempts >= state.build_repair_attempt_limit
                 )
             )
         ):
@@ -307,13 +356,11 @@ class MachineWorkflow:
             artifacts = await self.build_client.artifacts(state.build_id)
             if not artifacts:
                 raise RuntimeError("build completed without an artifact")
-            state.artifact = next(
-                (item for item in artifacts if item.artifact_type == "qcow2"), artifacts[0]
-            )
+            state.artifact = self._distribution_artifact(artifacts)
             state.status = SessionStatus.COMPLETED
         elif build["status"] in {"failed", "cancelled"}:
             state.error_message = build.get("error_message") or f"build {build['status']}"
-            if state.build_repair_attempts < self.build_repair_max_attempts:
+            if auto_repair and (state.build_repair_attempts < state.build_repair_attempt_limit):
                 return await self._start_build_repair(state)
             state.status = SessionStatus.FAILED
         elif build["status"] in {"building", "uploading"}:
@@ -321,6 +368,16 @@ class MachineWorkflow:
         else:
             state.status = SessionStatus.BUILD_QUEUED
         return await self.repository.save(state)
+
+    @staticmethod
+    def _distribution_artifact(artifacts: list[Artifact]) -> Artifact:
+        artifact = next(
+            (item for item in artifacts if item.artifact_type == DISTRIBUTION_ARTIFACT_TYPE),
+            None,
+        )
+        if artifact is None:
+            raise RuntimeError("build completed without a tar.zst distribution artifact")
+        return artifact
 
     @staticmethod
     def _capture_machine_access(state: SessionState, build: dict) -> None:
@@ -362,6 +419,54 @@ def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:
             }
         )
     return compact
+
+
+def _invalid_source_report(error: InvalidSourceError, kind: str) -> dict:
+    report = error.report
+    checks = report.get("checks") if isinstance(report, dict) else None
+    if isinstance(checks, list) and checks:
+        return report
+    return {
+        "kind": kind,
+        "status": "fail",
+        "error_message": str(error),
+        "summary": {"passed": 0, "failed": 1, "warnings": 0},
+        "checks": [
+            {
+                "status": "fail",
+                "name": f"{kind}:invalid_path_or_patch",
+                "message": str(error),
+            }
+        ],
+    }
+
+
+def _validation_failed_count(report: dict) -> int | None:
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        return None
+    failed = summary.get("failed")
+    return failed if isinstance(failed, int) and not isinstance(failed, bool) else None
+
+
+def _source_review_report(review: SourceReview) -> dict:
+    checks = [
+        {
+            "status": "fail" if finding.severity == "error" else "warn",
+            "name": (f"semantic:{finding.category}:{finding.step_id or 'scenario'}"),
+            "message": f"{finding.evidence} Remediation: {finding.remediation}",
+        }
+        for finding in review.findings
+    ]
+    failed = sum(check["status"] == "fail" for check in checks)
+    warnings = sum(check["status"] == "warn" for check in checks)
+    return {
+        "kind": "source_semantic_review",
+        "status": "fail",
+        "error_message": review.summary,
+        "summary": {"passed": 0, "failed": failed, "warnings": warnings},
+        "checks": checks,
+    }
 
 
 def _bounded_context(value: str, limit: int) -> str:
