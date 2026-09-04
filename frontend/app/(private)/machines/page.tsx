@@ -1,4 +1,4 @@
-import { MachineList } from "@/app/machines/_components/machine-list"
+import { MachineList } from "@/app/(private)/machines/machine-list"
 import { AppShell } from "@/components/app-shell"
 import { MACHINE_LIST } from "@/stores/machine-list"
 

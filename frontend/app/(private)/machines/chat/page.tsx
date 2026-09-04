@@ -1,4 +1,4 @@
-import { ChatWorkspace } from "@/app/machines/chat/_components/chat-workspace"
+import { ChatWorkspace } from "@/app/(private)/machines/chat/chat-workspace"
 import { AppShell } from "@/components/app-shell"
 import { NEW_CHAT_SESSION } from "@/stores/chat"
 

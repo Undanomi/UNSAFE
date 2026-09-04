@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
+import { logoutAction } from "@/app/actions/auth"
 import { CHAT_SESSIONS } from "@/stores/chat"
 
 export function SiteSidebar() {
@@ -111,14 +112,16 @@ export function SiteSidebar() {
             id="sidebar-account-menu"
             role="menu"
           >
-            <Link
-              className="flex items-center gap-2 rounded-[9px] px-3 py-2.5 text-[0.82rem] font-extrabold text-[#f4f3ee] transition-colors hover:bg-[#3a3934]"
-              href="/login"
-              role="menuitem"
-            >
-              <LogOut aria-hidden="true" size={16} strokeWidth={2} />
-              ログアウト
-            </Link>
+            <form action={logoutAction}>
+              <button
+                className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-[0.82rem] font-extrabold text-[#f4f3ee] transition-colors hover:bg-[#3a3934]"
+                role="menuitem"
+                type="submit"
+              >
+                <LogOut aria-hidden="true" size={16} strokeWidth={2} />
+                ログアウト
+              </button>
+            </form>
           </div>
         ) : null}
       </div>
