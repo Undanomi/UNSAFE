@@ -1,7 +1,7 @@
 import {
   MachineDetailView,
   MissingMachine,
-} from "@/app/machines/[machineId]/_components/machine-detail"
+} from "@/app/(private)/machines/[machineId]/machine-detail"
 import { AppShell } from "@/components/app-shell"
 import { MACHINE_DETAILS } from "@/stores/machine-detail"
 
