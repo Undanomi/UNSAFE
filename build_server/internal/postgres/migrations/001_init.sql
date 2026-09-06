@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS build_jobs (
     started_at timestamptz,
     completed_at timestamptz,
     error_message text,
+    machine_password text,
     cancel_requested boolean NOT NULL DEFAULT false,
     UNIQUE (requested_by, idempotency_key)
 );
@@ -41,3 +42,6 @@ CREATE TABLE IF NOT EXISTS build_artifacts (
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (build_id, file_name)
 );
+
+ALTER TABLE build_jobs
+    ADD COLUMN IF NOT EXISTS machine_password text;

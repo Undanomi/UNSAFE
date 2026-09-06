@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Undanomi/SLSG/build_server/internal/archive"
+	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
 	"github.com/Undanomi/SLSG/build_server/internal/identity"
 	"github.com/Undanomi/SLSG/build_server/internal/postgres"
 )
@@ -43,6 +45,7 @@ func New(store *postgres.Store, logger *slog.Logger, internalToken, artifactRoot
 	mux.HandleFunc("POST /v1/builds/{buildID}/cancel", api.cancelBuild)
 	mux.HandleFunc("POST /v1/builds/{buildID}/retry", api.retryBuild)
 	mux.HandleFunc("GET /v1/builds/{buildID}/events", api.events)
+	mux.HandleFunc("GET /v1/builds/{buildID}/logs/packer", api.packerLog)
 	mux.HandleFunc("GET /v1/builds/{buildID}/artifacts", api.artifacts)
 	mux.HandleFunc("GET /v1/builds/{buildID}/artifacts/{artifactID}/content", api.downloadArtifact)
 	return requestLog(logger, recoverer(logger, api.authenticate(mux)))
@@ -205,6 +208,27 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]any{"items": events})
 }
 
+func (a *API) packerLog(w http.ResponseWriter, r *http.Request) {
+	build, err := a.store.GetBuild(r.Context(), r.PathValue("buildID"))
+	if err != nil {
+		a.storeError(w, r, err)
+		return
+	}
+	path := filepath.Join(a.artifactRoot, build.ID, "logs", "packer.log")
+	logTail, err := buildlog.Tail(path, buildlog.TailBytes, buildlog.TailLines)
+	if errors.Is(err, os.ErrNotExist) {
+		problem(w, http.StatusNotFound, "log missing", "The Packer log is not available.")
+		return
+	}
+	if err != nil {
+		a.internalError(w, r, fmt.Errorf("read packer log: %w", err))
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, logTail)
+}
+
 func (a *API) artifacts(w http.ResponseWriter, r *http.Request) {
 	artifacts, err := a.store.Artifacts(r.Context(), r.PathValue("buildID"))
 	if err != nil {
@@ -233,7 +257,7 @@ func (a *API) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": artifact.FileName}))
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Type", "application/zstd")
 	http.ServeContent(w, r, artifact.FileName, artifact.CreatedAt, file)
 }
 

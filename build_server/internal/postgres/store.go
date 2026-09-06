@@ -18,6 +18,11 @@ var migrations embed.FS
 var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("conflict")
 
+// migrationLockID serializes schema setup across independently started API and
+// worker processes. PostgreSQL's CREATE TABLE IF NOT EXISTS does not prevent
+// concurrent catalog creation races by itself.
+const migrationLockID int64 = 6000282982617766212
+
 type Store struct{ pool *pgxpool.Pool }
 
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
@@ -39,20 +44,34 @@ func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 func (s *Store) Migrate(ctx context.Context) error {
 	body, err := migrations.ReadFile("migrations/001_init.sql")
 	if err != nil {
-		return err
+		return fmt.Errorf("read migration: %w", err)
 	}
-	_, err = s.pool.Exec(ctx, string(body))
-	return err
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	if _, err := tx.Exec(ctx, string(body)); err != nil {
+		return fmt.Errorf("apply migration: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
 }
 
 const buildColumns = `build_id::text, scenario_id, scenario_version_id, requested_by,
-status, progress, worker_id, queued_at, started_at, completed_at, error_message, cancel_requested`
+status, progress, worker_id, queued_at, started_at, completed_at, error_message,
+machine_password, cancel_requested`
 
 func scanBuild(row pgx.Row) (domain.Build, error) {
 	var b domain.Build
 	err := row.Scan(&b.ID, &b.ScenarioID, &b.ScenarioVersionID, &b.RequestedBy,
 		&b.Status, &b.Progress, &b.WorkerID, &b.QueuedAt, &b.StartedAt,
-		&b.CompletedAt, &b.ErrorMessage, &b.CancelRequested)
+		&b.CompletedAt, &b.ErrorMessage, &b.MachinePassword, &b.CancelRequested)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -123,7 +142,8 @@ func (s *Store) Retry(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback(ctx)
 	tag, err := tx.Exec(ctx, `UPDATE build_jobs SET status='retrying',progress=0,worker_id=NULL,
-		started_at=NULL,completed_at=NULL,error_message=NULL,cancel_requested=false,queued_at=now()
+		started_at=NULL,completed_at=NULL,error_message=NULL,machine_password=NULL,
+		cancel_requested=false,queued_at=now()
 		WHERE build_id=$1::uuid AND status IN ('failed','cancelled')`, id)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrConflict
@@ -174,6 +194,15 @@ func (s *Store) SetStatus(ctx context.Context, id string, status domain.Status, 
 		WHERE build_id=$1::uuid`, id, status, progress, completed, nullIfEmpty(message))
 	if err == nil {
 		err = s.AddEvent(ctx, id, string(status), message, progress)
+	}
+	return err
+}
+
+func (s *Store) SetMachinePassword(ctx context.Context, id, password string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE build_jobs SET machine_password=$2 WHERE build_id=$1::uuid`,
+		id, password)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return err
 }

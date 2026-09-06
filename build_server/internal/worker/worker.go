@@ -3,7 +3,9 @@ package worker
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -11,13 +13,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
 	"github.com/Undanomi/SLSG/build_server/internal/config"
 	"github.com/Undanomi/SLSG/build_server/internal/domain"
 	"github.com/Undanomi/SLSG/build_server/internal/identity"
 	"github.com/Undanomi/SLSG/build_server/internal/postgres"
+)
+
+const (
+	storedErrorRunes     = 16_000
+	machinePasswordBytes = 24
+	distributionFileName = "slsg-machine.tar.zst"
 )
 
 type Worker struct {
@@ -100,6 +111,10 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	if err := copyTree(sourceDir, filepath.Join(workspaceDir, "source")); err != nil {
 		return fmt.Errorf("copy scenario source: %w", err)
 	}
+	baseImage, err := resolveBaseImage(sourceDir, w.cfg.BaseImageRoot)
+	if err != nil {
+		return err
+	}
 
 	logPath := filepath.Join(logDir, "packer.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
@@ -111,11 +126,26 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusBuilding, 20, "packer build started"); err != nil {
 		return err
 	}
-	if err := w.runPacker(ctx, workspaceDir, temporaryDir, logFile, logger); err != nil {
+	machinePassword, err := newMachinePassword()
+	if err != nil {
+		return fmt.Errorf("generate machine password: %w", err)
+	}
+	if err := w.runPacker(
+		ctx, workspaceDir, temporaryDir, baseImage, machinePassword, logFile, logger,
+	); err != nil {
 		return err
+	}
+	if err := w.store.SetMachinePassword(ctx, build.ID, machinePassword); err != nil {
+		return fmt.Errorf("store machine password: %w", err)
 	}
 	if err := logFile.Sync(); err != nil {
 		return err
+	}
+	if err := copyLauncherAssets(w.cfg.LauncherRoot, temporaryDir); err != nil {
+		return fmt.Errorf("add launcher assets: %w", err)
+	}
+	if err := packageArtifacts(ctx, temporaryDir, workspaceDir); err != nil {
+		return fmt.Errorf("package build artifacts: %w", err)
 	}
 
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusUploading, 90, "registering build artifacts"); err != nil {
@@ -134,9 +164,18 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	return nil
 }
 
-func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, logFile *os.File, logger *slog.Logger) error {
+func (w *Worker) runPacker(
+	ctx context.Context,
+	workspaceDir string,
+	outputDir string,
+	baseImage string,
+	machinePassword string,
+	logFile *os.File,
+	logger *slog.Logger,
+) error {
 	command := exec.CommandContext(ctx, w.cfg.PackerBinary, "build",
 		"-color=false",
+		"-var", "base_image="+baseImage,
 		"-var", "source_dir="+filepath.Join(workspaceDir, "source"),
 		"-var", "output_dir="+outputDir,
 		w.cfg.PackerTemplate,
@@ -146,7 +185,11 @@ func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, 
 		return err
 	}
 	command.Stderr = logFile
-	command.Env = append(os.Environ(), "CHECKPOINT_DISABLE=1")
+	command.Env = append(
+		os.Environ(),
+		"CHECKPOINT_DISABLE=1",
+		"PKR_VAR_machine_password="+machinePassword,
+	)
 	if err := command.Start(); err != nil {
 		return fmt.Errorf("start packer: %w", err)
 	}
@@ -163,9 +206,29 @@ func (w *Worker) runPacker(ctx context.Context, workspaceDir, outputDir string, 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if syncErr := logFile.Sync(); syncErr != nil {
+			logger.Warn("could not sync packer log", "error", syncErr)
+		}
+		logTail, tailErr := buildlog.Tail(
+			logFile.Name(), buildlog.TailBytes, buildlog.TailLines,
+		)
+		if tailErr != nil {
+			logger.Warn("could not read packer log tail", "error", tailErr)
+		}
+		if logTail != "" {
+			return fmt.Errorf("packer build: %w\nrecent packer output:\n%s", err, logTail)
+		}
 		return fmt.Errorf("packer build: %w", err)
 	}
 	return nil
+}
+
+func newMachinePassword() (string, error) {
+	value := make([]byte, machinePasswordBytes)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func (w *Worker) registerArtifacts(ctx context.Context, buildID, artifactDir string) error {
@@ -279,6 +342,96 @@ func copyTree(source, destination string) error {
 	})
 }
 
+func copyLauncherAssets(source, destination string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("launcher directory contains unsupported entry %q", entry.Name())
+		}
+		inputPath := filepath.Join(source, entry.Name())
+		outputPath := filepath.Join(destination, entry.Name())
+		input, err := os.Open(inputPath)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o640)
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".sh") {
+			mode = 0o750
+		}
+		output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		inputErr := input.Close()
+		outputErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inputErr != nil {
+			return inputErr
+		}
+		if outputErr != nil {
+			return outputErr
+		}
+	}
+	return nil
+}
+
+func packageArtifacts(ctx context.Context, sourceDir, workDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return errors.New("artifact directory is empty")
+	}
+	names := make([]string, 0, len(entries))
+	hasImage := false
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("artifact directory contains unsupported entry %q", entry.Name())
+		}
+		if entry.Name() == "image.qcow2" {
+			hasImage = true
+		}
+		names = append(names, entry.Name())
+	}
+	if !hasImage {
+		return errors.New("artifact directory does not contain image.qcow2")
+	}
+	sort.Strings(names)
+
+	temporaryArchive := filepath.Join(workDir, distributionFileName+".partial")
+	if err := os.Remove(temporaryArchive); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	defer os.Remove(temporaryArchive)
+	arguments := []string{
+		"--zstd", "-cf", temporaryArchive,
+		"-C", sourceDir,
+		"--transform=s|^|slsg-machine/|",
+		"--",
+	}
+	arguments = append(arguments, names...)
+	command := exec.CommandContext(ctx, "tar", arguments...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("create %s: %w: %s", distributionFileName, err, strings.TrimSpace(string(output)))
+	}
+
+	for _, name := range names {
+		if err := os.Remove(filepath.Join(sourceDir, name)); err != nil {
+			return fmt.Errorf("remove packaged artifact %q: %w", name, err)
+		}
+	}
+	return os.Rename(temporaryArchive, filepath.Join(sourceDir, distributionFileName))
+}
+
 func fileChecksum(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -293,6 +446,9 @@ func fileChecksum(path string) (string, error) {
 }
 
 func artifactType(name string) string {
+	if strings.HasSuffix(strings.ToLower(name), ".tar.zst") {
+		return "tar.zst"
+	}
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".qcow2":
 		return "qcow2"
@@ -300,15 +456,28 @@ func artifactType(name string) string {
 		return "vmdk"
 	case ".iso":
 		return "iso"
+	case ".sh", ".ps1":
+		return "launcher"
+	case ".md":
+		return "documentation"
 	default:
 		return "file"
 	}
 }
 
 func sanitizeError(err error) string {
-	message := strings.ReplaceAll(err.Error(), "\n", " ")
-	if len(message) > 2000 {
-		return message[:2000]
+	message := strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\t' || !unicode.IsControl(character) {
+			return character
+		}
+		return ' '
+	}, err.Error())
+	runes := []rune(strings.TrimSpace(message))
+	if len(runes) > storedErrorRunes {
+		const prefixRunes = 2_000
+		return string(runes[:prefixRunes]) +
+			"\n...[older output truncated]...\n" +
+			string(runes[len(runes)-(storedErrorRunes-prefixRunes):])
 	}
-	return message
+	return string(runes)
 }

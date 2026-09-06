@@ -22,6 +22,12 @@ variable "output_dir" {
   description = "Temporary output directory. The worker publishes it atomically after validation."
 }
 
+variable "machine_password" {
+  type        = string
+  description = "Random password assigned to the ubuntu user after scenario provisioning."
+  sensitive   = true
+}
+
 source "qemu" "ubuntu2604_result" {
   accelerator      = "kvm"
   cpus             = 4
@@ -34,7 +40,7 @@ source "qemu" "ubuntu2604_result" {
   memory           = 4096
   net_device       = "virtio-net"
   output_directory = var.output_dir
-  shutdown_command = "echo 'ubuntu' | sudo -S shutdown -P now"
+  shutdown_command = "echo '${var.machine_password}' | sudo -S shutdown -P now"
   ssh_password     = "ubuntu"
   ssh_timeout      = "15m"
   ssh_username     = "ubuntu"
@@ -50,6 +56,11 @@ build {
     destination = "/tmp/scenario"
   }
 
+  provisioner "file" {
+    source      = "${path.root}/scripts/configure-login-ip.sh"
+    destination = "/tmp/slsg-configure-login-ip.sh"
+  }
+
   provisioner "shell" {
     execute_command = "echo 'ubuntu' | sudo -S bash '{{ .Path }}'"
     inline = [
@@ -62,6 +73,9 @@ build {
       "cd \"$(dirname \"$BUILD_SH\")\"",
       "find . -type f -name '*.sh' -exec chmod +x {} \\;",
       "./build.sh",
+      "bash /tmp/slsg-configure-login-ip.sh",
+      "rm -f /tmp/slsg-configure-login-ip.sh",
+      "printf '%s:%s\\n' ubuntu '${var.machine_password}' | chpasswd",
     ]
   }
 }
