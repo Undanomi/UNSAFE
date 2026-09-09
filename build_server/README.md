@@ -39,6 +39,11 @@ uses `ubuntu-24.04-server.qcow2`. A missing `target_os` defaults to Ubuntu 26.04
 The current Packer communicator supports Ubuntu images. Put every Ubuntu version
 you intend to build under `builder/base_images/`, then start the stack:
 
+Copy the environment template, then fill the blank `INTERNAL_API_TOKEN` and
+`BUILD_POSTGRES_PASSWORD` values with independent random values. The API token
+must be at least 32 characters and identical to the AI server's
+`BUILD_SERVER_TOKEN`. There are no built-in secret fallbacks.
+
 ```sh
 cp .env.example .env
 docker compose up --build
@@ -52,6 +57,10 @@ stat -c '%g' /dev/kvm
 ```
 
 The default is `993`, matching the development host used by this repository.
+
+Changing `POSTGRES_PASSWORD` does not update a role in an existing PostgreSQL
+data volume. For an existing deployment, change the database role password
+first, then update `BUILD_POSTGRES_PASSWORD` and restart the services.
 
 The build server is an internal service. Its port is exposed only to the Compose
 network and the AI server is its sole application-level caller. Users create and

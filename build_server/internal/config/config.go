@@ -37,10 +37,17 @@ func ServerFromEnv() (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
+	internalToken, err := required("INTERNAL_API_TOKEN")
+	if err != nil {
+		return Server{}, err
+	}
+	if len(internalToken) < 32 {
+		return Server{}, fmt.Errorf("INTERNAL_API_TOKEN must contain at least 32 characters")
+	}
 	return Server{
 		Common:        Common{DatabaseURL: databaseURL},
 		Address:       value("HTTP_ADDRESS", ":8080"),
-		InternalToken: os.Getenv("INTERNAL_API_TOKEN"),
+		InternalToken: internalToken,
 		ArtifactRoot:  value("BUILD_ROOT", "/var/lib/slsg/builds"),
 		ScenarioRoot:  value("SCENARIO_ROOT", "/var/lib/slsg/scenarios"),
 	}, nil

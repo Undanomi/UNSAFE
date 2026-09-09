@@ -58,7 +58,7 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		if a.internalToken == "" {
-			next.ServeHTTP(w, r)
+			problem(w, http.StatusServiceUnavailable, "authentication unavailable", "Service authentication is not configured.")
 			return
 		}
 		actual := []byte(r.Header.Get("Authorization"))
