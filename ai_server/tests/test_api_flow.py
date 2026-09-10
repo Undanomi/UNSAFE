@@ -417,7 +417,7 @@ async def test_unsafe_absolute_repair_path_is_retried(client) -> None:
     repair_contexts: list[dict] = []
 
     async def repair_with_unsafe_path_then_recover(
-        _machine, _scenario, current, failure_report
+        _machine, _scenario, current, failure_report, _skills=None
     ) -> SourcePatch:
         repair_contexts.append(failure_report)
         if len(repair_contexts) == 1:
@@ -477,7 +477,7 @@ async def test_failed_semantic_review_is_repaired_before_build_submission(client
     repair_contexts: list[dict] = []
     review_calls = 0
 
-    async def repair(_machine, _scenario, current, failure_report) -> SourcePatch:
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
         repair_contexts.append(failure_report)
         readme = next(file for file in current.files if file.path == "contents/README.md")
         return SourcePatch(

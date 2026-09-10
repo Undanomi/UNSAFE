@@ -97,7 +97,18 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
 """
 
 
-def attack_graph_prompt(machine: MachineInformation, rejected: list[str], cve_min_year: int) -> str:
+def _skill_section(skill_context: str) -> str:
+    if not skill_context:
+        return ""
+    return f"\n追加の専門Skill指示:\n{skill_context}\n"
+
+
+def attack_graph_prompt(
+    machine: MachineInformation,
+    rejected: list[str],
+    cve_min_year: int,
+    skill_context: str = "",
+) -> str:
     objectives = []
     if machine.needs_user_flag:
         objectives.append(
@@ -169,6 +180,8 @@ JSONのみを返してください:
 - 各ステップのimplementation_stepsに、VMへ意図的な教材状態を構築する具体的手順を含める
 - 実環境を攻撃する手順ではなく、隔離された演習VMで再現できる構成にする
 
+{_skill_section(skill_context)}
+
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
@@ -181,7 +194,9 @@ JSONのみを返してください:
 """
 
 
-def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
+def scenario_prompt(
+    machine: MachineInformation, attack_graph_json: str, skill_context: str = ""
+) -> str:
     flag_context = (
         f"User flag: {machine.needs_user_flag}; details: {machine.user_flag_details or 'none'}\n"
         f"System flag: {machine.needs_system_flag}; details: {machine.system_flag_details or 'none'}"
@@ -212,6 +227,8 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 対象OSとの適合根拠、入手元とリファレンスも記載してください。攻撃グラフの情報を省略せず、
 存在しないURLを追加しないでください。
 
+{_skill_section(skill_context)}
+
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
@@ -224,7 +241,9 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 """
 
 
-def code_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
+def code_prompt(
+    machine: MachineInformation, scenario: ScenarioDraft, skill_context: str = ""
+) -> str:
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。
 
@@ -272,6 +291,8 @@ JSON以外は返さないでください。形式:
 - User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 - System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
 
+{_skill_section(skill_context)}
+
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
@@ -289,6 +310,7 @@ def repair_prompt(
     scenario: ScenarioDraft,
     current: GeneratedSource,
     failure_report: dict,
+    skill_context: str = "",
 ) -> str:
     current_json = current.model_dump_json(indent=2)
     report_json = json.dumps(failure_report, ensure_ascii=False, indent=2)
@@ -343,6 +365,8 @@ JSON以外は返さないでください。形式:
   JSONエスケープを作らない
 - Markdownと攻撃グラフに矛盾がある場合は攻撃グラフを正とする
 
+{_skill_section(skill_context)}
+
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
@@ -359,6 +383,7 @@ def source_review_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
     current: GeneratedSource,
+    skill_context: str = "",
 ) -> str:
     return f"""あなたは教育用攻撃マシンの独立した敵対的レビュー担当です。
 作者の説明やmanifestの自己申告を信用せず、攻撃グラフと実装ファイルを突き合わせてください。
@@ -393,6 +418,8 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+
+{_skill_section(skill_context)}
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 """

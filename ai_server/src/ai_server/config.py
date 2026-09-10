@@ -42,6 +42,11 @@ class Settings(BaseSettings):
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)
 
+    skills_enabled: bool = True
+    skills_max_active: int = Field(default=32, ge=1, le=100)
+    skills_max_per_phase: int = Field(default=8, ge=1, le=20)
+    skill_context_max_chars: int = Field(default=50_000, ge=1_000, le=200_000)
+
     @model_validator(mode="after")
     def validate_database_and_admin_settings(self) -> Settings:
         if self.database_pool_min_size > self.database_pool_max_size:

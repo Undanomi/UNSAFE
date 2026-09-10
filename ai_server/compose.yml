@@ -40,6 +40,10 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       DATABASE_URL: postgresql://ai_service:local-development-only@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
+      SKILLS_ENABLED: ${SKILLS_ENABLED:-true}
+      SKILLS_MAX_ACTIVE: ${SKILLS_MAX_ACTIVE:-32}
+      SKILLS_MAX_PER_PHASE: ${SKILLS_MAX_PER_PHASE:-8}
+      SKILL_CONTEXT_MAX_CHARS: ${SKILL_CONTEXT_MAX_CHARS:-50000}
       SQLADMIN_ENABLED: ${SQLADMIN_ENABLED:-false}
       SQLADMIN_USERNAME: ${SQLADMIN_USERNAME:-}
       SQLADMIN_PASSWORD: ${SQLADMIN_PASSWORD:-}

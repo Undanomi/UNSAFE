@@ -84,6 +84,7 @@ async def save_machine_information(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="machine build already started"
         )
+    await request.app.state.skills.reset(session_id)
     state.machine_information = machine_information
     state.scenario = None
     state.status = SessionStatus.READY

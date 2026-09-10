@@ -34,6 +34,25 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
 ai_server ホスト上で実行することはありません。
 
+## Skills
+
+Skillsは、攻撃グラフ、シナリオ、VMソース、修復、レビューの各生成フェーズへ追加する
+専門指示です。Skill定義はファイルではなくPostgreSQLの`skills`と`skill_versions`へ保存し、
+`instructions`にはMarkdown形式の文章を格納できます。実行可能なコードや外部ツールは扱いません。
+
+有効なSkillは、マシンのテーマ、対象OS、flag設定、および生成済み攻撃グラフのstep kind/phaseに
+よって決定的に選択されます。選択結果は`session_skill_snapshots`へフェーズ単位で保存されるため、
+Skillの新バージョンが公開されても進行中のセッションでは同じバージョンを使い続けます。
+使用した名前、バージョン、checksumは生成物の`generation_manifest.json`にも記録します。
+
+Skillの作成と公開には`SkillRepository.create_skill()`と`publish_version()`を使用します。
+公開済みバージョンは直接更新せず、変更時は常に新しいバージョンを公開してください。
+現在は一般利用者向けのSkill管理APIを公開していません。
+
+Skillsを無効にする場合は`SKILLS_ENABLED=false`を設定します。読み込み上限は
+`SKILLS_MAX_ACTIVE`、フェーズごとの適用上限は`SKILLS_MAX_PER_PHASE`、プロンプトへ追加する
+最大文字数は`SKILL_CONTEXT_MAX_CHARS`で変更できます。
+
 Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
 ランディングページへ到達することを必須とします。`Index of`やWebサーバー既定ページを
 表示しないこと、Packer中の実検査とmanifestの双方に肯定・否定検査があること、Web実行
