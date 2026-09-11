@@ -242,3 +242,8 @@ class CreateMachineRequest(BaseModel):
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
+
+
+class DownloadURLResponse(BaseModel):
+    download_url: str
+    expires_at: datetime

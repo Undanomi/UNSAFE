@@ -75,14 +75,32 @@ class MachineWorkflow:
         )
         state.status = SessionStatus.GENERATING_CODE
         await self.repository.save(state)
-        self._create_task(session_id)
+        self._create_task(
+            session_id,
+            build_slots_remaining=self.build_repair_max_attempts + 1,
+        )
         return state
 
-    async def _start_build_repair(self, state: SessionState) -> SessionState:
+    async def _start_build_repair(
+        self,
+        state: SessionState,
+        build_slots_remaining: int | None = None,
+    ) -> SessionState:
         prepared = await self._prepare_build_repair(state)
         if prepared is not None:
             repair_source, repair_report, repair_history = prepared
-            self._create_task(state.session_id, repair_source, repair_report, repair_history)
+            remaining = (
+                state.build_repair_attempt_limit - state.build_repair_attempts
+                if build_slots_remaining is None
+                else build_slots_remaining
+            )
+            self._create_task(
+                state.session_id,
+                repair_source,
+                repair_report,
+                repair_history,
+                remaining,
+            )
         return state
 
     async def _prepare_build_repair(
@@ -141,9 +159,16 @@ class MachineWorkflow:
         generated: GeneratedSource | None = None,
         failure_report: dict | None = None,
         repair_history: list[dict] | None = None,
+        build_slots_remaining: int = 1,
     ) -> None:
         task = asyncio.create_task(
-            self._generate_and_submit(session_id, generated, failure_report, repair_history)
+            self._generate_and_submit(
+                session_id,
+                generated,
+                failure_report,
+                repair_history,
+                build_slots_remaining,
+            )
         )
         self.tasks[session_id] = task
         task.add_done_callback(lambda _: self.tasks.pop(session_id, None))
@@ -154,6 +179,7 @@ class MachineWorkflow:
         generated: GeneratedSource | None = None,
         failure_report: dict | None = None,
         existing_repair_history: list[dict] | None = None,
+        build_slots_remaining: int = 1,
     ) -> None:
         try:
             is_build_repair = failure_report is not None
@@ -168,76 +194,90 @@ class MachineWorkflow:
                 generated = await self.generator.generate_source(
                     state.machine_information, state.scenario
                 )
-            for attempt in range(
-                1, self.source_generation_attempts + 1 if archive_path is None else 1
-            ):
-                assert generated is not None
-                retry_base = generated
-                patch_applied = False
-                if failure_report is not None:
-                    repair_context = {
-                        **failure_report,
-                        "known_failed_resources": known_failed_resources(repair_history),
-                        "repair_history": _compact_repair_history(repair_history),
-                    }
-                    patch = await self.generator.repair_source(
+            if archive_path is not None:
+                build_slots_remaining -= 1
+            while archive_path is None and build_slots_remaining > 0:
+                for _ in range(self.source_generation_attempts):
+                    assert generated is not None
+                    retry_base = generated
+                    patch_applied = False
+                    if failure_report is not None:
+                        repair_context = {
+                            **failure_report,
+                            "known_failed_resources": known_failed_resources(repair_history),
+                            "repair_history": _compact_repair_history(repair_history),
+                        }
+                        patch = await self.generator.repair_source(
+                            state.machine_information,
+                            state.scenario,
+                            generated,
+                            repair_context,
+                        )
+                        try:
+                            generated = apply_source_patch(generated, patch)
+                        except InvalidSourceError as error:
+                            last_validation_error = error
+                            failure_report = _invalid_source_report(
+                                error, "source_patch_validation"
+                            )
+                            continue
+                        patch_applied = True
+                        repair_history.append(
+                            {
+                                "attempt": len(repair_history) + 1,
+                                "trigger": failure_report,
+                                "changed_files": sorted(file.path for file in patch.files),
+                                "deleted_files": sorted(patch.delete_paths),
+                            }
+                        )
+                    try:
+                        archive_path, checksum = self.source_archive.create(
+                            session_id, state.scenario, generated, repair_history
+                        )
+                    except InvalidSourceError as error:
+                        last_validation_error = error
+                        failed_count = _validation_failed_count(error.report)
+                        if (
+                            patch_applied
+                            and best_validation_failures is not None
+                            and failed_count is not None
+                            and failed_count >= best_validation_failures
+                        ):
+                            generated = retry_base
+                        elif failed_count is not None:
+                            best_validation_failures = failed_count
+                        failure_report = _invalid_source_report(error, "source_validation")
+                        continue
+                    review = await self.generator.review_source(
                         state.machine_information,
                         state.scenario,
                         generated,
-                        repair_context,
                     )
-                    try:
-                        generated = apply_source_patch(generated, patch)
-                    except InvalidSourceError as error:
-                        last_validation_error = error
-                        failure_report = _invalid_source_report(error, "source_patch_validation")
-                        continue
-                    patch_applied = True
-                    repair_history.append(
-                        {
-                            "attempt": len(repair_history) + 1,
-                            "trigger": failure_report,
-                            "changed_files": sorted(file.path for file in patch.files),
-                            "deleted_files": sorted(patch.delete_paths),
-                        }
+                    if review.approved:
+                        logger.info(
+                            "source semantic review approved",
+                            extra={"session_id": session_id, "summary": review.summary},
+                        )
+                        break
+                    review_report = _source_review_report(review)
+                    last_validation_error = InvalidSourceError(
+                        f"source semantic review failed: {review.summary}", review_report
                     )
-                try:
-                    archive_path, checksum = self.source_archive.create(
-                        session_id, state.scenario, generated, repair_history
-                    )
-                except InvalidSourceError as error:
-                    last_validation_error = error
-                    failed_count = _validation_failed_count(error.report)
-                    if (
-                        patch_applied
-                        and best_validation_failures is not None
-                        and failed_count is not None
-                        and failed_count >= best_validation_failures
-                    ):
-                        generated = retry_base
-                    elif failed_count is not None:
-                        best_validation_failures = failed_count
-                    failure_report = _invalid_source_report(error, "source_validation")
-                    continue
-                review = await self.generator.review_source(
-                    state.machine_information,
-                    state.scenario,
-                    generated,
-                )
-                if review.approved:
+                    failure_report = review_report
+                    archive_path = None
+                    checksum = None
+                build_slots_remaining -= 1
+                if archive_path is None and build_slots_remaining > 0:
                     logger.info(
-                        "source semantic review approved",
-                        extra={"session_id": session_id, "summary": review.summary},
+                        "source validation batch exhausted; continuing with next build slot",
+                        extra={
+                            "session_id": session_id,
+                            "build_slots_remaining": build_slots_remaining,
+                        },
                     )
-                    break
-                review_report = _source_review_report(review)
-                last_validation_error = InvalidSourceError(
-                    f"source semantic review failed: {review.summary}", review_report
-                )
-                failure_report = review_report
-                archive_path = None
-                checksum = None
             if archive_path is None or checksum is None:
+                state.build_repair_attempt_limit = state.build_repair_attempts
+                await self.repository.save(state)
                 raise RuntimeError(
                     f"source validation failed after retries: {last_validation_error}"
                 )
@@ -263,7 +303,7 @@ class MachineWorkflow:
             state.build_progress = build.get("progress", 0)
             state.status = SessionStatus.BUILD_QUEUED
             await self.repository.save(state)
-            await self._monitor_build(session_id)
+            await self._monitor_build(session_id, build_slots_remaining)
         except Exception as error:
             detail = exception_detail(error)
             logger.exception("machine workflow failed", extra={"session_id": session_id})
@@ -272,7 +312,7 @@ class MachineWorkflow:
             state.error_message = detail
             await self.repository.save(state)
 
-    async def _monitor_build(self, session_id: str) -> None:
+    async def _monitor_build(self, session_id: str, build_slots_remaining: int) -> None:
         while True:
             state = await self.repository.get(session_id)
             if not state.build_id:
@@ -305,12 +345,21 @@ class MachineWorkflow:
                 return
             if build["status"] in {"failed", "cancelled"}:
                 state.error_message = build.get("error_message") or f"build {build['status']}"
+                if build_slots_remaining <= 0:
+                    state.build_repair_attempt_limit = state.build_repair_attempts
+                    state.status = SessionStatus.FAILED
+                    await self.repository.save(state)
+                    return
                 prepared = await self._prepare_build_repair(state)
                 if prepared is None:
                     return
                 repair_source, repair_report, repair_history = prepared
                 await self._generate_and_submit(
-                    session_id, repair_source, repair_report, repair_history
+                    session_id,
+                    repair_source,
+                    repair_report,
+                    repair_history,
+                    build_slots_remaining,
                 )
                 return
             state.status = (

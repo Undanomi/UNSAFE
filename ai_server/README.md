@@ -12,7 +12,7 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
   -> 選択したシナリオでマシン作成を要求
   -> VM ソースを生成・静的検証・ZIP 化
   -> build_server に非同期ビルドを依頼
-  -> ai_server の固定 URL から成果物をダウンロード
+  -> ai_server が発行した一時的な署名付き URL から成果物をダウンロード
 ```
 
 生成ソースは PoC と同じ契約を使います。
@@ -35,9 +35,10 @@ build_server へは、この生成ルートを `source.zip` として送りま�
 ai_server ホスト上で実行することはありません。
 
 Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
-ランディングページへ到達することを必須とします。`Index of`やWebサーバー既定ページを
-表示しないこと、Packer中の実検査とmanifestの双方に肯定・否定検査があること、Web実行
-ユーザーによるファイル読み取り・親ディレクトリ探索と所有者・modeを検査することを静的検証します。
+入口へ到達することを必須とします。Packer中の実検査とmanifestの双方にアプリ固有の肯定検査が
+あること、Web実行ユーザーによるファイル読み取り・親ディレクトリ探索と所有者・modeを検査する
+ことを静的検証します。ディレクトリリスティングは静的validationで一律禁止せず、攻撃グラフで
+意図した攻略要素かどうかを生成・レビュー時に判断します。
 シェルとCGIは実行可能modeを必須とし、通常のPHP-FPM用ソースは読み取り権限を検査します。
 
 シナリオは、人間向けの `scenario_definition`（Markdown）と、ビルド・検証用の
@@ -75,6 +76,10 @@ CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定�
 Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPTS`（既定値3）で変更でき、
 `0` を指定すると自動修正を無効化できます。`build_repair_attempts`はbuild_serverへの投入に成功した
 修復ビルドの累積実行回数で、静的validationの再試行とbuild_serverへの接続失敗では増えません。
+各Build枠では `SOURCE_GENERATION_ATTEMPTS`（既定値3）までvalidationと差分修正を行います。
+その回数を使い切っても次のBuild枠が残っていれば自動的に次枠へ進むため、最初のBuildを含む
+1サイクルのvalidation上限は
+`(1 + BUILD_REPAIR_MAX_ATTEMPTS) * SOURCE_GENERATION_ATTEMPTS`です。
 失敗後に`POST /machines`を明示的に再実行すると、その時点の累積回数へ
 `BUILD_REPAIR_MAX_ATTEMPTS`を加えた値を新しいサイクルの上限とし、さらに設定回数分を自動修復できます。
 投入成功ごとに以前の回数へ1加算し、値を0や上限値へリセットしません。状態確認のGETだけでは
@@ -104,8 +109,8 @@ Composeから別のbuild serverを使う場合は `AI_BUILD_SERVER_URL` で上�
 
 ## API の利用例
 
-すべての操作で同じ `X-Authenticated-User-ID` を指定します。開発時に省略した場合は
-`local-user` として扱います。
+署名付きURLからのダウンロードを除く操作では、同じ `X-Authenticated-User-ID` を指定します。
+開発時に省略した場合は`local-user`として扱います。
 
 ```sh
 SESSION_ID=$(curl -s -X POST http://localhost:8000/v1/sessions \
@@ -148,10 +153,17 @@ Packerビルド自体が失敗またはキャンセルされた場合は、ai_se
 3回分の自動修正を開始します。状態確認の `GET` だけでは再開しません。
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
-build_server の内部 URL をブラウザへ露出せず、`image.qcow2`、OS別起動スクリプト、READMEを
-含む`slsg-machine.tar.zst`をストリーミングします。同時に、ランダム化
+HMAC署名され、既定では30分だけ有効です。build_server の内部 URL をブラウザへ露出せず、
+`image.qcow2`、OS別起動スクリプト、READMEを含む`slsg-machine.tar.zst`をストリーミングします。
+Rangeリクエスト、`ETag`（成果物のSHA256）、`If-Range`にも対応するため、中断後に同じ成果物の
+ダウンロードを再開できます。期限切れの場合は、認証が必要な
+`POST /v1/sessions/{session_id}/download-url` で新しいURLを取得してください。同時に、ランダム化
 された `ubuntu` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
-ダウンロード応答には`application/zstd`と成果物サイズを設定します。
+ダウンロード応答には`application/zstd`と配信範囲に対応するサイズを設定します。
+
+署名鍵は本番環境で必ずランダムな32文字以上の`DOWNLOAD_SIGNING_SECRET`へ変更してください。
+有効期間は`DOWNLOAD_URL_TTL_SECONDS`で変更でき、既定値は1800秒です。署名付きURLは認証情報と
+同様に扱い、ログや第三者へ共有しないでください。
 
 OpenAPI UI は `http://localhost:8000/docs` で確認できます。
 

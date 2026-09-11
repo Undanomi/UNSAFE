@@ -14,6 +14,7 @@ from .config import Settings, get_settings
 from .repository import SessionNotFoundError, SessionRepository
 from .services.ai import GeminiGenerator
 from .services.build_client import BuildClient
+from .services.download_signing import DownloadSigner
 from .services.events import EventBroker
 from .services.scenarios import ScenarioCoordinator
 from .services.source_archive import SourceArchive
@@ -64,6 +65,10 @@ def create_app(
             build_client,
             resolved.source_generation_attempts,
             resolved.build_repair_max_attempts,
+        )
+        app.state.download_signer = DownloadSigner(
+            resolved.download_signing_secret.get_secret_value(),
+            resolved.download_url_ttl_seconds,
         )
         yield
         for task in [
