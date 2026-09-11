@@ -52,7 +52,7 @@ def create_app(
         build_client = BuildClient(
             build_http_client,
             resolved.build_server_url,
-            resolved.build_server_token,
+            resolved.build_server_token.get_secret_value(),
         )
         app.state.repository = repository
         app.state.scenarios = ScenarioCoordinator(

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     app_name: str = "SLSG AI Server"
     log_level: str = "INFO"
-    database_url: str = "postgresql://ai_service:local-development-only@localhost:5433/ai_service"
+    database_url: str
     database_pool_min_size: int = Field(default=1, ge=1, le=20)
     database_pool_max_size: int = Field(default=10, ge=1, le=100)
     source_root: Path = Path("./data/scenarios")
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = Field(default=600, gt=0)
 
     build_server_url: str = "http://localhost:8080"
-    build_server_token: str = "local-development-token"
+    build_server_token: SecretStr = Field(min_length=32)
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
     download_signing_secret: SecretStr = SecretStr(

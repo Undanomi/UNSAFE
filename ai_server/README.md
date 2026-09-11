@@ -50,11 +50,14 @@ CVEを使うステップだけ、公式レコードと対象OSへの適合性を
 ## uv で起動
 
 Python 3.13 と uv が必要です。最初に PostgreSQL を起動します。
+`.env.example` をコピーした後、空欄の `AI_POSTGRES_PASSWORD` と
+`BUILD_SERVER_TOKEN` にランダムな値を設定し、`DATABASE_URL` の
+`<password>` も同じDBパスワードで置き換えてください。
 
 ```sh
-docker compose -f ai_server/compose.yml up -d ai-postgres
 cd ai_server
 cp .env.example .env
+docker compose up -d ai-postgres
 uv sync --dev
 AI_PROVIDER=stub uv run uvicorn ai_server.main:app --reload --port 8000
 ```
@@ -87,17 +90,32 @@ Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPT
 
 ## Docker で起動
 
+既知の開発用シークレットへのフォールバックはありません。起動前に環境ファイルを作成し、
+空欄の値をランダムな値で埋めてください。ルートComposeでは
+`INTERNAL_API_TOKEN` と `BUILD_SERVER_TOKEN` に同じ値を設定します。
+APIトークンは32文字以上が必須です。DBパスワードとAPIトークンには、
+それぞれ `openssl rand -hex 32` などで生成した
+別の値を使用してください。
+
 ai_server と専用 PostgreSQL だけを起動する場合:
 
 ```sh
-docker compose -f ai_server/compose.yml up --build
+cp ai_server/.env.example ai_server/.env
+docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build
 ```
 
 build_server を含む全サービスをリポジトリルートから起動する場合:
 
 ```sh
+cp .env.example .env
 docker compose up --build
 ```
+
+本番では `.env` を配布せず、デプロイ基盤のSecret Managerから
+`AI_POSTGRES_PASSWORD`、`BUILD_POSTGRES_PASSWORD`、`INTERNAL_API_TOKEN`、
+`BUILD_SERVER_TOKEN` を注入してください。既存のPostgreSQLボリュームがある場合、
+`POSTGRES_PASSWORD` の変更だけではDB内のパスワードは更新されません。先に対象ロールの
+パスワードを変更してから接続側の環境変数を切り替える必要があります。
 
 全サービス起動では build worker が `/dev/kvm` とベースイメージを必要とします。
 詳細は `build_server/README.md` を参照してください。
