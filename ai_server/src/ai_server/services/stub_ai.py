@@ -10,6 +10,7 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    ScenarioReview,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -106,6 +107,14 @@ class StubGenerator:
             definition=definition,
             target_os=machine.operating_system,
             attack_graph=attack_graph,
+        )
+
+    async def review_scenario(
+        self, machine: MachineInformation, scenario: ScenarioDraft
+    ) -> ScenarioReview:
+        return ScenarioReview(
+            approved=True,
+            summary="Deterministic stub scenario is accepted for local integration testing.",
         )
 
     async def generate_source(

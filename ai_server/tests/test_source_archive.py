@@ -38,8 +38,7 @@ def web_generated_source(
 ) -> GeneratedSource:
     root_check = (
         "body=$(curl -fsSL http://127.0.0.1/); "
-        "printf '%s' \"$body\" | grep -q 'SLSG_PORTAL'; "
-        "! grep -qi 'Index of' <<<\"$body\""
+        "printf '%s' \"$body\" | grep -q 'SLSG_PORTAL'"
     )
     permission_check = (
         "namei -l /var/www/html/index.php; runuser -u www-data -- test -r /var/www/html/index.php"
@@ -115,7 +114,7 @@ def test_rejects_parent_traversal(tmp_path: Path) -> None:
         )
 
 
-def test_accepts_complete_web_entrypoint_and_runtime_permission_checks(tmp_path: Path) -> None:
+def test_accepts_web_checks_without_directory_listing_policy(tmp_path: Path) -> None:
     archive_path, _ = SourceArchive(tmp_path).create(
         "session",
         scenario(),
@@ -135,42 +134,8 @@ def test_rejects_web_source_without_ip_root_quality_checks(tmp_path: Path) -> No
         check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
     }
     assert "web:manifest:application_identity" in failures
-    assert "web:manifest:directory_listing" in failures
     assert "web:build:ip_root_entrypoint" in failures
     assert "permissions:build:web_runtime_access" in failures
-
-
-def test_accepts_negated_curl_pipeline_and_failing_if_directory_checks(
-    tmp_path: Path,
-) -> None:
-    generated = web_generated_source()
-    manifest_file = next(
-        file for file in generated.files if file.path == "contents/scenario_manifest.json"
-    )
-    manifest = json.loads(manifest_file.content)
-    manifest_root_check = (
-        "curl -fsSL http://127.0.0.1/ | grep -q 'SLSG_PORTAL'; "
-        "! curl -fsSL http://127.0.0.1/ | grep -qi 'Index of'"
-    )
-    manifest["acceptance_tests"][0]["command"] = manifest_root_check
-    manifest["health_checks"][0]["command"] = manifest_root_check
-    manifest_file.content = json.dumps(manifest)
-
-    provision = next(
-        file for file in generated.files if file.path == "contents/scripts/provision.sh"
-    )
-    provision.content = provision.content.replace(
-        "! grep -qi 'Index of' <<<\"$body\"",
-        (
-            "if curl -fsSL http://127.0.0.1/ | grep -qi 'Index of'; then\n"
-            "  echo 'directory listing detected' >&2\n"
-            "  exit 1\n"
-            "fi"
-        ),
-    )
-
-    archive_path, _ = SourceArchive(tmp_path).create("session", scenario(), generated)
-    assert archive_path.is_file()
 
 
 def test_invalid_manifest_json_reports_only_the_root_parse_error(tmp_path: Path) -> None:

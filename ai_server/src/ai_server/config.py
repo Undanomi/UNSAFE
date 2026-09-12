@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     build_server_token: SecretStr = Field(min_length=32)
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
+    download_signing_secret: SecretStr = SecretStr(
+        "local-development-download-signing-secret-change-me"
+    )
+    download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)
 
@@ -46,6 +50,8 @@ class Settings(BaseSettings):
     def validate_database_and_admin_settings(self) -> Settings:
         if self.database_pool_min_size > self.database_pool_max_size:
             raise ValueError("database_pool_min_size must not exceed database_pool_max_size")
+        if len(self.download_signing_secret.get_secret_value()) < 32:
+            raise ValueError("DOWNLOAD_SIGNING_SECRET must contain at least 32 characters")
         if not self.sqladmin_enabled:
             return self
         configured_values = (
