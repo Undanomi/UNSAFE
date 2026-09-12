@@ -379,7 +379,7 @@ JSONのみを返してください:
                 review = await self.review_scenario(machine, scenario)
                 if review.approved:
                     return scenario
-                review_report = review.model_dump(mode="json")
+                review_report = _compact_scenario_review(review)
                 last_error = ValueError(f"scenario semantic review failed: {review.summary}")
                 rejected.append(
                     "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
@@ -510,3 +510,22 @@ def _prompt_with_rejection(prompt: str, error: Exception) -> str:
         + "全体を正しいJSONとして再生成してください:\n"
         + str(error)[:2_000]
     )
+
+
+def _compact_scenario_review(review: ScenarioReview) -> dict:
+    findings = []
+    for finding in review.findings[:8]:
+        findings.append(
+            {
+                "step_id": finding.step_id,
+                "severity": finding.severity,
+                "category": finding.category,
+                "evidence": finding.evidence[:500],
+                "remediation": finding.remediation[:500],
+            }
+        )
+    return {
+        "summary": review.summary[:1_000],
+        "findings": findings,
+        "omitted_findings": max(0, len(review.findings) - len(findings)),
+    }

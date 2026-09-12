@@ -138,6 +138,25 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
 """
 
+DESIGN_CONSTRAINTS = """設計段階の共通制約（詳細な実装規則やコマンドを本文へ転載しない）:
+- 攻撃経路はテーマと難易度を満たす必要最小限のステップにし、各requiresの成果物を後段で実際に使う。
+  benign control、exploit固有の成功、negative control、前提なしでは失敗することを検証計画に含める
+- WebはIPアドレスの`/`から意図した入口へ到達でき、既定ページや意図しない一覧・近道を公開しない
+- 各段階の実効ユーザーと、重要なファイルおよび全親ディレクトリのowner/group/modeを定義する。
+  必要な読み取り・書き込み・探索・実行を許可しつつ、攻略前の主体へ成果物を公開しない
+- flagは指定パスだけへ配置し、攻略後の主体だけが読める権限と、攻略前後の可読性検証を計画する
+- ハッシュクラックを使う場合、rockyou.txtは平文wordlistで通常は攻撃者側で使うものと理解し、
+  完全なハッシュ、方式、モード、短時間で得られる収録済み平文を一貫させる。ターゲット側で辞書を
+  使う合理的な理由があれば許可するが、不要な導入や未検証URLへの依存は避ける
+- 使用する言語とソフトウェアに応じ、標準的な構文・設定検査と実行時検査を計画する。ここでは
+  検査対象と目的だけを簡潔に示し、完全なスクリプトや全コマンドはコード生成段階へ委ねる
+"""
+
+REVIEW_RESPONSE_CONSTRAINTS = """レビュー出力は簡潔にする。同じ根本原因の所見を統合し、findingsは
+重大度の高い順に最大20件とする。summaryは3文以内、各evidenceとremediationは必要な根拠と修正を
+短く示し、入力されたシナリオ、攻撃グラフ、生成ファイル、共通制約を転載しない。
+"""
+
 
 def attack_graph_prompt(machine: MachineInformation, rejected: list[str], cve_min_year: int) -> str:
     objectives = []
@@ -210,18 +229,10 @@ JSONのみを返してください:
 - 非CVEステップではcve_idをnullにする
 - 各ステップのimplementation_stepsに、VMへ意図的な教材状態を構築する具体的手順を含める
 - 実環境を攻撃する手順ではなく、隔離された演習VMで再現できる構成にする
+- ステップ数は攻略に必要な最小限にし、descriptionは1〜3文、implementation_stepsは2〜8個の
+  短い手順にする。完成したソースコード、長いシェル、SQL全文、共通制約を値へ転載しない
 
-{HASH_CRACKING_CONSTRAINTS}
-
-{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
-
-{SYNTAX_VALIDATION_CONSTRAINTS}
-
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
-
-{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
-
-{FLAG_PLACEMENT_CONSTRAINTS}
+{DESIGN_CONSTRAINTS}
 """
 
 
@@ -255,18 +266,11 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 記載してください。CVEステップではCVE-ID、対象コンポーネント、脆弱な厳密バージョン、
 対象OSとの適合根拠、入手元とリファレンスも記載してください。攻撃グラフの情報を省略せず、
 存在しないURLを追加しないでください。
+- 設計書は12,000文字以内を目安に簡潔にする。攻撃グラフの全フィールドを文章で反復せず、
+  完成したPHP/Python等のソース、完全なprovision script、長いSQLや設定ファイルを埋め込まない。
+  環境実装計画には実装者が判断できる要点、パス、主体、権限、検証対象だけを記載する
 
-{HASH_CRACKING_CONSTRAINTS}
-
-{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
-
-{SYNTAX_VALIDATION_CONSTRAINTS}
-
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
-
-{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
-
-{FLAG_PLACEMENT_CONSTRAINTS}
+{DESIGN_CONSTRAINTS}
 """
 
 
@@ -331,15 +335,9 @@ JSONのみを返してください:
   根拠なくOS既定値を仮定せず、実装時に明示すべきowner・group・mode・検証コマンドが欠けていて
   成立性を判断できない場合はerrorにする
 
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+{DESIGN_CONSTRAINTS}
 
-{HASH_CRACKING_CONSTRAINTS}
-
-{SYNTAX_VALIDATION_CONSTRAINTS}
-
-{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
-
-{FLAG_PLACEMENT_CONSTRAINTS}
+{REVIEW_RESPONSE_CONSTRAINTS}
 """
 
 
@@ -524,9 +522,9 @@ JSONのみを返してください:
   未検証の単一URLへの依存によってビルド再現性を損なう場合だけ、影響に応じてwarningまたは
   implementation_mismatchのerrorにする
 
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
-
 {HASH_CRACKING_CONSTRAINTS}
 
 {SYNTAX_VALIDATION_CONSTRAINTS}
+
+{REVIEW_RESPONSE_CONSTRAINTS}
 """
