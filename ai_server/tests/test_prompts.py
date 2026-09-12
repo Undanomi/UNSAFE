@@ -56,9 +56,24 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "平文パスワード" in prompt
         assert "HashcatのモードまたはJohnの形式" in prompt
         assert "ハッシュクラックを攻略の必須ステップにしない" in prompt
+        assert "rockyou.txtはハッシュの一覧ではなく" in prompt
+        assert "ターゲットVMへ辞書を導入" in prompt
+        assert "使用してよい" in prompt
+        assert "単一の未検証URLへ無条件に依存せず" in prompt
         assert "既定ページ、サンプルアプリ、既定VirtualHost" in prompt
         assert "入口の選択と優先順位" in prompt
         assert "肯定確認と否定確認" in prompt
+        assert "`php -l`" in prompt
+        assert "`bash -n`" in prompt
+        assert "`python3 -m py_compile`" in prompt
+        assert "`node --check`" in prompt
+        assert "`ruby -c`" in prompt
+        assert "`perl -c`" in prompt
+        assert "`nginx -t`" in prompt
+        assert "`apache2ctl configtest`" in prompt
+        assert "`sshd -t`" in prompt
+        assert "`systemd-analyze verify`" in prompt
+        assert "意図しないリテラル`\\n`" in prompt
         assert "IPアドレスだけを入力" in prompt
         assert "`Index of`" in prompt
         assert "PHP-FPMやApache module" in prompt
@@ -129,3 +144,13 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "実効UID" in scenario_review
     assert "benign control" in scenario_review
     assert "negative control" in scenario_review
+    assert "`php -l`" in scenario_review
+    assert "`nginx -t`" in scenario_review
+    assert "rockyou.txtはハッシュの一覧ではなく" in scenario_review
+    assert "使用してよい" in scenario_review
+
+    assert "`php -l`" in review_prompt
+    assert "`bash -n`" in review_prompt
+    assert "`apache2ctl configtest`" in review_prompt
+    assert "implementation_mismatch" in review_prompt
+    assert "一律に不合格にはせず" in review_prompt

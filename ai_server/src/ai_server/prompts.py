@@ -5,6 +5,9 @@ import json
 from .models import GeneratedSource, MachineInformation, ScenarioDraft
 
 HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
+- rockyou.txtはハッシュの一覧ではなく、攻撃者が自分のマシンで辞書攻撃に使う平文パスワード候補の
+  wordlistである。ターゲットVMへインストールする教材コンポーネントや、ハッシュの保存先として
+  扱わない
 - 攻略経路にハッシュクラックを含める場合、平文パスワードは標準的なrockyou.txtに
   変形なしで完全一致するエントリから選ぶ
 - 攻略者がrockyou.txtだけを指定した辞書攻撃で発見できるようにし、追加辞書、ルール、
@@ -14,6 +17,17 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - 内部用の攻撃グラフとシナリオ仕様書には、選んだ平文パスワード、完全なハッシュ、
   ハッシュ方式、HashcatのモードまたはJohnの形式、再現用コマンドを明確に記載する
 - 実装する認証情報は仕様書に記載した値と完全に一致させ、受け入れテストでも検証できるようにする
+- 通常、rockyou.txtの用意とHashcatまたはJohnの実行は攻撃者側の準備・操作として扱う。
+  「選んだ平文がrockyou.txtに含まれる」という要件だけを理由に、ターゲットVMへ辞書を導入したり、
+  VMビルド中にクラックを実行したりする必要はない
+- ターゲット側でrockyou.txtの取得やクラック実行がシナリオまたは自動検証上、本当に必要な場合は
+  使用してよい。その場合は目的を明記し、単一の未検証URLへ無条件に依存せず、取得失敗時の診断、
+  内容またはchecksumの確認、妥当なtimeoutを備えて再現可能にする
+- ターゲット側の受け入れテストは、通常はアプリケーションやデータベースに仕様どおりの完全な
+  ハッシュが格納されていることと、クラック後の認証情報で意図した認証経路が成立することを確認する。
+  ターゲット上での辞書クラックまで検証するかは、シナリオの目的と必要性に応じて判断する
+- READMEの攻略手順では、rockyou.txtを攻撃者側とターゲット側のどちらで使う設計なのかを明記し、
+  実際の配置や取得方法と矛盾させない
 - この条件を確実に満たせない場合は、ハッシュクラックを攻略の必須ステップにしない
 """
 
@@ -31,6 +45,32 @@ DEPLOYMENT_VERIFICATION_CONSTRAINTS = """デプロイ結果の共通検証制約
   攻略経路に必要な観測可能な挙動を検証する
 - 肯定確認と否定確認を、失敗時に非ゼロ終了するコマンドとしてbuild.shおよび
   scenario_manifest.jsonのhealth_checksとacceptance_testsへ記載する
+"""
+
+SYNTAX_VALIDATION_CONSTRAINTS = """構文・設定ファイル検査の共通制約:
+- 使用する言語、スクリプト、設定ファイルに公式または標準的な構文検査・設定検査コマンドがある場合、
+  検査可能なものを省略せず、生成した全対象ファイルへ実行する。目視確認やファイル存在確認だけで
+  構文が正しいと判断しない
+- 検査は対象ランタイムやソフトウェアをインストールし、ファイルを最終配置した後に実行する。
+  build.shまたはprovision.shを`set -euo pipefail`で実行し、検査失敗を無視せずビルドを非ゼロ終了させる
+- 例として、PHPは`php -l`、Bash/shは`bash -n`または`sh -n`、Pythonは
+  `python3 -m py_compile`、Node.jsのJavaScriptは`node --check`、Rubyは`ruby -c`、Perlは`perl -c`を使う
+- 構文検査が対象コードを認識せず単なるテキストとして扱う偽陰性も防ぐ。特にPHPは`php -l`に加え、
+  Web経由の応答に`<?php`、変数名、意図しないリテラル`\\n`などのソース断片が露出しないことを
+  否定確認し、期待する動的処理の結果を肯定確認する
+- JSONは`python3 -m json.tool`または`jq empty`、XMLは`xmllint --noout`などで、生成したデータ・
+  マニフェスト・設定ファイルをパーサーへ実際に読み込ませる。YAMLやTOMLなども利用可能な公式CLIや
+  対応ライブラリでparseし、単なるgrepで代用しない
+- Nginxは`nginx -t`、Apache HTTP Serverは`apache2ctl configtest`、OpenSSH serverは`sshd -t`、
+  sudoersは`visudo -cf`、systemd unitは`systemd-analyze verify`、HAProxyは`haproxy -c -f`、
+  BINDは`named-checkconf`など、使用したソフトウェア固有の設定検査を実行する
+- SQLなど単体の標準構文検査が難しいものは、隔離した教材用DBへschemaとseedを実際に適用し、
+  期待するtable・column・rowを問い合わせる。テンプレートや埋め込みコードも可能なら実際の
+  renderer、compiler、interpreterへ読み込ませる
+- 構文検査の後に実行時検査も行う。構文検査合格だけでサービス成立とみなさず、サービス起動、
+  攻撃者側入口からの応答、benign control、exploit、negative controlを引き続き検証する
+- scenario_manifest.jsonのhealth_checksとacceptance_testsにも主要な構文・設定検査を明記し、
+  どのファイルをどのコマンドで検査するか追跡可能にする
 """
 
 WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッションの共通制約:
@@ -175,6 +215,8 @@ JSONのみを返してください:
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
 
+{SYNTAX_VALIDATION_CONSTRAINTS}
+
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
@@ -217,6 +259,8 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
@@ -289,6 +333,10 @@ JSONのみを返してください:
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
+{HASH_CRACKING_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
+
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
@@ -346,6 +394,8 @@ JSON以外は返さないでください。形式:
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
@@ -418,6 +468,8 @@ JSON以外は返さないでください。形式:
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
 
+{SYNTAX_VALIDATION_CONSTRAINTS}
+
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
@@ -464,6 +516,17 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+- 生成物で利用可能な構文・設定検査が省略されている、対象ファイルの一部しか検査していない、
+  または検査失敗を無視する実装はacceptance_test_gapのerrorにする。言語・ソフトウェアに適した
+  実際のparser、compiler、interpreter、config testを使っていることを確認する
+- rockyou.txtをハッシュ集やターゲット用コンポーネントと誤認していないか確認する。ターゲット側で
+  取得または使用していても一律に不合格にはせず、シナリオ上の目的がなく追加されている場合や、
+  未検証の単一URLへの依存によってビルド再現性を損なう場合だけ、影響に応じてwarningまたは
+  implementation_mismatchのerrorにする
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{HASH_CRACKING_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
 """
