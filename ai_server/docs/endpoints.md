@@ -257,8 +257,10 @@ validationを使い切っても次のBuild枠が残っていれば停止せず�
 自動修復できます。投入に成功するたび以前の`build_repair_attempts`へ1加算するため、明示的な
 再リクエストを繰り返すと`BUILD_REPAIR_MAX_ATTEMPTS`を超えます。ai_server再起動などで
 保存状態が古い場合は、build_serverの最新状態を同期してから判定します。
-`GET /sessions/{session_id}`による状態確認だけではカウンターをリセットしないため、ポーリングに
-よって修復予算が意図せず更新されることはありません。
+ビルドの開始と失敗・キャンセル後の再開を要求できるのは`POST /machines`だけです。
+`GET /sessions/{session_id}`と`POST /download-url`はカウンターをリセットせず、修復ビルドも
+開始しません。すでに`POST /machines`から開始済みのバックグラウンド監視と自動修復は、これらの
+エンドポイントへのアクセスに関係なく継続します。
 
 ## セッションとビルド状態を取得する
 
@@ -266,7 +268,8 @@ validationを使い切っても次のBuild枠が残っていれば停止せず�
 
 画面の再読み込み、進捗ポーリング、エラー表示に使う状態取得エンドポイントです。
 セッションに `build_id` がある場合は、呼び出し時にbuild_serverへ最新状態を問い合わせ、
-`build_status`、`build_progress`、成果物情報を更新してから返します。
+`build_status`、`build_progress`、成果物情報を更新してから返します。この同期から失敗ビルドの
+修復を開始することはありません。再開するには`POST /machines`を使用します。
 
 ```sh
 curl http://localhost:8000/v1/sessions/{session_id} \
@@ -285,7 +288,8 @@ build_serverの状態が `completed` になると、ai_serverは成果物一覧�
 ### `POST /v1/sessions/{session_id}/download-url`
 
 ログイン状態を確認できる通常のAPI経路から、完成済み成果物用の新しい署名付きURLを発行します。
-所有者以外には`404 Not Found`、未完成の場合は`409 Conflict`を返します。
+所有者以外には`404 Not Found`、未完成の場合は`409 Conflict`を返します。未完成状態の確認時に
+ビルドや修復を開始することはありません。
 
 ```sh
 curl -X POST http://localhost:8000/v1/sessions/{session_id}/download-url \

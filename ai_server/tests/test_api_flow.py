@@ -359,6 +359,49 @@ async def create_failed_build_state(
 
 
 @pytest.mark.asyncio
+async def test_get_session_does_not_restart_failed_build(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    state.build_repair_attempt_limit = 3
+    await app.state.repository.save(state)
+    fake_build.get_response = {
+        "status": "failed",
+        "progress": 100,
+        "error_message": "packer still failed",
+    }
+
+    response = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["build_repair_attempts"] == 0
+    assert fake_build.submitted_requests == []
+    assert state.session_id not in app.state.workflow.tasks
+
+
+@pytest.mark.asyncio
+async def test_download_url_does_not_restart_failed_build(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    state.build_repair_attempt_limit = 3
+    await app.state.repository.save(state)
+    fake_build.get_response = {
+        "status": "failed",
+        "progress": 100,
+        "error_message": "packer still failed",
+    }
+
+    response = await http.post(f"/v1/sessions/{state.session_id}/download-url", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "machine is not ready"
+    assert fake_build.submitted_requests == []
+    assert state.session_id not in app.state.workflow.tasks
+
+
+@pytest.mark.asyncio
 async def test_failed_packer_build_repairs_source(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}

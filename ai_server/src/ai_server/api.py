@@ -83,7 +83,7 @@ async def get_session(
     _authorize(state, user_id)
     if state.build_id:
         try:
-            state = await workflow.synchronize(state)
+            state = await workflow.synchronize(state, auto_repair=False)
         except Exception as error:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
@@ -180,7 +180,7 @@ async def create_download_url(
     repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    state = await workflow.synchronize(state)
+    state = await workflow.synchronize(state, auto_repair=False)
     if state.status != SessionStatus.COMPLETED or not state.artifact or not state.build_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
     download_url, expires_at = _signed_download_url(request, state)

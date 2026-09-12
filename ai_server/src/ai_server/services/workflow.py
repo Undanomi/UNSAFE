@@ -381,7 +381,7 @@ class MachineWorkflow:
         self,
         state: SessionState,
         *,
-        auto_repair: bool = True,
+        auto_repair: bool = False,
         force: bool = False,
     ) -> SessionState:
         if (
