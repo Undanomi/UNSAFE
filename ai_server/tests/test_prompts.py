@@ -13,6 +13,7 @@ from ai_server.prompts import (
     code_prompt,
     repair_prompt,
     scenario_prompt,
+    scenario_review_prompt,
     source_review_prompt,
 )
 
@@ -119,3 +120,12 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
     assert "実際のデータフロー" in review_prompt
+
+    scenario_review = scenario_review_prompt(machine, scenario)
+    assert "独立した敵対的レビュー担当" in scenario_review
+    assert "permission_blocker" in scenario_review
+    assert "permission_shortcut" in scenario_review
+    assert "全親ディレクトリ" in scenario_review
+    assert "実効UID" in scenario_review
+    assert "benign control" in scenario_review
+    assert "negative control" in scenario_review

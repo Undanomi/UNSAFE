@@ -226,6 +226,75 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 """
 
 
+def scenario_review_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
+    return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
+作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
+前提を飛ばす近道がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
+再現可能かつ一貫した形で成立させられるかを審査します。
+
+マシン: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {scenario.target_os}
+User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
+System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
+
+攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+シナリオ設計書:
+```markdown
+{scenario.definition}
+```
+
+JSONのみを返してください:
+{{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
+"category":"permission_blocker","evidence":"成立しない権限遷移とその理由",
+"remediation":"所有者・group・mode・実行主体を含む具体的な設計修正"}}]}}
+
+審査規則:
+- 全攻撃ステップを順に追い、各requiresの成果物が後段で実際に必要か、各achievesへ到達できるかを
+  攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
+  errorにする
+- 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
+  semantic_mismatchのerrorにする
+- 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
+  攻略成立性を保証できない場合はimplementation_gapまたはunsupported_assumptionのerrorにする
+- acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
+  飛ばした失敗を観測可能な形で確認できない場合はacceptance_test_gapのerrorにする
+- warningは成立性を損なわない改善提案だけに使い、成立可否が不明な点をwarningへ弱めない
+- errorが1件でもあればapproved=false、errorがなければapproved=trueにする
+- evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
+  記載する。単なる一般論や推測だけで不合格にしない
+
+パーミッションは最重点項目として、各ステップで次を明示的に反証する:
+- 攻撃前、各ステップ完了後、flag取得時点の実効UID・主group・補助groupと、サービスの実行ユーザー
+- 読み取り、書き込み、作成、置換、探索、実行が必要な全パスについて、対象ファイルだけでなく全親
+  ディレクトリのowner・group・modeと、ACL、sudoers、setuid/setgid、Linux capabilitiesの影響
+- Web/PHP/CGI/systemdなど実際の実行形態。PHP-FPMやApache moduleのPHPへ実行ビットを付けても
+  読めなければ成立せず、CGIやExecStart対象は読み取り・探索に加えて実行可能でなければ成立しない
+- アップロード、cache、session、ログ、鍵、設定、実行ファイル、ホーム、flagの権限が厳しすぎて
+  intended exploitを阻害しないこと。阻害する場合はpermission_blockerのerrorにする
+- 権限が広すぎて未権限主体が成果物やflagを先に読める、実行ファイルや設定を書き換えられる、
+  requiresを飛ばせる場合はpermission_shortcutのerrorにする
+- 権限昇格では、攻撃前後の実効UIDまたはcapabilityと保護対象へのアクセス差を説明できること。
+  root所有という記述だけ、chmod 777、無差別なchown、設計にないgroup所属を成立根拠にしない
+- flagについて、指定パスと全親ディレクトリの権限が、意図したステップ完了後の主体には読め、
+  完了前の主体には読めないこと。配置先の重複、リンク、ログや設定への値の漏洩も近道として扱う
+- レビュー時点では実ファイルが未生成であるため、具体値が設計書に十分定義されているかを審査する。
+  根拠なくOS既定値を仮定せず、実装時に明示すべきowner・group・mode・検証コマンドが欠けていて
+  成立性を判断できない場合はerrorにする
+
+{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+
+{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
+
+{FLAG_PLACEMENT_CONSTRAINTS}
+"""
+
+
 def code_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。

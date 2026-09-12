@@ -17,6 +17,7 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    ScenarioReview,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -26,6 +27,7 @@ from ..prompts import (
     code_prompt,
     repair_prompt,
     scenario_prompt,
+    scenario_review_prompt,
     source_review_prompt,
 )
 
@@ -89,6 +91,10 @@ class CVEVerification(BaseModel):
 
 class AIGenerator(Protocol):
     async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft: ...
+
+    async def review_scenario(
+        self, machine: MachineInformation, scenario: ScenarioDraft
+    ) -> ScenarioReview: ...
 
     async def generate_source(
         self, machine: MachineInformation, scenario: ScenarioDraft
@@ -363,12 +369,20 @@ JSONのみを返してください:
                     scenario_prompt(machine, graph.model_dump_json(indent=2)),
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
-                return ScenarioDraft(
+                scenario = ScenarioDraft(
                     scenario_id=f"scenario-{uuid4().hex}",
                     title=machine.name,
                     definition=definition,
                     target_os=machine.operating_system,
                     attack_graph=graph,
+                )
+                review = await self.review_scenario(machine, scenario)
+                if review.approved:
+                    return scenario
+                review_report = review.model_dump(mode="json")
+                last_error = ValueError(f"scenario semantic review failed: {review.summary}")
+                rejected.append(
+                    "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
                 )
             except (
                 httpx.HTTPError,
@@ -380,7 +394,26 @@ JSONのみを返してください:
             ) as error:
                 last_error = error
                 rejected.append(str(error))
-        raise RuntimeError(f"Could not generate a verified attack graph: {last_error}")
+        raise RuntimeError(f"Could not generate an approved scenario: {last_error}")
+
+    async def review_scenario(
+        self, machine: MachineInformation, scenario: ScenarioDraft
+    ) -> ScenarioReview:
+        last_error: Exception | None = None
+        prompt = scenario_review_prompt(machine, scenario)
+        for _ in range(self.settings.generation_retries):
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=ScenarioReview,
+                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                )
+                return ScenarioReview.model_validate_json(response)
+            except (httpx.HTTPError, RuntimeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error)
+        raise RuntimeError(f"Could not review scenario: {last_error}")
 
     async def generate_source(
         self, machine: MachineInformation, scenario: ScenarioDraft
