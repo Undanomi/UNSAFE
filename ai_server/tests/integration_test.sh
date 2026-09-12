@@ -4,7 +4,7 @@ set -euo pipefail
 
 echo "Starting integration test..."
 echo "Get session ID from the server..."
-SESSION_ID=$(curl -s -X POST http://localhost:8000/v1/sessions \
+export SESSION_ID=$(curl -s -X POST http://localhost:8000/v1/sessions \
 -H 'X-Authenticated-User-ID: user-123' | jq -r .session_id)
 
 echo "Session ID: $SESSION_ID"
