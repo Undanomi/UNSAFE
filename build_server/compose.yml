@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: build_service
       POSTGRES_USER: build_service
-      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_PASSWORD: ${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U build_service -d build_service"]
       interval: 5s
@@ -14,6 +14,8 @@ services:
       retries: 10
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    networks:
+      - build-database
     restart: unless-stopped
 
   volume-init:
@@ -32,9 +34,9 @@ services:
       context: .
       target: server
     environment:
-      DATABASE_URL: postgres://build_service:local-development-only@postgres:5432/build_service?sslmode=disable
+      DATABASE_URL: postgres://build_service:${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}@postgres:5432/build_service?sslmode=disable
       HTTP_ADDRESS: :8080
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-development-token}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
       BUILD_ROOT: /var/lib/slsg/builds
       SCENARIO_ROOT: /var/lib/slsg/scenarios
     depends_on:
@@ -42,8 +44,11 @@ services:
         condition: service_healthy
       volume-init:
         condition: service_completed_successfully
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
+    networks:
+      - build-api
+      - build-database
     volumes:
       - build-data:/var/lib/slsg/builds:ro
       - scenario-data:/var/lib/slsg/scenarios
@@ -60,10 +65,12 @@ services:
       context: .
       target: worker
     environment:
-      DATABASE_URL: postgres://build_service:local-development-only@postgres:5432/build_service?sslmode=disable
+      DATABASE_URL: postgres://build_service:${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}@postgres:5432/build_service?sslmode=disable
       WORKER_ID: worker-1
       SCENARIO_ROOT: /var/lib/slsg/scenarios
       BUILD_ROOT: /var/lib/slsg/builds
+      BASE_IMAGE_ROOT: /opt/slsg/base_images
+      LAUNCHER_ROOT: /opt/slsg/launchers
       PACKER_TEMPLATE: /opt/slsg/packer/build.pkr.hcl
       PACKER_LOG: "1"
       BUILD_TIMEOUT: 2h
@@ -76,6 +83,8 @@ services:
       - scenario-data:/var/lib/slsg/scenarios:ro
       - ./builder/base_images:/opt/slsg/base_images:ro
       - build-data:/var/lib/slsg/builds
+    networks:
+      - build-database
     devices:
       - /dev/kvm:/dev/kvm
     group_add:
@@ -84,6 +93,11 @@ services:
       - no-new-privileges:true
     stop_grace_period: 30s
     restart: unless-stopped
+
+networks:
+  build-api:
+    internal: true
+  build-database:
 
 volumes:
   postgres-data:

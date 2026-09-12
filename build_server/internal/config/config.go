@@ -24,6 +24,8 @@ type Worker struct {
 	WorkerID       string
 	ScenarioRoot   string
 	BuildRoot      string
+	BaseImageRoot  string
+	LauncherRoot   string
 	PackerBinary   string
 	PackerTemplate string
 	PollInterval   time.Duration
@@ -35,10 +37,17 @@ func ServerFromEnv() (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
+	internalToken, err := required("INTERNAL_API_TOKEN")
+	if err != nil {
+		return Server{}, err
+	}
+	if len(internalToken) < 32 {
+		return Server{}, fmt.Errorf("INTERNAL_API_TOKEN must contain at least 32 characters")
+	}
 	return Server{
 		Common:        Common{DatabaseURL: databaseURL},
 		Address:       value("HTTP_ADDRESS", ":8080"),
-		InternalToken: os.Getenv("INTERNAL_API_TOKEN"),
+		InternalToken: internalToken,
 		ArtifactRoot:  value("BUILD_ROOT", "/var/lib/slsg/builds"),
 		ScenarioRoot:  value("SCENARIO_ROOT", "/var/lib/slsg/scenarios"),
 	}, nil
@@ -66,6 +75,8 @@ func WorkerFromEnv() (Worker, error) {
 		WorkerID:       workerID,
 		ScenarioRoot:   value("SCENARIO_ROOT", "/var/lib/slsg/scenarios"),
 		BuildRoot:      value("BUILD_ROOT", "/var/lib/slsg/builds"),
+		BaseImageRoot:  value("BASE_IMAGE_ROOT", "/opt/slsg/base_images"),
+		LauncherRoot:   value("LAUNCHER_ROOT", "/opt/slsg/launchers"),
 		PackerBinary:   value("PACKER_BINARY", "packer"),
 		PackerTemplate: value("PACKER_TEMPLATE", "/opt/slsg/packer/build.pkr.hcl"),
 		PollInterval:   poll,

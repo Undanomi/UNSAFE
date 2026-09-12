@@ -28,6 +28,7 @@ type Build struct {
 	StartedAt         *time.Time `json:"started_at,omitempty"`
 	CompletedAt       *time.Time `json:"completed_at,omitempty"`
 	ErrorMessage      *string    `json:"error_message,omitempty"`
+	MachinePassword   *string    `json:"machine_password,omitempty"`
 	CancelRequested   bool       `json:"cancel_requested"`
 }
 

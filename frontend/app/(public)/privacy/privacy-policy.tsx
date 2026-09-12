@@ -270,6 +270,7 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </p>
       </>
     ),
+
   },
 ]
 
@@ -321,6 +322,7 @@ export function PrivacyPolicy() {
                 変更履歴
               </h2>
               <p className="mt-3">2026年9月5日：［変更内容］</p>
+
             </section>
           </div>
         </article>

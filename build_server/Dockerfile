@@ -15,6 +15,7 @@ RUN apt-get update \
     && unzip /tmp/packer.zip -d /usr/local/bin \
     && rm -rf /var/lib/apt/lists/* /tmp/packer.zip
 COPY builder/packer /opt/slsg/packer
+COPY builder/launchers /opt/slsg/launchers
 RUN packer init /opt/slsg/packer/build.pkr.hcl
 
 FROM gcr.io/distroless/static-debian12:nonroot AS server
@@ -25,7 +26,7 @@ ENTRYPOINT ["/server"]
 FROM debian:12-slim AS worker
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates qemu-system-x86 qemu-utils xorriso \
+       ca-certificates qemu-system-x86 qemu-utils tar xorriso zstd \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=packer /usr/local/bin/packer /usr/local/bin/packer
 COPY --from=packer /root/.config/packer/plugins /opt/packer/plugins
