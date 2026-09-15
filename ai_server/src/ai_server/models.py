@@ -28,7 +28,7 @@ class MachineInformation(BaseModel):
     visibility: Literal["private", "public", "非公開", "公開"]
     theme: str = Field(min_length=1, max_length=500)
     difficulty: Literal["Very Easy", "Easy", "Medium", "High"]
-    operating_system: str = Field(default="Ubuntu 26.04", min_length=1, max_length=100)
+    operating_system: str = Field(default="Debian 13.7.0", min_length=1, max_length=100)
     needs_user_flag: bool | None = None
     user_flag_details: str = Field(default="", max_length=4000)
     needs_system_flag: bool | None = None
@@ -38,7 +38,7 @@ class MachineInformation(BaseModel):
     @classmethod
     def default_operating_system(cls, value):
         if value is None or not str(value).strip():
-            return "Ubuntu 26.04"
+            return "Debian 13.7.0"
         return str(value).strip()
 
     @model_validator(mode="after")
@@ -151,7 +151,7 @@ class ScenarioDraft(BaseModel):
     scenario_version_id: str = "v1"
     title: str
     definition: str
-    target_os: str = "Ubuntu 26.04"
+    target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
 
 

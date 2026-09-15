@@ -240,12 +240,14 @@ class GeminiGenerator:
         response.raise_for_status()
         return response.json()
 
-    async def _ubuntu_evidence(self, cve_id: str, target_os: str) -> dict | None:
-        match = re.search(r"ubuntu\s+(\d+\.\d+)", target_os, re.IGNORECASE)
+    async def _debian_evidence(self, cve_id: str, target_os: str) -> dict | None:
+        match = re.fullmatch(
+            r"debian\s+(\d+)(?:\.\d+){0,2}", target_os.strip(), re.IGNORECASE
+        )
         if not match:
             return None
-        ecosystem = f"Ubuntu:{match.group(1)}:LTS"
-        response = await self.client.get(f"https://api.osv.dev/v1/vulns/UBUNTU-{cve_id}")
+        ecosystem = f"Debian:{match.group(1)}"
+        response = await self.client.get(f"https://api.osv.dev/v1/vulns/DEBIAN-{cve_id}")
         if response.status_code == 404:
             return {"ecosystem": ecosystem, "tracked": False, "affected": []}
         response.raise_for_status()
@@ -271,14 +273,14 @@ class GeminiGenerator:
         ]
 
     @staticmethod
-    def _compact_record(cve_id: str, record: dict, ubuntu: dict | None, refs: list[str]) -> dict:
+    def _compact_record(cve_id: str, record: dict, debian: dict | None, refs: list[str]) -> dict:
         cna = record.get("containers", {}).get("cna", {})
         return {
             "cve_id": cve_id,
             "descriptions": cna.get("descriptions", [])[:3],
             "affected": cna.get("affected", [])[:20],
             "references": [item.get("url") for item in cna.get("references", [])[:20]],
-            "ubuntu_osv": ubuntu,
+            "debian_osv": debian,
             "public_poc_repositories": refs,
             "official_cve_url": f"https://www.cve.org/CVERecord?id={cve_id}",
         }
@@ -286,12 +288,12 @@ class GeminiGenerator:
     async def _verify_cve_step(self, machine: MachineInformation, step: AttackStep) -> AttackStep:
         assert step.cve_id is not None
         self._validate_cve_id(step.cve_id)
-        record, ubuntu, github_refs = await asyncio.gather(
+        record, debian, github_refs = await asyncio.gather(
             self._cve_record(step.cve_id),
-            self._ubuntu_evidence(step.cve_id, machine.operating_system),
+            self._debian_evidence(step.cve_id, machine.operating_system),
             self._github_references(step.cve_id),
         )
-        evidence = self._compact_record(step.cve_id, record, ubuntu, github_refs)
+        evidence = self._compact_record(step.cve_id, record, debian, github_refs)
         prompt = f"""次の攻撃グラフ内のCVEステップを、公式CVEレコードと対象OSの証拠に基づいて
 検証し、隔離された教育VMへ脆弱な状態を構築する計画をJSONで返してください。
 
@@ -307,7 +309,7 @@ JSONのみを返してください:
 "implementation_steps":["取得","固定","設定","起動確認"],"references":["..."]}}
 
 規則:
-- OSまたはカーネルのCVEは、Ubuntu OSVに対象リリースのaffectedがなければos_compatible=false
+- OSまたはカーネルのCVEは、Debian OSVに対象リリースのaffectedがなければos_compatible=false
 - アプリケーションCVEは、対象OS上で脆弱版を固定導入できる場合だけos_compatible=true
 - referencesは証拠に含まれるURLだけを使用する
 """
@@ -333,11 +335,11 @@ JSONのみを返してください:
         record_text = json.dumps(
             [evidence.get("descriptions", []), evidence.get("affected", [])]
         ).lower()
-        ubuntu = evidence.get("ubuntu_osv")
-        if "linux kernel" in record_text and ubuntu is not None and not ubuntu["affected"]:
+        debian = evidence.get("debian_osv")
+        if "linux kernel" in record_text and debian is not None and not debian["affected"]:
             verification.os_compatible = False
             verification.compatibility_reason = (
-                f"{ubuntu['ecosystem']} has no affected entry in Ubuntu OSV"
+                f"{debian['ecosystem']} has no affected entry in Debian OSV"
             )
 
     async def _verify_attack_graph(

@@ -6,7 +6,7 @@ qemu-system-x86_64 `
   -machine pc `
   -vga std `
   -display sdl `
-  -drive if=none,id=disk0,file=../base_images/ubuntu-26.04-server.qcow2,format=qcow2 `
+  -drive if=none,id=disk0,file=../base_images/debian-13.7.0-amd64.qcow2,format=qcow2 `
   -device virtio-blk-pci,drive=disk0 `
   -netdev 'tap,id=net0,ifname=OpenVPN TAP-Windows6' `
   -device e1000,netdev=net0

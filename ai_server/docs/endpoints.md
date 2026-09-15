@@ -78,7 +78,7 @@ X-Authenticated-User-ID: user-123
 
 `download_url` は、ビルドが完了して成果物が確定した場合だけ設定されます。値はAIサーバを
 指す一時的な署名付きURLで、既定では発行から30分間有効です。新しく完了した
-ビルドでは `machine_access` に `{"username":"ubuntu","password":"..."}` が設定され、
+ビルドでは `machine_access` に `{"username":"provisioner","password":"..."}` が設定され、
 ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報として扱ってください。
 
 ### セッション状態
@@ -123,7 +123,7 @@ build_serverへ依頼済みの場合は変更できません。
   "visibility": "private",
   "theme": "Web security",
   "difficulty": "Easy",
-  "operating_system": "Ubuntu 26.04",
+  "operating_system": "Debian 13.7.0",
   "needs_user_flag": true,
   "user_flag_details": "/home/student/user.txtをサービス調査後に取得する",
   "needs_system_flag": false,
@@ -137,7 +137,7 @@ build_serverへ依頼済みの場合は変更できません。
 | `visibility` | 必須 | `private`、`public`、`非公開`、`公開` |
 | `theme` | 必須 | 学習テーマ。1〜500文字 |
 | `difficulty` | 必須 | `Very Easy`、`Easy`、`Medium`、`High` |
-| `operating_system` | 任意 | 対象OS。省略時は `Ubuntu 26.04` |
+| `operating_system` | 任意 | 対象OS。省略時は `Debian 13.7.0` |
 | `needs_user_flag` | 任意 | ユーザーフラグを用意するか |
 | `user_flag_details` | 条件付き | `needs_user_flag=true` の場合は空にできない。最大4000文字 |
 | `needs_system_flag` | 任意 | システムフラグを用意するか |
@@ -157,8 +157,8 @@ build_serverへ依頼済みの場合は変更できません。
 生成します。攻撃ステップはCVEに限定せず、Web脆弱性、設定不備、認証情報、ロジック不備などを
 組み合わせられます。循環依存、存在しない前提ステップ、到達不能なflag目標はサーバ側で拒否します。
 
-`kind=cve` のステップが含まれる場合だけ、公式MITREレコードを取得します。Ubuntuの場合はさらに
-CanonicalのOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
+`kind=cve` のステップが含まれる場合だけ、公式MITREレコードを取得します。Debianの場合はさらに
+DebianのOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
 対象OSへ脆弱版を固定導入できないCVEが含まれる案は破棄し、攻撃グラフ全体を生成し直します。
 既定では2024年以降のCVEだけを候補にし、`CVE_MIN_YEAR` で下限年を変更できます。
 攻撃グラフの生成・検証に失敗した場合は既定で最大5回まで別案を作ります

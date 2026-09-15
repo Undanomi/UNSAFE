@@ -17,7 +17,7 @@ curl -X PUT "http://localhost:8000/v1/sessions/$SESSION_ID/machine-information" 
     "visibility":"private",
     "theme":"SQL Injection",
     "difficulty":"Easy",
-    "operating_system":"Ubuntu 26.04",
+    "operating_system":"Debian 13.7.0",
     "needs_user_flag":true,
     "user_flag_details":"/home/student/user.txt",
     "needs_system_flag":false
@@ -35,4 +35,4 @@ curl -X POST "http://localhost:8000/v1/sessions/$SESSION_ID/machines" \
 
 echo "Get session information..."
 curl "http://localhost:8000/v1/sessions/$SESSION_ID" \
-  -H 'X-Authenticated-User-ID: user-123'  
+  -H 'X-Authenticated-User-ID: user-123'

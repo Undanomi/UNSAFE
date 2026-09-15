@@ -58,7 +58,7 @@ def web_generated_source(
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "web", "protocol": "http", "port": 80}],
             "acceptance_tests": acceptance_tests,
@@ -227,7 +227,7 @@ def test_rejects_full_os_upgrade(tmp_path: Path) -> None:
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "web", "port": 80}],
             "acceptance_tests": ["curl http://localhost"],
@@ -268,7 +268,7 @@ def test_rejects_package_previously_reported_as_unavailable(tmp_path: Path) -> N
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "web", "port": 80}],
             "acceptance_tests": ["curl http://localhost"],
@@ -325,7 +325,7 @@ def test_rejects_systemd_unit_previously_reported_as_missing(tmp_path: Path) -> 
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "web", "port": 80}],
             "acceptance_tests": ["curl http://localhost"],
@@ -386,7 +386,7 @@ def test_rejects_manifest_that_does_not_match_attack_graph(tmp_path: Path) -> No
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "web", "port": 80}],
             "acceptance_tests": ["curl http://localhost"],
@@ -438,7 +438,7 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
     ]
     manifest = json.dumps(
         {
-            "target_os": "Ubuntu 26.04",
+            "target_os": "Debian 13.7.0",
             "required_files": required,
             "services": [{"name": "ssh", "port": 22}],
             "acceptance_tests": ["test -f /etc/passwd"],

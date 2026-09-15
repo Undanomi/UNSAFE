@@ -28,7 +28,7 @@ func TestNewMachinePassword(t *testing.T) {
 	}
 }
 
-func TestPackerChangesUbuntuPasswordAfterScenarioBuild(t *testing.T) {
+func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	template, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestPackerChangesUbuntuPasswordAfterScenarioBuild(t *testing.T) {
 	text := string(template)
 	buildIndex := strings.Index(text, `"./build.sh"`)
 	bannerIndex := strings.Index(text, `"bash /tmp/slsg-configure-login-ip.sh"`)
-	passwordIndex := strings.Index(text, `ubuntu '${var.machine_password}' | chpasswd`)
+	passwordIndex := strings.Index(text, `provisioner '${var.machine_password}' | chpasswd`)
 	if buildIndex < 0 || bannerIndex <= buildIndex || passwordIndex <= bannerIndex {
 		t.Fatal("Packer must configure the login banner and change the password after build.sh succeeds")
 	}
@@ -154,12 +154,12 @@ func TestResolveBaseImageUsesManifestTargetOS(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(source, "contents", "scenario_manifest.json"),
-		[]byte(`{"target_os":"Ubuntu 24.04 LTS"}`),
+		[]byte(`{"target_os":"Debian 12.11.0"}`),
 		0o640,
 	); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(baseImages, "ubuntu-24.04-server.qcow2")
+	want := filepath.Join(baseImages, "debian-12.11.0-amd64.qcow2")
 	if err := os.WriteFile(want, []byte("image"), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestResolveBaseImageUsesManifestTargetOS(t *testing.T) {
 	}
 }
 
-func TestResolveBaseImageDefaultsToUbuntu2604(t *testing.T) {
+func TestResolveBaseImageDefaultsToDebian1370(t *testing.T) {
 	source := t.TempDir()
 	baseImages := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(source, "contents"), 0o750); err != nil {
@@ -185,7 +185,7 @@ func TestResolveBaseImageDefaultsToUbuntu2604(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(baseImages, "ubuntu-26.04-server.qcow2")
+	want := filepath.Join(baseImages, "debian-13.7.0-amd64.qcow2")
 	if err := os.WriteFile(want, []byte("image"), 0o640); err != nil {
 		t.Fatal(err)
 	}

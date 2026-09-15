@@ -147,7 +147,7 @@ curl -X PUT "http://localhost:8000/v1/sessions/$SESSION_ID/machine-information" 
     "visibility":"private",
     "theme":"Web security",
     "difficulty":"Easy",
-    "operating_system":"Ubuntu 26.04",
+    "operating_system":"Debian 13.7.0",
     "needs_user_flag":true,
     "user_flag_details":"/home/student/user.txt",
     "needs_system_flag":false
@@ -184,7 +184,7 @@ HMAC署名され、既定では30分だけ有効です。build_server の内部 
 Rangeリクエスト、`ETag`（成果物のSHA256）、`If-Range`にも対応するため、中断後に同じ成果物の
 ダウンロードを再開できます。期限切れの場合は、認証が必要な
 `POST /v1/sessions/{session_id}/download-url` で新しいURLを取得してください。同時に、ランダム化
-された `ubuntu` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
+された `provisioner` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
 ダウンロード応答には`application/zstd`と配信範囲に対応するサイズを設定します。
 
 署名鍵は本番環境で必ずランダムな32文字以上の`DOWNLOAD_SIGNING_SECRET`へ変更してください。

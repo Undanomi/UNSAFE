@@ -30,7 +30,7 @@ trap 'rm -f "$temporary_issue"' EXIT HUP INT TERM
   else
     printf 'Target IPv4 address: waiting for DHCP (no address assigned)\n'
   fi
-  printf 'Login user: ubuntu\n\n'
+  printf 'Login user: provisioner\n\n'
 } >"$temporary_issue"
 chmod 0644 "$temporary_issue"
 mv -f "$temporary_issue" /etc/issue
