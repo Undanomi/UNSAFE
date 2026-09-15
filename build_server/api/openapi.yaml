@@ -195,7 +195,7 @@ components:
           type: string
           minLength: 32
           maxLength: 32
-          description: Random password assigned to the ubuntu user after provisioning succeeds.
+          description: Random password assigned to the provisioner user after provisioning succeeds.
         cancel_requested: { type: boolean }
     Event:
       type: object

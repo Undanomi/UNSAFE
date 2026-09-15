@@ -33,10 +33,10 @@ a filesystem path. The archive must contain `build.sh`, either at its root, in
 
 KVM must be available at `/dev/kvm`. The worker reads `target_os` from
 `contents/scenario_manifest.json` and selects a base image named
-`builder/base_images/ubuntu-<version>-server.qcow2`. For example, Ubuntu 24.04
-uses `ubuntu-24.04-server.qcow2`. A missing `target_os` defaults to Ubuntu 26.04.
+`builder/base_images/debian-<version>-amd64.qcow2`. For example, Debian 13.7.0
+uses `debian-13.7.0-amd64.qcow2`. A missing `target_os` defaults to Debian 13.7.0.
 
-The current Packer communicator supports Ubuntu images. Put every Ubuntu version
+The current Packer communicator supports Debian images. Put every Debian version
 you intend to build under `builder/base_images/`, then start the stack:
 
 Copy the environment template, then fill the blank `INTERNAL_API_TOKEN` and
@@ -99,7 +99,7 @@ The internal contract used by the AI server is documented in
 - `GET /v1/builds/{build_id}/artifacts/{artifact_id}/content`
 
 After the scenario `build.sh` succeeds, the worker replaces the base image's
-`ubuntu` user password with a cryptographically random value. A completed build's
+`provisioner` user password with a cryptographically random value. A completed build's
 authenticated `GET /v1/builds/{build_id}` response includes that value in
 `machine_password`. The AI server copies it to its session's `machine_access`
 field. Treat both fields as secrets and do not write them to logs.

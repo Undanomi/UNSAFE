@@ -166,7 +166,7 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
         manifest = (
             r'{"command":"find /tmp -exec test -f {} \;"}'
             if len(requests) == 1
-            else '{"target_os":"Ubuntu 26.04"}'
+            else '{"target_os":"Debian 13.7.0"}'
         )
         return gemini_response(
             {
@@ -196,7 +196,7 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
             Settings(gemini_api_key="test-key", generation_retries=2), client
         ).repair_source(machine, scenario, current, {"error": "validation failed"})
 
-    assert json.loads(patch.files[0].content)["target_os"] == "Ubuntu 26.04"
+    assert json.loads(patch.files[0].content)["target_os"] == "Debian 13.7.0"
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "model_output_validation_error" in second_prompt
@@ -340,9 +340,9 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         request_number = len(requests)
-        if request_number in {1, 4}:
+        if request_number == 1:
             return gemini_response(graph)
-        if request_number in {2, 5}:
+        if request_number in {2, 4}:
             return gemini_response(f"# Generated scenario attempt {request_number}")
         if request_number == 3:
             return gemini_response(
@@ -374,11 +374,84 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
             MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
         )
 
-    assert scenario.definition == "# Generated scenario attempt 5"
-    assert len(requests) == 6
+    assert scenario.definition == "# Generated scenario attempt 4"
+    assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
     assert "permission_blocker" in retry_prompt
+    assert "No mode is specified for the parent directory." in retry_prompt
+    assert "Specify and validate owner, group, and mode." in retry_prompt
+    graph_prompts = [
+        request
+        for request in requests
+        if "攻撃経路を設計するアーキテクト" in request["contents"][0]["parts"][0]["text"]
+    ]
+    assert len(graph_prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -> None:
+    graph = {
+        "objectives": [],
+        "steps": [
+            {
+                "step_id": "credential-step",
+                "title": "Recover a credential",
+                "kind": "credential",
+                "phase": "initial_access",
+                "description": "Recover the training credential.",
+                "requires": [],
+                "achieves": [],
+                "cve_id": None,
+                "implementation_steps": ["Configure a reproducible credential path"],
+            }
+        ],
+    }
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        request_number = len(requests)
+        if request_number in {1, 4}:
+            return gemini_response(graph)
+        if request_number in {2, 5}:
+            return gemini_response(f"# Generated scenario attempt {request_number}")
+        if request_number == 3:
+            return gemini_response(
+                {
+                    "approved": False,
+                    "summary": "A prerequisite can be bypassed.",
+                    "findings": [
+                        {
+                            "step_id": "credential-step",
+                            "severity": "error",
+                            "category": "broken_chain",
+                            "evidence": "The credential is available without the prerequisite.",
+                            "remediation": "Make the prerequisite output necessary.",
+                        }
+                    ],
+                }
+            )
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The revised chain is consistent.",
+                "findings": [],
+            }
+        )
+
+    settings = Settings(gemini_api_key="test-key", scenario_generation_attempts=2)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        scenario = await GeminiGenerator(settings, client).generate_scenario(
+            MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+        )
+
+    assert scenario.definition == "# Generated scenario attempt 5"
+    assert len(requests) == 6
+    regenerated_graph_prompt = requests[3]["contents"][0]["parts"][0]["text"]
+    regenerated_scenario_prompt = requests[4]["contents"][0]["parts"][0]["text"]
+    assert "broken_chain" in regenerated_graph_prompt
+    assert "broken_chain" in regenerated_scenario_prompt
 
 
 @pytest.mark.asyncio
@@ -482,9 +555,9 @@ def test_empty_exception_message_still_has_diagnostic_value() -> None:
     assert exception_detail(httpx.ReadTimeout("")) == "ReadTimeout"
 
 
-def test_machine_information_defaults_to_ubuntu_2604() -> None:
+def test_machine_information_defaults_to_debian_1370() -> None:
     machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    assert machine.operating_system == "Ubuntu 26.04"
+    assert machine.operating_system == "Debian 13.7.0"
     assert (
         MachineInformation(
             name="Test",
@@ -493,29 +566,30 @@ def test_machine_information_defaults_to_ubuntu_2604() -> None:
             difficulty="Easy",
             operating_system="  ",
         ).operating_system
-        == "Ubuntu 26.04"
+        == "Debian 13.7.0"
     )
 
 
 @pytest.mark.asyncio
-async def test_ubuntu_osv_evidence_is_filtered_by_target_release() -> None:
-    def handler(_: httpx.Request) -> httpx.Response:
+async def test_debian_osv_evidence_is_filtered_by_target_release() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://api.osv.dev/v1/vulns/DEBIAN-CVE-2026-0001"
         return httpx.Response(
             200,
             json={
                 "affected": [
-                    {"package": {"ecosystem": "Ubuntu:16.04:LTS", "name": "linux"}},
-                    {"package": {"ecosystem": "Ubuntu:26.04:LTS", "name": "linux"}},
+                    {"package": {"ecosystem": "Debian:12", "name": "linux"}},
+                    {"package": {"ecosystem": "Debian:13", "name": "linux"}},
                 ]
             },
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(Settings(), client)
-        evidence = await generator._ubuntu_evidence("CVE-2026-0001", "Ubuntu 26.04")
+        evidence = await generator._debian_evidence("CVE-2026-0001", "Debian 13.7.0")
 
     assert evidence is not None
-    assert evidence["ecosystem"] == "Ubuntu:26.04:LTS"
+    assert evidence["ecosystem"] == "Debian:13"
     assert len(evidence["affected"]) == 1
 
 
@@ -531,8 +605,8 @@ def test_kernel_cve_requires_target_release_osv_evidence() -> None:
     evidence = {
         "descriptions": [{"value": "A race condition in the Linux kernel"}],
         "affected": [],
-        "ubuntu_osv": {
-            "ecosystem": "Ubuntu:26.04:LTS",
+        "debian_osv": {
+            "ecosystem": "Debian:13",
             "tracked": True,
             "affected": [],
         },
@@ -541,7 +615,7 @@ def test_kernel_cve_requires_target_release_osv_evidence() -> None:
     GeminiGenerator._enforce_kernel_evidence(verification, evidence)
 
     assert verification.os_compatible is False
-    assert "Ubuntu:26.04:LTS" in verification.compatibility_reason
+    assert "Debian:13" in verification.compatibility_reason
 
 
 @pytest.mark.asyncio

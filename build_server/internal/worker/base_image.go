@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-const defaultTargetOS = "Ubuntu 26.04"
+const defaultTargetOS = "Debian 13.7.0"
 
-var ubuntuVersionPattern = regexp.MustCompile(`(?i)^ubuntu\s+(\d{2}\.\d{2})(?:\s+lts)?$`)
+var debianVersionPattern = regexp.MustCompile(`(?i)^debian\s+(\d+(?:\.\d+){0,2})$`)
 
 type scenarioManifest struct {
 	TargetOS string `json:"target_os"`
@@ -31,11 +31,11 @@ func resolveBaseImage(sourceDir, baseImageRoot string) (string, error) {
 	if targetOS == "" {
 		targetOS = defaultTargetOS
 	}
-	match := ubuntuVersionPattern.FindStringSubmatch(targetOS)
+	match := debianVersionPattern.FindStringSubmatch(targetOS)
 	if match == nil {
-		return "", fmt.Errorf("unsupported target OS %q: only Ubuntu base images are supported", targetOS)
+		return "", fmt.Errorf("unsupported target OS %q: only Debian base images are supported", targetOS)
 	}
-	imagePath := filepath.Join(baseImageRoot, "ubuntu-"+match[1]+"-server.qcow2")
+	imagePath := filepath.Join(baseImageRoot, "debian-"+match[1]+"-amd64.qcow2")
 	info, err := os.Stat(imagePath)
 	if err != nil {
 		return "", fmt.Errorf("base image for %s is unavailable at %s: %w", targetOS, imagePath, err)

@@ -146,6 +146,21 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     for prompt in design_prompts:
         assert "前提なしでは失敗" in prompt
 
+    scenario_retry = scenario_prompt(
+        machine,
+        scenario.attack_graph.model_dump_json(),
+        [
+            (
+                'scenario_semantic_review: {"summary":"service ordering is inconsistent",'
+                '"findings":[{"evidence":"sshd is configured before installation",'
+                '"remediation":"install OpenSSH before writing its configuration"}]}'
+            )
+        ],
+    )
+    assert "service ordering is inconsistent" in scenario_retry
+    assert "sshd is configured before installation" in scenario_retry
+    assert "install OpenSSH before writing its configuration" in scenario_retry
+
     for prompt in implementation_prompts:
         assert "意図した脆弱性が「存在する」だけでなく「攻略に必要」" in prompt
         assert "より短い別経路" in prompt

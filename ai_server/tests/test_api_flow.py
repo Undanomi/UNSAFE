@@ -195,14 +195,14 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     )
     assert saved.status_code == 200
     assert saved.json()["status"] == "ready"
-    assert saved.json()["machine_information"]["operating_system"] == "Ubuntu 26.04"
+    assert saved.json()["machine_information"]["operating_system"] == "Debian 13.7.0"
 
     events = await http.get(f"/v1/sessions/{session_id}/scenarios/events", headers=headers)
     assert events.status_code == 200
     assert "event: scenario.started" in events.text
     assert "event: scenario.delta" in events.text
     assert "event: scenario.completed" in events.text
-    assert '"target_os": "Ubuntu 26.04"' in events.text
+    assert '"target_os": "Debian 13.7.0"' in events.text
 
     scenario_id = (await app.state.repository.get(session_id)).scenario.scenario_id
     accepted = await http.post(
@@ -224,7 +224,7 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert completed.headers["cache-control"] == "private, no-store"
     assert completed.json()["status"] == "completed"
     assert completed.json()["machine_access"] == {
-        "username": "ubuntu",
+        "username": "provisioner",
         "password": "test-generated-machine-password",
     }
     download_url = completed.json()["download_url"]

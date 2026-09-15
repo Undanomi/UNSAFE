@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
     scenario_id varchar(128) NOT NULL REFERENCES scenarios(scenario_id),
     version integer NOT NULL,
     scenario_definition text NOT NULL,
-    target_os text NOT NULL DEFAULT 'Ubuntu 26.04',
+    target_os text NOT NULL DEFAULT 'Debian 13.7.0',
     attack_graph jsonb NOT NULL,
     generated_code_path text,
     generated_code_checksum char(64),
@@ -58,5 +58,8 @@ ALTER TABLE ai_sessions
 
 ALTER TABLE ai_sessions
     ADD COLUMN IF NOT EXISTS machine_access jsonb;
+
+ALTER TABLE scenario_versions
+    ALTER COLUMN target_os SET DEFAULT 'Debian 13.7.0';
 
 DROP TABLE IF EXISTS generation_jobs;

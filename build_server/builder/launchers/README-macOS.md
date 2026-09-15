@@ -34,7 +34,7 @@ vmnetの権限エラーになる環境では、QEMUのパスを維持して管�
 sudo env PATH="$PATH" ./start-macos.sh --bridge en1
 ```
 
-Apple Siliconではx86_64ゲストをハードウェア仮想化できないため、QEMU TCGでCPUをエミュレーションします。Intel MacではHVFを使用します。起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`ubuntu`、パスワードはマシンのダウンロード画面に表示された値です。
+Apple Siliconではx86_64ゲストをハードウェア仮想化できないため、QEMU TCGでCPUをエミュレーションします。Intel MacではHVFを使用します。起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
 
 ## VMware Fusion上のKali
 
@@ -52,7 +52,7 @@ Kaliの「ネットワーク」で「ブリッジアダプター」を選び、`
 sudo arp-scan --localnet
 sudo nmap -Pn -sS -sV -p- TARGET_IP
 sudo nmap -Pn -sU --top-ports 100 TARGET_IP
-ssh ubuntu@TARGET_IP
+ssh provisioner@TARGET_IP
 ```
 
 Wi-Fiアクセスポイントのクライアント分離や、無線NICのブリッジ制限により、VM同士が通信できない場合があります。その場合は専用の有線Ethernetアダプターを使用し、QEMUとKaliの両方をそのインターフェースへブリッジしてください。

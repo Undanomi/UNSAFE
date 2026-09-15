@@ -53,7 +53,7 @@ WHPXを使用できない場合はTCGで起動できます。
 .\Start-Windows.ps1 -Accelerator tcg -TapAdapter "SLSG TAP"
 ```
 
-起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`ubuntu`、パスワードはマシンのダウンロード画面に表示された値です。
+起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
 
 ## VMware Workstation Pro上のKali
 
@@ -75,7 +75,7 @@ QEMUのTAPを専用の有線LANアダプターへブリッジし、WSL Kaliか�
 sudo arp-scan --localnet
 sudo nmap -Pn -sS -sV -p- TARGET_IP
 sudo nmap -Pn -sU --top-ports 100 TARGET_IP
-ssh ubuntu@TARGET_IP
+ssh provisioner@TARGET_IP
 ```
 
 IPが表示されない場合は、WindowsのネットワークブリッジにTAPとKali側アダプターの両方が所属していること、隔離ネットワークのDHCPがブリッジ越しに応答していることを確認してください。

@@ -236,11 +236,16 @@ JSONのみを返してください:
 """
 
 
-def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
+def scenario_prompt(
+    machine: MachineInformation,
+    attack_graph_json: str,
+    review_feedback: list[str] | None = None,
+) -> str:
     flag_context = (
         f"User flag: {machine.needs_user_flag}; details: {machine.user_flag_details or 'none'}\n"
         f"System flag: {machine.needs_system_flag}; details: {machine.system_flag_details or 'none'}"
     )
+    feedback_context = "\n".join((review_feedback or [])[-5:]) or "なし（初回生成）"
     return f"""あなたはHack The Box風の教育用Linuxマシンを設計するアーキテクトです。
 次の条件と検証済み攻撃グラフを使い、実装可能で一貫したシナリオ設計書をMarkdownで1つ作成してください。
 
@@ -252,6 +257,13 @@ def scenario_prompt(machine: MachineInformation, attack_graph_json: str) -> str:
 
 攻撃グラフ:
 {attack_graph_json}
+
+前回までの棄却理由とシナリオレビュー:
+{feedback_context}
+
+レビュー指摘がある場合はsummaryだけでなく、各findingのevidenceとremediationをすべて反映して
+ください。提示された攻撃グラフのstep、requires、achievesは変更せず、設計書の実装順序、主体、
+権限、設定、検証計画を具体化・修正して、同じ指摘を繰り返さないでください。
 
 必ず次の章をこの順で含めてください。
 # [マシン名] シナリオ設計書
