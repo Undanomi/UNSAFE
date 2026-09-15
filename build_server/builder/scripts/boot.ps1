@@ -1,12 +1,10 @@
 qemu-system-x86_64 `
-  -accel tcg `
+  -accel 'tcg,thread=multi' `
   -m 4096 `
   -smp 2 `
-  -cpu qemu64 `
-  -machine pc `
-  -vga std `
-  -display sdl `
-  -drive if=none,id=disk0,file=../base_images/debian-13.7.0-amd64.qcow2,format=qcow2 `
-  -device virtio-blk-pci,drive=disk0 `
+  -cpu max `
+  -machine q35 `
+  -boot order=c `
+  -drive file=../base_images/debian-13.7.0-amd64.qcow2,format=qcow2,if=virtio `
   -netdev 'tap,id=net0,ifname=OpenVPN TAP-Windows6' `
-  -device e1000,netdev=net0
+  -device virtio-net-pci,netdev=net0
