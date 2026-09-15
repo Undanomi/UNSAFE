@@ -241,9 +241,7 @@ class GeminiGenerator:
         return response.json()
 
     async def _debian_evidence(self, cve_id: str, target_os: str) -> dict | None:
-        match = re.fullmatch(
-            r"debian\s+(\d+)(?:\.\d+){0,2}", target_os.strip(), re.IGNORECASE
-        )
+        match = re.fullmatch(r"debian\s+(\d+)(?:\.\d+){0,2}", target_os.strip(), re.IGNORECASE)
         if not match:
             return None
         ecosystem = f"Debian:{match.group(1)}"
@@ -363,12 +361,14 @@ JSONのみを返してください:
     async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft:
         last_error: Exception | None = None
         rejected: list[str] = []
+        graph: AttackGraph | None = None
         for _ in range(self.settings.scenario_generation_attempts):
             try:
-                graph = await self._draft_attack_graph(machine, rejected)
-                graph = await self._verify_attack_graph(machine, graph)
+                if graph is None:
+                    candidate = await self._draft_attack_graph(machine, rejected)
+                    graph = await self._verify_attack_graph(machine, candidate)
                 definition = await self._generate(
-                    scenario_prompt(machine, graph.model_dump_json(indent=2)),
+                    scenario_prompt(machine, graph.model_dump_json(indent=2), rejected),
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
                 scenario = ScenarioDraft(
@@ -386,6 +386,11 @@ JSONのみを返してください:
                 rejected.append(
                     "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
                 )
+                if any(
+                    finding.severity == "error" and finding.category == "broken_chain"
+                    for finding in review.findings
+                ):
+                    graph = None
             except (
                 httpx.HTTPError,
                 KeyError,
@@ -396,6 +401,7 @@ JSONのみを返してください:
             ) as error:
                 last_error = error
                 rejected.append(str(error))
+                graph = None
         raise RuntimeError(f"Could not generate an approved scenario: {last_error}")
 
     async def review_scenario(

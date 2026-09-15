@@ -340,9 +340,9 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
         request_number = len(requests)
-        if request_number in {1, 4}:
+        if request_number == 1:
             return gemini_response(graph)
-        if request_number in {2, 5}:
+        if request_number in {2, 4}:
             return gemini_response(f"# Generated scenario attempt {request_number}")
         if request_number == 3:
             return gemini_response(
@@ -374,11 +374,84 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
             MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
         )
 
-    assert scenario.definition == "# Generated scenario attempt 5"
-    assert len(requests) == 6
+    assert scenario.definition == "# Generated scenario attempt 4"
+    assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
     assert "permission_blocker" in retry_prompt
+    assert "No mode is specified for the parent directory." in retry_prompt
+    assert "Specify and validate owner, group, and mode." in retry_prompt
+    graph_prompts = [
+        request
+        for request in requests
+        if "攻撃経路を設計するアーキテクト" in request["contents"][0]["parts"][0]["text"]
+    ]
+    assert len(graph_prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -> None:
+    graph = {
+        "objectives": [],
+        "steps": [
+            {
+                "step_id": "credential-step",
+                "title": "Recover a credential",
+                "kind": "credential",
+                "phase": "initial_access",
+                "description": "Recover the training credential.",
+                "requires": [],
+                "achieves": [],
+                "cve_id": None,
+                "implementation_steps": ["Configure a reproducible credential path"],
+            }
+        ],
+    }
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        request_number = len(requests)
+        if request_number in {1, 4}:
+            return gemini_response(graph)
+        if request_number in {2, 5}:
+            return gemini_response(f"# Generated scenario attempt {request_number}")
+        if request_number == 3:
+            return gemini_response(
+                {
+                    "approved": False,
+                    "summary": "A prerequisite can be bypassed.",
+                    "findings": [
+                        {
+                            "step_id": "credential-step",
+                            "severity": "error",
+                            "category": "broken_chain",
+                            "evidence": "The credential is available without the prerequisite.",
+                            "remediation": "Make the prerequisite output necessary.",
+                        }
+                    ],
+                }
+            )
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The revised chain is consistent.",
+                "findings": [],
+            }
+        )
+
+    settings = Settings(gemini_api_key="test-key", scenario_generation_attempts=2)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        scenario = await GeminiGenerator(settings, client).generate_scenario(
+            MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+        )
+
+    assert scenario.definition == "# Generated scenario attempt 5"
+    assert len(requests) == 6
+    regenerated_graph_prompt = requests[3]["contents"][0]["parts"][0]["text"]
+    regenerated_scenario_prompt = requests[4]["contents"][0]["parts"][0]["text"]
+    assert "broken_chain" in regenerated_graph_prompt
+    assert "broken_chain" in regenerated_scenario_prompt
 
 
 @pytest.mark.asyncio

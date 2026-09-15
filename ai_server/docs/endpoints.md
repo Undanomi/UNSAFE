@@ -168,8 +168,10 @@ Markdownを含む完成シナリオは、保存前に別のステートレスな
 行います。攻撃グラフとの整合、攻略経路の成立性、前提を飛ばす近道、検証計画を確認し、特に各段階の
 実効ユーザー、owner/group/mode、親ディレクトリの探索権限、ACL、sudoers、setuid/capability、
 flagの攻略前後の可読性を重点的に反証します。成立を妨げる権限は`permission_blocker`、広すぎる
-権限による近道は`permission_shortcut`として不合格にします。不合格所見は次の生成へ渡され、
-`SCENARIO_GENERATION_ATTEMPTS`の範囲で別案を生成します。レビューを通過したシナリオだけが保存されます。
+権限による近道は`permission_shortcut`として不合格にします。不合格所見のsummary、evidence、
+remediationは次の設計書生成へ直接渡され、通常は同じ攻撃グラフを維持したまま設計書を修正します。
+`broken_chain`の場合だけ攻撃グラフも再生成します。`SCENARIO_GENERATION_ATTEMPTS`の範囲で再試行し、
+レビューを通過したシナリオだけが保存されます。
 
 完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
 VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
