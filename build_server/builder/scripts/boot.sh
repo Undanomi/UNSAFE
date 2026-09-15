@@ -1,7 +1,6 @@
-#!/bin/bash
-
 qemu-system-x86_64 \
   -enable-kvm \
+  -machine q35 \
   -m 4096 \
   -smp 2 \
   -cpu host \
