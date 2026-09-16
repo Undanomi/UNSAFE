@@ -21,5 +21,6 @@ export function buildInitialUserDocument(
     own_machines: [],
     solved_machines: [],
     created_at: createdAt.toISOString(),
+    profile_completed: false,
   }
 }

@@ -18,7 +18,7 @@ export async function AppShell({ children, contentClassName = "" }: AppShellProp
     : null
   const sidebarUser = {
     name: userDocument?.name || authenticatedUser?.name || "ユーザー",
-    avatarUrl: userDocument?.icon_url || authenticatedUser?.picture || "",
+    avatarUrl: userDocument ? userDocument.icon_url : authenticatedUser?.picture || "",
   }
 
   return (

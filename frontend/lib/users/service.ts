@@ -5,7 +5,9 @@ import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
 import { buildInitialUserDocument } from "@/lib/users/user-document"
 import type { UsersDocument } from "@/types/firestore"
 
-export type UserProfileUpdate = Pick<UsersDocument, "bio" | "name">
+export type UserProfileUpdate = Partial<
+  Pick<UsersDocument, "bio" | "icon_url" | "name" | "profile_completed">
+>
 
 export async function ensureUserDocumentService(identity: DecodedIdToken): Promise<void> {
   const firestore = getFirebaseAdminFirestore()
