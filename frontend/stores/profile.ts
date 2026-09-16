@@ -10,6 +10,7 @@ export type UserProfile = {
   name: string
   initial: string
   bio: string
+  avatarUrl?: string
   createdMachines: ProfileMachine[]
   solvedMachines: ProfileMachine[]
 }
