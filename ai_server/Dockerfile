@@ -17,6 +17,6 @@ RUN uv sync --frozen --no-dev \
     && install -d -o 10001 -g 10001 -m 0750 /var/lib/slsg/scenarios
 
 USER 10001:10001
-EXPOSE 8000
+EXPOSE 8000 8001
 
 CMD ["uvicorn", "ai_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
