@@ -31,6 +31,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 .pnpm-store/
+firebase-debug.log*
+firestore-debug.log*
 
 # env files (can opt-in for committing if needed)
 .env
