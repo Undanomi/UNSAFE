@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { isProtectedRoute } from "@/lib/auth/routing"
 import { verifySessionCookieService } from "@/lib/auth/service"
-import { getUserDocumentService } from "@/lib/users/service"
+import { getOrCreateUserDocumentService } from "@/lib/users/service"
 
 const PROFILE_SETUP_PATH = "/profile/setup"
 
@@ -21,8 +21,8 @@ export async function proxy(request: NextRequest) {
   }
 
   if (user && (pathname === "/login" || isProtectedRoute(pathname))) {
-    const userDocument = await getUserDocumentService(user.uid)
-    const profileCompleted = userDocument?.profile_completed === true
+    const userDocument = await getOrCreateUserDocumentService(user)
+    const profileCompleted = userDocument.profile_completed === true
 
     if (!profileCompleted && pathname !== PROFILE_SETUP_PATH) {
       return NextResponse.redirect(new URL(PROFILE_SETUP_PATH, request.url))

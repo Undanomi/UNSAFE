@@ -3,7 +3,7 @@ import "server-only"
 import type { DecodedIdToken } from "firebase-admin/auth"
 import { RECENT_SIGN_IN_SECONDS, SESSION_DURATION_SECONDS } from "@/lib/auth/constants"
 import { getFirebaseAdminAuth } from "@/lib/firebase/admin"
-import { ensureUserDocumentService, getUserDocumentService } from "@/lib/users/service"
+import { getOrCreateUserDocumentService } from "@/lib/users/service"
 
 const MAX_FUTURE_AUTHENTICATION_SECONDS = 60
 
@@ -45,12 +45,11 @@ export async function createSessionService(
     expiresIn: SESSION_DURATION_SECONDS * 1000,
   })
 
-  await ensureUserDocumentService(decodedToken)
-  const userDocument = await getUserDocumentService(decodedToken.uid)
+  const userDocument = await getOrCreateUserDocumentService(decodedToken)
 
   return {
     sessionCookie,
-    profileCompleted: userDocument?.profile_completed === true,
+    profileCompleted: userDocument.profile_completed === true,
   }
 }
 

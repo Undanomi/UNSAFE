@@ -2,7 +2,7 @@ import "server-only"
 
 import type { UsersDocument } from "@/types/firestore"
 
-type UserIdentity = {
+export type UserIdentity = {
   uid: string
   name?: unknown
   picture?: unknown

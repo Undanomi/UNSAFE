@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { ProfileSetupForm } from "@/app/(private)/profile/setup/profile-setup-form"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
-import { getUserDocumentService } from "@/lib/users/service"
+import { getOrCreateUserDocumentService } from "@/lib/users/service"
 
 export default async function ProfileSetupPage() {
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
@@ -11,8 +11,7 @@ export default async function ProfileSetupPage() {
 
   if (!authenticatedUser) redirect("/login")
 
-  const userDocument = await getUserDocumentService(authenticatedUser.uid)
-  if (!userDocument) throw new Error("Authenticated user document was not found.")
+  const userDocument = await getOrCreateUserDocumentService(authenticatedUser)
   if (userDocument.profile_completed === true) redirect("/machines")
 
   return (
