@@ -9,7 +9,7 @@ from sqladmin.authentication import AuthenticationBackend
 from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.requests import Request
 
-from .config import Settings
+from .config import AdminSettings
 from .database import (
     AISessionRecord,
     ScenarioRecord,
@@ -19,10 +19,7 @@ from .models import AttackGraph
 
 
 class AdminAuthentication(AuthenticationBackend):
-    def __init__(self, settings: Settings) -> None:
-        assert settings.sqladmin_username is not None
-        assert settings.sqladmin_password is not None
-        assert settings.sqladmin_session_secret is not None
+    def __init__(self, settings: AdminSettings) -> None:
         super().__init__(
             secret_key=settings.sqladmin_session_secret.get_secret_value(),
             session_cookie="slsg_admin_session",
@@ -159,9 +156,7 @@ class ScenarioVersionAdmin(EditableModelView, model=ScenarioVersionRecord):
             AttackGraph.model_validate(data["attack_graph"])
 
 
-def configure_sqladmin(app: FastAPI, engine: AsyncEngine, settings: Settings) -> Admin | None:
-    if not settings.sqladmin_enabled:
-        return None
+def configure_sqladmin(app: FastAPI, engine: AsyncEngine, settings: AdminSettings) -> Admin:
     admin = Admin(
         app=app,
         engine=engine,

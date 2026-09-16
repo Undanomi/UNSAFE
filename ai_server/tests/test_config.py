@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ai_server.config import Settings
+from ai_server.config import AdminSettings, Settings
 
 
 def test_settings_require_database_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,3 +27,18 @@ def test_settings_reject_short_build_server_token(
 
     with pytest.raises(ValidationError, match="at least 32"):
         Settings(_env_file=None)
+
+
+def test_admin_settings_do_not_require_build_server_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BUILD_SERVER_TOKEN")
+
+    settings = AdminSettings(
+        sqladmin_username="admin-user",
+        sqladmin_password="a-long-admin-password",
+        sqladmin_session_secret="test-session-secret-that-is-at-least-32-characters",
+        _env_file=None,
+    )
+
+    assert settings.sqladmin_username == "admin-user"
