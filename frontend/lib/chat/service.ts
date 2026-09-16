@@ -160,6 +160,7 @@ function difficultyToLevel(difficulty: ChatAnswers["difficulty"]) {
 export async function createMachineDocumentService(
   ownerUserId: string,
   sessionId: string,
+  flags: { userFlag: string | null; systemFlag: string | null },
 ): Promise<string | null> {
   const firestore = getFirebaseAdminFirestore()
   const reference = chatReference(sessionId)
@@ -169,6 +170,18 @@ export async function createMachineDocumentService(
     if (!snapshot.exists) return null
     const chat = snapshot.data() as ChatSessionDocument
     if (chat.owner_user_id !== ownerUserId) return null
+
+    const userFlag = chat.answers.needsUserFlag ? flags.userFlag?.trim() : ""
+    const systemFlag = chat.answers.needsSystemFlag ? flags.systemFlag?.trim() : ""
+    if (chat.answers.needsUserFlag && !userFlag) {
+      throw new Error("AI server did not return a user flag.")
+    }
+    if (chat.answers.needsSystemFlag && !systemFlag) {
+      throw new Error("AI server did not return a system flag.")
+    }
+    if ((userFlag?.length ?? 0) > 200 || (systemFlag?.length ?? 0) > 200) {
+      throw new Error("AI server returned an invalid flag.")
+    }
 
     const machineId = chat.machine_id ?? sessionId
     const machineReference = firestore.collection(MACHINE_COLLECTION).doc(machineId)
@@ -189,8 +202,8 @@ export async function createMachineDocumentService(
         status: "building",
         build_progress: 0,
         error_message: null,
-        system_flag: "",
-        user_flag: "",
+        system_flag: systemFlag ?? "",
+        user_flag: userFlag ?? "",
         tags: [chat.answers.theme],
         created_at: now,
       },

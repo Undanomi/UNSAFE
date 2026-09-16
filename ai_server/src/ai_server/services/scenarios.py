@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 
 from ..models import SessionStatus
 from ..repository import SessionRepository
@@ -10,6 +11,10 @@ from .errors import exception_detail
 from .events import EventBroker, ServerEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _new_flag(kind: str) -> str:
+    return f"flag{{{kind}_{secrets.token_hex(16)}}}"
 
 
 class ScenarioCoordinator:
@@ -51,6 +56,16 @@ class ScenarioCoordinator:
                 session_id, ServerEvent("scenario.started", {"session_id": session_id})
             )
             scenario = await self.generator.generate_scenario(state.machine_information)
+            scenario = scenario.model_copy(
+                update={
+                    "user_flag": (
+                        _new_flag("user") if state.machine_information.needs_user_flag else None
+                    ),
+                    "system_flag": (
+                        _new_flag("system") if state.machine_information.needs_system_flag else None
+                    ),
+                }
+            )
             state.scenario = scenario
             state.status = SessionStatus.SCENARIO_READY
             await self.repository.save(state)

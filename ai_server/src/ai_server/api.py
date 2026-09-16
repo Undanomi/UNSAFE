@@ -56,7 +56,13 @@ def _urls(request: Request, state) -> tuple[str, str | None]:
 
 def _response(request: Request, state) -> SessionResponse:
     events, download = _urls(request, state)
-    return SessionResponse(**state.model_dump(), scenario_events_url=events, download_url=download)
+    return SessionResponse(
+        **state.model_dump(),
+        scenario_events_url=events,
+        download_url=download,
+        user_flag=state.scenario.user_flag if state.scenario else None,
+        system_flag=state.scenario.system_flag if state.scenario else None,
+    )
 
 
 def _authorize(state, user_id: str | None) -> None:

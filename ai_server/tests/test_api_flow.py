@@ -204,7 +204,13 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert "event: scenario.completed" in events.text
     assert '"target_os": "Debian 13.7.0"' in events.text
 
-    scenario_id = (await app.state.repository.get(session_id)).scenario.scenario_id
+    scenario = (await app.state.repository.get(session_id)).scenario
+    assert scenario is not None
+    assert scenario.user_flag is not None
+    assert scenario.user_flag.startswith("flag{user_")
+    assert scenario.system_flag is None
+    assert scenario.user_flag not in events.text
+    scenario_id = scenario.scenario_id
     accepted = await http.post(
         f"/v1/sessions/{session_id}/machines",
         json={"scenario_id": scenario_id},
@@ -212,12 +218,17 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     )
     assert accepted.status_code == 202
     assert accepted.json()["status"] == "generating_code"
+    assert accepted.json()["user_flag"] == scenario.user_flag
+    assert accepted.json()["system_flag"] is None
 
     for _ in range(50):
         if (await app.state.repository.get(session_id)).build_id:
             break
         await asyncio.sleep(0.01)
     assert fake_build.submitted_archive is not None
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        provision = archive.read("contents/scripts/provision.sh").decode()
+    assert scenario.user_flag in provision
 
     completed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
     assert completed.status_code == 200

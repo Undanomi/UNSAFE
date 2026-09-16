@@ -153,6 +153,14 @@ class ScenarioDraft(BaseModel):
     definition: str
     target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
+    user_flag: str | None = Field(default=None, min_length=1, max_length=200, exclude=True)
+    system_flag: str | None = Field(default=None, min_length=1, max_length=200, exclude=True)
+
+    @model_validator(mode="after")
+    def flags_must_be_distinct(self) -> ScenarioDraft:
+        if self.user_flag and self.system_flag and self.user_flag == self.system_flag:
+            raise ValueError("user_flag and system_flag must be different")
+        return self
 
 
 class ScenarioReviewFinding(BaseModel):
@@ -272,6 +280,8 @@ class CreateMachineRequest(BaseModel):
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
+    user_flag: str | None = None
+    system_flag: str | None = None
 
 
 class DownloadURLResponse(BaseModel):

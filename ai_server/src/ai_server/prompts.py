@@ -362,6 +362,10 @@ def code_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
 検証済みの攻撃グラフ:
 {scenario.attack_graph.model_dump_json(indent=2)}
 
+配置する正解フラグ（未設定は配置しない）:
+- User flag: {scenario.user_flag or "未設定"}
+- System flag: {scenario.system_flag or "未設定"}
+
 JSON以外は返さないでください。形式:
 {{"files":[{{"path":"contents/build.sh","content":"#!/bin/bash\\nset -euo pipefail\\n...","mode":"0755"}}]}}
 
@@ -400,6 +404,7 @@ JSON以外は返さないでください。形式:
 - 何度実行しても壊れにくい処理にする
 - User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 - System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
+- 設定された正解フラグは1文字も変更せず、指定された配置先へそのまま保存する
 
 {HASH_CRACKING_CONSTRAINTS}
 
@@ -429,6 +434,8 @@ def repair_prompt(
 マシン: {machine.name}
 シナリオID: {scenario.scenario_id}
 対象OS: {scenario.target_os}
+User flag正解値: {scenario.user_flag or "未設定"}
+System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
 {scenario.attack_graph.model_dump_json(indent=2)}
@@ -468,6 +475,7 @@ JSON以外は返さないでください。形式:
   contents/scripts/以下を修正し、VMへの配置変更はprovision.shのinstall/cp/chownで行う
 - 対象OSのリポジトリにないパッケージとフルOSアップグレードを使わない
 - 既存のシナリオ意図、flag、manifestの整合性を維持する
+- 設定された正解フラグは1文字も変更せず、修復後も同じ値を維持する
 - contents/scenario_manifest.jsonを変更する場合、そのcontentはMarkdownやコメントを含まない
   厳密なJSON objectとし、単独でPythonのjson.loadsに成功させる。command文字列内の
   バックスラッシュもJSON規則で必ずエスケープし、セミコロンやドル記号の直前に未定義の
@@ -501,6 +509,8 @@ def source_review_prompt(
 テーマ: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {scenario.target_os}
+User flag正解値: {scenario.user_flag or "未設定"}
+System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
 {scenario.attack_graph.model_dump_json(indent=2)}
@@ -517,6 +527,7 @@ JSONのみを返してください:
 
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
+- 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
 - intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
 - 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
   acceptance_test_gapのerrorにする

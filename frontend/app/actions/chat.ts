@@ -189,8 +189,11 @@ export async function startMachineBuildAction(
   }
 
   try {
-    await startMachineBuildService(user.uid, sessionId, scenarioId)
-    const machineId = await createMachineDocumentService(user.uid, sessionId)
+    const started = await startMachineBuildService(user.uid, sessionId, scenarioId)
+    const machineId = await createMachineDocumentService(user.uid, sessionId, {
+      userFlag: started.user_flag,
+      systemFlag: started.system_flag,
+    })
     return machineId
       ? { success: true, sessionId, machineId }
       : { success: false, message: SESSION_ERROR_MESSAGE }

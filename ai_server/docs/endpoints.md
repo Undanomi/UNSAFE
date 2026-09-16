@@ -60,6 +60,8 @@ X-Authenticated-User-ID: user-123
   "status": "scenario_ready",
   "machine_information": {},
   "scenario": {},
+  "user_flag": null,
+  "system_flag": null,
   "source_path": null,
   "source_checksum": null,
   "build_id": null,
@@ -80,6 +82,11 @@ X-Authenticated-User-ID: user-123
 指す一時的な署名付きURLで、既定では発行から30分間有効です。新しく完了した
 ビルドでは `machine_access` に `{"username":"provisioner","password":"..."}` が設定され、
 ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報として扱ってください。
+
+`user_flag` と `system_flag` は、対応するフラグが必要なシナリオを生成した後だけ設定されます。
+これらは正解値を保存するBFF向けの秘密情報です。ブラウザへ転送せず、Firestoreへの保存と
+サーバー側での回答判定にだけ使用してください。正解値は `scenario` およびSSEイベントには
+含まれません。
 
 ### セッション状態
 
@@ -175,6 +182,7 @@ remediationは次の設計書生成へ直接渡され、通常は同じ攻撃グ
 
 完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
 VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
+必要なフラグの正解値はこの時点で生成してPostgreSQLへ保存しますが、SSEでは配信しません。
 
 ```sh
 curl -N http://localhost:8000/v1/sessions/{session_id}/scenarios/events \

@@ -28,6 +28,46 @@ func TestNewMachinePassword(t *testing.T) {
 	}
 }
 
+func TestDriveConversionUpdate(t *testing.T) {
+	tests := []struct {
+		name         string
+		line         string
+		wantProgress int
+		wantMessage  string
+		wantMatched  bool
+	}{
+		{
+			name:         "packer conversion output",
+			line:         "==> security-scenario.qemu.debian1370_result: Converting hard drive...",
+			wantProgress: 80,
+			wantMessage:  "converting hard drive image",
+			wantMatched:  true,
+		},
+		{
+			name:        "unrelated packer output",
+			line:        "==> security-scenario.qemu.debian1370_result: Gracefully halting virtual machine...",
+			wantMatched: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			progress, message, matched := driveConversionUpdate(test.line)
+			if progress != test.wantProgress || message != test.wantMessage || matched != test.wantMatched {
+				t.Fatalf(
+					"driveConversionUpdate(%q) = (%d, %q, %t), want (%d, %q, %t)",
+					test.line,
+					progress,
+					message,
+					matched,
+					test.wantProgress,
+					test.wantMessage,
+					test.wantMatched,
+				)
+			}
+		})
+	}
+}
+
 func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	template, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
 	if err != nil {

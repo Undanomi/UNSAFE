@@ -2,7 +2,9 @@ import { MACHINE_LIST, type MachineSummary } from "@/stores/machine-list"
 import type { MachinesDocument } from "@/types/firestore"
 
 export type FlagDefinition = {
+  kind: "user" | "system"
   label: string
+  machineId: string
 }
 
 export type MachineBuildState = {
@@ -25,8 +27,8 @@ export type MachineDetail = Pick<
   buildProgress?: number
   canRetry?: boolean
   status?: MachinesDocument["status"]
-  userFlag: FlagDefinition
-  systemFlag: FlagDefinition
+  userFlag: FlagDefinition | null
+  systemFlag: FlagDefinition | null
 }
 
 const DEFAULT_MACHINE_DETAILS = Object.fromEntries(
@@ -43,10 +45,14 @@ const DEFAULT_MACHINE_DETAILS = Object.fromEntries(
       summary: machine.summary,
       description: machine.description,
       userFlag: {
+        kind: "user",
         label: "ユーザーフラグ",
+        machineId: machine.id,
       },
       systemFlag: {
+        kind: "system",
         label: "システムフラグ",
+        machineId: machine.id,
       },
     } satisfies MachineDetail,
   ]),

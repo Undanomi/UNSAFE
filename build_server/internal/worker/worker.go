@@ -26,9 +26,12 @@ import (
 )
 
 const (
-	storedErrorRunes     = 16_000
-	machinePasswordBytes = 24
-	distributionFileName = "slsg-machine.tar.zst"
+	storedErrorRunes        = 16_000
+	machinePasswordBytes    = 24
+	distributionFileName    = "slsg-machine.tar.zst"
+	driveConversionMarker   = "Converting hard drive..."
+	driveConversionProgress = 80
+	driveConversionMessage  = "converting hard drive image"
 )
 
 type Worker struct {
@@ -131,7 +134,7 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 		return fmt.Errorf("generate machine password: %w", err)
 	}
 	if err := w.runPacker(
-		ctx, workspaceDir, temporaryDir, baseImage, machinePassword, logFile, logger,
+		ctx, build.ID, workspaceDir, temporaryDir, baseImage, machinePassword, logFile, logger,
 	); err != nil {
 		return err
 	}
@@ -166,6 +169,7 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 
 func (w *Worker) runPacker(
 	ctx context.Context,
+	buildID string,
 	workspaceDir string,
 	outputDir string,
 	baseImage string,
@@ -195,9 +199,23 @@ func (w *Worker) runPacker(
 	}
 	scanner := bufio.NewScanner(io.TeeReader(stdout, logFile))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	driveConversionReported := false
 	for scanner.Scan() {
 		line := scanner.Text()
 		logger.Info("packer", "message", line)
+		progress, message, driveConversionStarted := driveConversionUpdate(line)
+		if !driveConversionReported && driveConversionStarted {
+			driveConversionReported = true
+			if err := w.store.SetStatus(
+				ctx,
+				buildID,
+				domain.StatusBuilding,
+				progress,
+				message,
+			); err != nil {
+				logger.Warn("could not report drive conversion progress", "error", err)
+			}
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read packer output: %w", err)
@@ -221,6 +239,13 @@ func (w *Worker) runPacker(
 		return fmt.Errorf("packer build: %w", err)
 	}
 	return nil
+}
+
+func driveConversionUpdate(line string) (int, string, bool) {
+	if !strings.Contains(line, driveConversionMarker) {
+		return 0, "", false
+	}
+	return driveConversionProgress, driveConversionMessage, true
 }
 
 func newMachinePassword() (string, error) {

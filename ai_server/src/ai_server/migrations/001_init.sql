@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS scenario_versions (
     scenario_definition text NOT NULL,
     target_os text NOT NULL DEFAULT 'Debian 13.7.0',
     attack_graph jsonb NOT NULL,
+    user_flag text,
+    system_flag text,
     generated_code_path text,
     generated_code_checksum char(64),
     created_by text NOT NULL,
@@ -61,5 +63,11 @@ ALTER TABLE ai_sessions
 
 ALTER TABLE scenario_versions
     ALTER COLUMN target_os SET DEFAULT 'Debian 13.7.0';
+
+ALTER TABLE scenario_versions
+    ADD COLUMN IF NOT EXISTS user_flag text;
+
+ALTER TABLE scenario_versions
+    ADD COLUMN IF NOT EXISTS system_flag text;
 
 DROP TABLE IF EXISTS generation_jobs;

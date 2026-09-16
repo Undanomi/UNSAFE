@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from uuid import uuid4
 
 from ..models import (
@@ -132,6 +133,30 @@ printf '%s\n' 'SLSG local demonstration scenario is ready.' > /etc/motd.d/90-sls
 set -euo pipefail
 id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-student
 """
+        acceptance_tests = [{"command": "test -f /opt/slsg-scenario/README.md"}]
+        if scenario.user_flag:
+            quoted_user_flag = shlex.quote(scenario.user_flag)
+            provision += (
+                f"printf '%s\\n' {quoted_user_flag} > /home/slsg-student/user.txt\n"
+                "chown slsg-student:slsg-student /home/slsg-student/user.txt\n"
+                "chmod 0400 /home/slsg-student/user.txt\n"
+            )
+            acceptance_tests.append(
+                {
+                    "command": (
+                        f"test \"$(cat /home/slsg-student/user.txt)\" = {quoted_user_flag}"
+                    )
+                }
+            )
+        if scenario.system_flag:
+            quoted_system_flag = shlex.quote(scenario.system_flag)
+            provision += (
+                f"printf '%s\\n' {quoted_system_flag} > /root/system.txt\n"
+                "chmod 0400 /root/system.txt\n"
+            )
+            acceptance_tests.append(
+                {"command": f"test \"$(cat /root/system.txt)\" = {quoted_system_flag}"}
+            )
         readme = (
             f"# {machine.name}\n\nTheme: {machine.theme}; difficulty: {machine.difficulty}.\n\n"
             "Packer executes `contents/build.sh`. Use `systemctl` or the MOTD for a health check. "
@@ -150,7 +175,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     "contents/scripts/provision.sh",
                 ],
                 "services": [{"name": "ssh", "port": 22}],
-                "acceptance_tests": [{"command": "test -f /opt/slsg-scenario/README.md"}],
+                "acceptance_tests": acceptance_tests,
                 "expected_vulnerabilities": [{"name": "local demonstration setting"}],
                 "health_checks": [{"command": "test -f /etc/motd.d/90-slsg-scenario"}],
                 "attack_steps": [

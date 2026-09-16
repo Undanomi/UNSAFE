@@ -1,5 +1,6 @@
 import "server-only"
 
+import { createHash, timingSafeEqual } from "node:crypto"
 import {
   type AiSessionResponse,
   getAiSessionService,
@@ -98,8 +99,12 @@ export async function getMachineDetailService(
     buildProgress: machine.build_progress ?? 0,
     canRetry: isOwner,
     status: machine.status,
-    userFlag: { label: "ユーザーフラグ" },
-    systemFlag: { label: "システムフラグ" },
+    userFlag: machine.user_flag
+      ? { kind: "user", label: "ユーザーフラグ", machineId: snapshot.id }
+      : null,
+    systemFlag: machine.system_flag
+      ? { kind: "system", label: "システムフラグ", machineId: snapshot.id }
+      : null,
   }
 }
 
@@ -157,4 +162,23 @@ export async function openMachineDownloadService(
     rangeHeader,
     ifRangeHeader,
   )
+}
+
+export async function verifyMachineFlagService(
+  viewerUserId: string,
+  machineId: string,
+  kind: "user" | "system",
+  answer: string,
+): Promise<boolean | null> {
+  const machine = await getMachineDocument(machineId)
+  if (!machine) return null
+
+  const ownerUserId = machineOwnerId(machine)
+  if (!machine.published && ownerUserId !== viewerUserId) return null
+  const expected = kind === "user" ? machine.user_flag : machine.system_flag
+  if (!expected) return null
+
+  const expectedDigest = createHash("sha256").update(expected, "utf8").digest()
+  const answerDigest = createHash("sha256").update(answer.trim(), "utf8").digest()
+  return timingSafeEqual(expectedDigest, answerDigest)
 }

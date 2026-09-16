@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { retryMachineBuildAction } from "@/app/actions/machines"
+import { retryMachineBuildAction, verifyMachineFlagAction } from "@/app/actions/machines"
 import type { FlagDefinition, MachineBuildState, MachineDetail } from "@/stores/machine-detail"
 
 type MachineDetailProps = {
@@ -24,6 +24,24 @@ type FlagPanelProps = {
 }
 
 function FlagPanel({ flag }: FlagPanelProps) {
+  const [answer, setAnswer] = useState("")
+  const [result, setResult] = useState<"correct" | "incorrect" | null>(null)
+  const [isChecking, setIsChecking] = useState(false)
+
+  async function handleSubmit() {
+    if (!answer.trim() || isChecking) return
+    setIsChecking(true)
+    setResult(null)
+    try {
+      const verification = await verifyMachineFlagAction(flag.machineId, flag.kind, answer)
+      if (verification.success) {
+        setResult(verification.correct ? "correct" : "incorrect")
+      }
+    } finally {
+      setIsChecking(false)
+    }
+  }
+
   return (
     <section className="rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm max-sm:p-5">
       <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
@@ -31,15 +49,34 @@ function FlagPanel({ flag }: FlagPanelProps) {
       </h2>
       <div className="mt-5 flex gap-3 max-sm:flex-col">
         <input
+          autoComplete="off"
           className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+          disabled={isChecking}
+          maxLength={200}
+          onChange={(event) => {
+            setAnswer(event.target.value)
+            setResult(null)
+          }}
           placeholder="flag{...}"
+          spellCheck={false}
+          value={answer}
         />
         <button
           className="inline-flex min-h-[46px] shrink-0 items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold shadow-sm transition hover:-translate-y-px"
+          disabled={!answer.trim() || isChecking}
+          onClick={() => void handleSubmit()}
           type="button"
         >
-          判定する
+          {isChecking ? "判定中…" : "判定する"}
         </button>
+      </div>
+      <div aria-live="polite">
+        {result === "correct" ? (
+          <p className="mt-3 text-[0.86rem] font-bold text-[#28633a]">正解です。</p>
+        ) : null}
+        {result === "incorrect" ? (
+          <p className="mt-3 text-[0.86rem] font-bold text-[#9a392d]">一致しません。</p>
+        ) : null}
       </div>
     </section>
   )
@@ -54,7 +91,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   const [retryError, setRetryError] = useState("")
   const isBuilding = buildState.status === "building" || buildState.status === "preparing"
   const canDownload = machine.status !== undefined && buildState.status === "ready"
-  const showFlags = machine.status === undefined || buildState.status === "ready"
+  const showFlags = machine.status !== undefined && buildState.status === "ready"
 
   useEffect(() => {
     if (!isBuilding) return
@@ -184,10 +221,10 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         </div>
       </section>
 
-      {showFlags ? (
+      {showFlags && (machine.userFlag || machine.systemFlag) ? (
         <div className="grid gap-5">
-          <FlagPanel flag={machine.userFlag} />
-          <FlagPanel flag={machine.systemFlag} />
+          {machine.userFlag ? <FlagPanel flag={machine.userFlag} /> : null}
+          {machine.systemFlag ? <FlagPanel flag={machine.systemFlag} /> : null}
         </div>
       ) : null}
     </section>
@@ -207,6 +244,13 @@ function BuildStatusPanel({
   onRetry: () => void
   state: MachineBuildState
 }) {
+  const message =
+    state.status === "preparing"
+      ? "AIがビルド内容を生成しています"
+      : state.progress >= 80 && state.progress < 90
+        ? "ディスクイメージを変換しています"
+        : "マシンをビルドしています"
+
   if (state.status === "ready") {
     return (
       <section className="flex items-center gap-3 rounded-2xl border border-[#bed8c5] bg-[#f4fbf6] p-5 text-[#28633a]">
@@ -250,9 +294,7 @@ function BuildStatusPanel({
       <div className="flex items-center justify-between gap-4">
         <span className="flex items-center gap-2 text-[0.9rem] font-extrabold">
           <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
-          {state.status === "preparing"
-            ? "AIがビルド内容を生成しています"
-            : "マシンをビルドしています"}
+          {message}
         </span>
         <span className="text-[0.8rem] font-bold text-[#61605b]">{state.progress}%</span>
       </div>

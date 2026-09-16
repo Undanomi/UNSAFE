@@ -189,3 +189,49 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "`apache2ctl configtest`" in review_prompt
     assert "implementation_mismatch" in review_prompt
     assert "一律に不合格にはせず" in review_prompt
+
+
+def test_source_prompts_include_persisted_flag_values() -> None:
+    machine = MachineInformation(
+        name="Flag Test",
+        visibility="private",
+        theme="Flags",
+        difficulty="Easy",
+        needs_user_flag=True,
+        user_flag_details="/home/student/user.txt",
+        needs_system_flag=True,
+        system_flag_details="/root/system.txt",
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-flags",
+        title="Flag Test",
+        definition="# Flag Test",
+        user_flag="flag{user_exact_value}",
+        system_flag="flag{system_exact_value}",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="flags",
+                    title="Read flags",
+                    kind="custom",
+                    phase="objective",
+                    description="Read both flags",
+                    implementation_steps=["Place both flags"],
+                )
+            ]
+        ),
+    )
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/scripts/provision.sh", content="#!/bin/bash\n")]
+    )
+
+    for prompt in (
+        code_prompt(machine, scenario),
+        repair_prompt(machine, scenario, source, {"error": "test"}),
+        source_review_prompt(machine, scenario, source),
+    ):
+        assert "flag{user_exact_value}" in prompt
+        assert "flag{system_exact_value}" in prompt
+
+    assert "user_flag" not in scenario.model_dump()
+    assert "system_flag" not in scenario.model_dump()

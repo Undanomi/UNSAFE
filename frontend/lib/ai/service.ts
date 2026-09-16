@@ -19,6 +19,8 @@ export type AiSessionResponse = {
   build_status: string | null
   build_progress: number
   download_url: string | null
+  user_flag: string | null
+  system_flag: string | null
 }
 
 type DownloadURLResponse = {
