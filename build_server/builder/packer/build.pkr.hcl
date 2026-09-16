@@ -37,8 +37,9 @@ source "qemu" "debian1370_result" {
   headless         = true
   iso_checksum     = "none"
   iso_url          = var.base_image
+  machine_type     = "q35"
   memory           = 4096
-  net_device       = "virtio-net"
+  net_device       = "virtio-net-pci"
   output_directory = var.output_dir
   shutdown_command = "echo '${var.machine_password}' | sudo -S shutdown -P now"
   ssh_password     = "provisioner"

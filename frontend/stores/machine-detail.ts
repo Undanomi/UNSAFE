@@ -1,7 +1,13 @@
 import { MACHINE_LIST, type MachineSummary } from "@/stores/machine-list"
+import type { MachinesDocument } from "@/types/firestore"
 
 export type FlagDefinition = {
   label: string
+}
+
+export type MachineBuildState = {
+  status: MachinesDocument["status"]
+  progress: number
 }
 
 export type MachineDetail = Pick<
@@ -16,6 +22,9 @@ export type MachineDetail = Pick<
   | "summary"
   | "description"
 > & {
+  buildProgress?: number
+  canRetry?: boolean
+  status?: MachinesDocument["status"]
   userFlag: FlagDefinition
   systemFlag: FlagDefinition
 }

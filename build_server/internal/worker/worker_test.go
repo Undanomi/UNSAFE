@@ -51,6 +51,35 @@ func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	}
 }
 
+func TestPackerNetworkDeviceMatchesBootScript(t *testing.T) {
+	packerTemplate, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootScript, err := os.ReadFile("../../builder/scripts/boot.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, required := range []string{
+		`machine_type     = "q35"`,
+		`net_device       = "virtio-net-pci"`,
+	} {
+		if !strings.Contains(string(packerTemplate), required) {
+			t.Fatalf("Packer template is missing boot-compatible setting %q", required)
+		}
+	}
+	for _, required := range []string{
+		`-machine q35`,
+		`-netdev user,id=net0,hostfwd=tcp::2222-:22`,
+		`-device virtio-net-pci,netdev=net0`,
+	} {
+		if !strings.Contains(string(bootScript), required) {
+			t.Fatalf("boot.sh is missing expected network setting %q", required)
+		}
+	}
+}
+
 func TestCopyTreeRejectsSymlink(t *testing.T) {
 	source := t.TempDir()
 	destination := filepath.Join(t.TempDir(), "copy")

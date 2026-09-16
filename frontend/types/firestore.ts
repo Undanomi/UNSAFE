@@ -25,4 +25,29 @@ export type MachinesDocument = {
   user_flag: string
   tags: string[]
   created_at: string
+  ai_session_id?: string
+  build_progress?: number
+}
+
+/** chat_sessions コレクションのドキュメント定義 */
+export type ChatSessionsDocument = {
+  ai_session_id: string
+  owner_user_id: string
+  name: string
+  current_step: number
+  basic_ready: boolean
+  answers: {
+    name: string
+    visibility: "非公開" | "公開" | ""
+    theme: string
+    difficulty: "Very Easy" | "Easy" | "Medium" | "High" | ""
+    needsUserFlag: boolean | null
+    userFlagDetails: string
+    needsSystemFlag: boolean | null
+    systemFlagDetails: string
+  }
+  creation_status: "input" | "generating_scenario" | "building" | "completed" | "failed"
+  machine_id: string | null
+  created_at: FirebaseFirestore.Timestamp
+  updated_at: FirebaseFirestore.Timestamp
 }

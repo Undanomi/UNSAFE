@@ -38,7 +38,17 @@ export type ChatSession = {
   status: "入力中" | "基本設定完了"
   initialStep: number
   initialAnswers?: Partial<ChatAnswers>
+  creationStatus: ChatCreationStatus
+  machineId: string | null
 }
+
+export type ChatCreationStatus =
+  | "input"
+  | "generating_scenario"
+  | "building"
+  | "completed"
+  | "failed"
+export type ChatSessionSummary = Pick<ChatSession, "id" | "name" | "status">
 
 export type ChatAnswers = {
   name: string
@@ -158,29 +168,6 @@ export const NEW_CHAT_SESSION: ChatSession = {
   name: "新しいマシン",
   status: "入力中",
   initialStep: CHAT_STEPS.machineName,
+  creationStatus: "input",
+  machineId: null,
 }
-
-export const CHAT_SESSIONS: ChatSession[] = [
-  {
-    id: "session-nginx",
-    name: "Nginx Engine",
-    status: "基本設定完了",
-    initialStep: CHAT_STEPS.difficulty,
-    initialAnswers: {
-      name: "Nginx Engine",
-      visibility: "非公開",
-      theme: "Web サーバーの設定不備",
-      difficulty: "Easy",
-    },
-  },
-  {
-    id: "session-apache",
-    name: "Apache Patch",
-    status: "入力中",
-    initialStep: CHAT_STEPS.theme,
-    initialAnswers: {
-      name: "Apache Patch",
-      visibility: "公開",
-    },
-  },
-]
