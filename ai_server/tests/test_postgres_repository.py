@@ -58,7 +58,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             scenario_id="scenario-postgres-test",
             title="Postgres Test",
             definition="# persisted scenario",
-            target_os="Ubuntu 24.04",
+            target_os="Debian 12.11.0",
             attack_graph=AttackGraph(
                 objectives=[
                     AttackObjective(
@@ -92,7 +92,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted = await repository.get(state.session_id)
         assert persisted.scenario is not None
         assert persisted.scenario.definition == "# persisted scenario"
-        assert persisted.scenario.target_os == "Ubuntu 24.04"
+        assert persisted.scenario.target_os == "Debian 12.11.0"
         assert persisted.scenario.attack_graph.steps[0].vulnerable_version == "1.0"
 
         persisted.source_path = "/tmp/generated/source"
@@ -102,7 +102,9 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted.build_progress = 100
         persisted.build_repair_attempts = 2
         persisted.build_repair_attempt_limit = 5
-        persisted.machine_access = MachineAccess(username="ubuntu", password="generated-password")
+        persisted.machine_access = MachineAccess(
+            username="provisioner", password="generated-password"
+        )
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
             artifact_type="tar.zst",
@@ -116,7 +118,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         assert completed.build_repair_attempts == 2
         assert completed.build_repair_attempt_limit == 5
         assert completed.machine_access == MachineAccess(
-            username="ubuntu", password="generated-password"
+            username="provisioner", password="generated-password"
         )
         assert completed.artifact is not None
         assert completed.artifact.file_name == "slsg-machine.tar.zst"

@@ -50,7 +50,7 @@ chmod +x start-linux.sh
 ./start-linux.sh --tap tap-scenario-1
 ```
 
-利用できる場合はKVM、利用できなければTCGによるx86_64エミュレーションを自動選択します。起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`ubuntu`、パスワードはマシンのダウンロード画面に表示された値です。
+利用できる場合はKVM、利用できなければTCGによるx86_64エミュレーションを自動選択します。起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
 
 ## VMware Workstation Pro上のKali
 
@@ -72,7 +72,7 @@ Windows PCを`br-slsg`が接続している隔離LANへ接続します。WSL Kal
 sudo arp-scan --localnet
 sudo nmap -Pn -sS -sV -p- TARGET_IP
 sudo nmap -Pn -sU --top-ports 100 TARGET_IP
-ssh ubuntu@TARGET_IP
+ssh provisioner@TARGET_IP
 ```
 
 ターゲットIPへ到達できない場合は、`ip link show master br-slsg`でTAPがブリッジに所属していること、Kaliとターゲットが同じサブネットのアドレスを取得していることを確認してください。

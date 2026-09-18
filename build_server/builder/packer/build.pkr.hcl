@@ -9,7 +9,7 @@ packer {
 
 variable "base_image" {
   type    = string
-  default = "/opt/slsg/base_images/ubuntu-26.04-server.qcow2"
+  default = "/opt/slsg/base_images/debian-13.7.0-amd64.qcow2"
 }
 
 variable "source_dir" {
@@ -24,11 +24,11 @@ variable "output_dir" {
 
 variable "machine_password" {
   type        = string
-  description = "Random password assigned to the ubuntu user after scenario provisioning."
+  description = "Random password assigned to the provisioner user after scenario provisioning."
   sensitive   = true
 }
 
-source "qemu" "ubuntu2604_result" {
+source "qemu" "debian1370_result" {
   accelerator      = "kvm"
   cpus             = 4
   disk_compression = true
@@ -41,15 +41,15 @@ source "qemu" "ubuntu2604_result" {
   net_device       = "virtio-net"
   output_directory = var.output_dir
   shutdown_command = "echo '${var.machine_password}' | sudo -S shutdown -P now"
-  ssh_password     = "ubuntu"
+  ssh_password     = "provisioner"
   ssh_timeout      = "15m"
-  ssh_username     = "ubuntu"
+  ssh_username     = "provisioner"
   vm_name          = "image.qcow2"
 }
 
 build {
   name    = "security-scenario"
-  sources = ["source.qemu.ubuntu2604_result"]
+  sources = ["source.qemu.debian1370_result"]
 
   provisioner "file" {
     source      = var.source_dir
@@ -62,7 +62,7 @@ build {
   }
 
   provisioner "shell" {
-    execute_command = "echo 'ubuntu' | sudo -S bash '{{ .Path }}'"
+    execute_command = "echo 'provisioner' | sudo -S bash '{{ .Path }}'"
     inline = [
       "set -e",
       "BUILD_SH=/tmp/scenario/contents/build.sh",
@@ -75,7 +75,7 @@ build {
       "./build.sh",
       "bash /tmp/slsg-configure-login-ip.sh",
       "rm -f /tmp/slsg-configure-login-ip.sh",
-      "printf '%s:%s\\n' ubuntu '${var.machine_password}' | chpasswd",
+      "printf '%s:%s\\n' provisioner '${var.machine_password}' | chpasswd",
     ]
   }
 }

@@ -4,9 +4,10 @@ import hashlib
 import json
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SkillPhase(StrEnum):
@@ -51,12 +52,32 @@ class SkillCreate(BaseModel):
     description: str = Field(min_length=1, max_length=2000)
 
 
+class SkillReference(BaseModel):
+    reference_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    path: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=100_000)
+
+    @property
+    def checksum(self) -> str:
+        return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+
+
 class SkillVersionCreate(BaseModel):
     instructions: str = Field(min_length=1, max_length=100_000)
     phases: list[SkillPhase] = Field(min_length=1, max_length=5)
     selectors: SkillSelectors = Field(default_factory=SkillSelectors)
     priority: int = Field(default=100, ge=-10_000, le=10_000)
     created_by: str = Field(min_length=1, max_length=500)
+    references: list[SkillReference] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> SkillVersionCreate:
+        ids = [item.reference_id for item in self.references]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Reference IDs must be unique within a Skill")
+        if sum(len(item.content) for item in self.references) > 2_000_000:
+            raise ValueError("References exceed 2000000 characters per Skill version")
+        return self
 
     @field_validator("instructions")
     @classmethod
@@ -87,6 +108,7 @@ class StoredSkill(BaseModel):
     created_by: str
     created_at: datetime
     published_at: datetime | None = None
+    references: list[SkillReference] = Field(default_factory=list)
 
     def verify_checksum(self) -> None:
         expected = skill_checksum(
@@ -94,6 +116,7 @@ class StoredSkill(BaseModel):
             self.phases,
             self.selectors,
             self.priority,
+            self.references,
         )
         if self.content_checksum != expected:
             raise ValueError(
@@ -103,11 +126,25 @@ class StoredSkill(BaseModel):
 
 class AppliedSkill(StoredSkill):
     selection_reason: str
+    selected_reference_ids: list[str] = Field(default_factory=list)
+    reference_mode: Literal["required", "candidates"] = "required"
+    reference_reasons: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_selected_references(self) -> AppliedSkill:
+        available = {item.reference_id for item in self.references}
+        if len(self.selected_reference_ids) != len(set(self.selected_reference_ids)):
+            raise ValueError("Selected reference IDs must be unique")
+        if not set(self.selected_reference_ids) <= available:
+            raise ValueError(f"Missing selected reference in Skill {self.name}")
+        return self
 
 
 class SkillContext(BaseModel):
     phase: SkillPhase
     skills: list[AppliedSkill] = Field(default_factory=list)
+    # Derived from the session plan, including when this phase has no Skill body.
+    restrict_cves: bool = False
 
 
 class ScenarioSkillContexts(BaseModel):
@@ -117,19 +154,42 @@ class ScenarioSkillContexts(BaseModel):
     scenario: SkillContext = Field(default_factory=lambda: SkillContext(phase=SkillPhase.SCENARIO))
 
 
+class SkillPlan(BaseModel):
+    input_checksum: str
+    mode: Literal["semantic", "explicit"]
+    model: str | None = None
+    reason: str
+    skills: list[AppliedSkill]
+
+    @model_validator(mode="after")
+    def verify_versions(self) -> SkillPlan:
+        if len({item.name for item in self.skills}) != len(self.skills):
+            raise ValueError("Duplicate Skills in plan")
+        for item in self.skills:
+            item.verify_checksum()
+        return self
+
+
 def skill_checksum(
     instructions: str,
     phases: list[SkillPhase],
     selectors: SkillSelectors,
     priority: int,
+    references: list[SkillReference] | None = None,
 ) -> str:
+    payload = {
+        "instructions": instructions,
+        "phases": [phase.value for phase in phases],
+        "selectors": selectors.model_dump(mode="json"),
+        "priority": priority,
+    }
+    # Preserve checksums for versions published before references were introduced.
+    if references:
+        payload["references"] = [
+            item.model_dump() for item in sorted(references, key=lambda item: item.reference_id)
+        ]
     canonical = json.dumps(
-        {
-            "instructions": instructions,
-            "phases": [phase.value for phase in phases],
-            "selectors": selectors.model_dump(mode="json"),
-            "priority": priority,
-        },
+        payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

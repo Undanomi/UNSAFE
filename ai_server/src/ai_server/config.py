@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     skills_max_active: int = Field(default=32, ge=1, le=100)
     skills_max_per_phase: int = Field(default=8, ge=1, le=20)
     skill_context_max_chars: int = Field(default=50_000, ge=1_000, le=200_000)
+    skill_selection_max_chars: int = Field(default=60_000, ge=1_000, le=300_000)
+    skill_selection_retries: int = Field(default=2, ge=1, le=3)
+    skill_selection_max_cves: int = Field(default=3, ge=1, le=10)
 
     @model_validator(mode="after")
     def validate_database_and_admin_settings(self) -> Settings:

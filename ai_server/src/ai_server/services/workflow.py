@@ -414,7 +414,7 @@ class MachineWorkflow:
     def _capture_machine_access(state: SessionState, build: dict) -> None:
         password = build.get("machine_password")
         if isinstance(password, str) and password:
-            state.machine_access = MachineAccess(username="ubuntu", password=password)
+            state.machine_access = MachineAccess(username="provisioner", password=password)
 
 
 def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:

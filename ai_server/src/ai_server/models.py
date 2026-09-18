@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -28,18 +29,41 @@ class MachineInformation(BaseModel):
     visibility: Literal["private", "public", "非公開", "公開"]
     theme: str = Field(min_length=1, max_length=500)
     difficulty: Literal["Very Easy", "Easy", "Medium", "High"]
-    operating_system: str = Field(default="Ubuntu 26.04", min_length=1, max_length=100)
+    operating_system: str = Field(default="Debian 13.7.0", min_length=1, max_length=100)
     needs_user_flag: bool | None = None
     user_flag_details: str = Field(default="", max_length=4000)
     needs_system_flag: bool | None = None
     system_flag_details: str = Field(default="", max_length=4000)
+    skill_names: (
+        list[Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=64)]] | None
+    ) = Field(default=None, max_length=32)
+    cve_ids: list[Annotated[str, Field(pattern=r"^CVE-\d{4}-\d{4,7}$")]] = Field(
+        default_factory=list, max_length=20
+    )
+
+    @field_validator("skill_names", "cve_ids")
+    @classmethod
+    def unique_skill_choices(cls, values):
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("Skill names and CVE IDs must not contain duplicates")
+        return values
+
+    @model_validator(mode="after")
+    def validate_cve_skill_choice(self) -> MachineInformation:
+        if self.cve_ids and self.skill_names is not None and "cve" not in self.skill_names:
+            raise ValueError("skill_names must include cve when cve_ids are specified")
+        return self
 
     @field_validator("operating_system", mode="before")
     @classmethod
     def default_operating_system(cls, value):
         if value is None or not str(value).strip():
-            return "Ubuntu 26.04"
-        return str(value).strip()
+            return "Debian 13.7.0"
+        value = str(value).strip()
+        match = re.fullmatch(r"debian\s+(\d+(?:\.\d+){0,2})", value, re.IGNORECASE)
+        if not match:
+            raise ValueError("Only versioned Debian base images are supported (e.g. Debian 13.7.0)")
+        return f"Debian {match.group(1)}"
 
     @model_validator(mode="after")
     def validate_flag_details(self) -> MachineInformation:
@@ -151,7 +175,7 @@ class ScenarioDraft(BaseModel):
     scenario_version_id: str = "v1"
     title: str
     definition: str
-    target_os: str = "Ubuntu 26.04"
+    target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
 
 

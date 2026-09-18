@@ -50,7 +50,7 @@ class ScenarioVersionRecord(Base):
     scenario_version_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     scenario_definition: Mapped[str] = mapped_column(Text, nullable=False)
-    target_os: Mapped[str] = mapped_column(Text, nullable=False, default="Ubuntu 26.04")
+    target_os: Mapped[str] = mapped_column(Text, nullable=False, default="Debian 13.7.0")
     attack_graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     generated_code_path: Mapped[str | None] = mapped_column(Text)
     generated_code_checksum: Mapped[str | None] = mapped_column(CHAR(64))
@@ -109,6 +109,9 @@ class SkillVersionRecord(Base):
     )
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    references: Mapped[list[dict[str, Any]]] = mapped_column(
+        "reference_documents", JSONB, nullable=False, default=list
+    )
     phases: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     selectors: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
@@ -128,6 +131,17 @@ class SessionSkillSnapshotRecord(Base):
     )
     phase: Mapped[str] = mapped_column(String(32), primary_key=True)
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SessionSkillPlanRecord(Base):
+    __tablename__ = "session_skill_plans"
+
+    session_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("ai_sessions.session_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 
 class SessionSkillSnapshotItemRecord(Base):
@@ -153,6 +167,8 @@ class SessionSkillSnapshotItemRecord(Base):
     skill_version: Mapped[int] = mapped_column(Integer, nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     selection_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    selected_reference_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    selection_details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     content_checksum: Mapped[str] = mapped_column(CHAR(64), nullable=False)
 
 

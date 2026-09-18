@@ -26,7 +26,7 @@ def machine() -> MachineInformation:
         visibility="private",
         theme="Web SQL injection",
         difficulty="Easy",
-        operating_system="Ubuntu 26.04",
+        operating_system="Debian 13.7.0",
         needs_user_flag=True,
         user_flag_details="/home/student/user.txt",
     )
@@ -85,7 +85,7 @@ def test_selector_uses_machine_and_attack_graph_conditions() -> None:
     candidate = stored_skill(
         selectors=SkillSelectors(
             themes=["SQL"],
-            operating_systems=["ubuntu"],
+            operating_systems=["debian"],
             attack_step_kinds=["WEB_VULNERABILITY"],
             requires_user_flag=True,
         )
@@ -95,7 +95,7 @@ def test_selector_uses_machine_and_attack_graph_conditions() -> None:
 
     assert len(selected) == 1
     assert selected[0].selection_reason == (
-        "theme:sql,operating_system:ubuntu,requires_user_flag:True,"
+        "theme:sql,operating_system:debian,requires_user_flag:True,"
         "attack_step_kind:web_vulnerability"
     )
     assert SkillSelector().select([candidate], SkillPhase.SOURCE, machine(), scenario=None) == []
@@ -127,6 +127,16 @@ class FakeSkillRepository:
         self.candidates = candidates
         self.snapshots: dict[tuple[str, SkillPhase], SkillContext] = {}
         self.active_version_calls = 0
+        self.plans = {}
+
+    async def get_plan(self, session_id):
+        return self.plans.get(session_id)
+
+    async def create_plan(self, session_id, plan):
+        return self.plans.setdefault(session_id, plan.model_copy(deep=True))
+
+    async def finalize_references(self, session_id, context):
+        self.snapshots[(session_id, context.phase)] = context
 
     async def get_snapshot(self, session_id: str, phase: SkillPhase) -> SkillContext | None:
         return self.snapshots.get((session_id, phase))
@@ -146,6 +156,7 @@ class FakeSkillRepository:
         return {}
 
     async def clear_snapshots(self, session_id: str) -> None:
+        self.plans.pop(session_id, None)
         self.snapshots = {
             key: value for key, value in self.snapshots.items() if key[0] != session_id
         }
@@ -153,7 +164,7 @@ class FakeSkillRepository:
 
 @pytest.mark.asyncio
 async def test_service_pins_first_resolution_for_a_session_phase() -> None:
-    repository = FakeSkillRepository([stored_skill()])
+    repository = FakeSkillRepository([stored_skill(selectors=SkillSelectors(themes=["sql"]))])
     service = SkillService(
         repository,  # type: ignore[arg-type]
         max_active=10,

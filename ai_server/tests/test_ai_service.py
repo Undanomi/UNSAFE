@@ -165,7 +165,7 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
         manifest = (
             r'{"command":"find /tmp -exec test -f {} \;"}'
             if len(requests) == 1
-            else '{"target_os":"Ubuntu 26.04"}'
+            else '{"target_os":"Debian 13.7.0"}'
         )
         return gemini_response(
             {
@@ -195,7 +195,7 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
             Settings(gemini_api_key="test-key", generation_retries=2), client
         ).repair_source(machine, scenario, current, {"error": "validation failed"})
 
-    assert json.loads(patch.files[0].content)["target_os"] == "Ubuntu 26.04"
+    assert json.loads(patch.files[0].content)["target_os"] == "Debian 13.7.0"
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "model_output_validation_error" in second_prompt
@@ -360,9 +360,9 @@ def test_empty_exception_message_still_has_diagnostic_value() -> None:
     assert exception_detail(httpx.ReadTimeout("")) == "ReadTimeout"
 
 
-def test_machine_information_defaults_to_ubuntu_2604() -> None:
+def test_machine_information_defaults_to_debian_1370() -> None:
     machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
-    assert machine.operating_system == "Ubuntu 26.04"
+    assert machine.operating_system == "Debian 13.7.0"
     assert (
         MachineInformation(
             name="Test",
@@ -371,29 +371,29 @@ def test_machine_information_defaults_to_ubuntu_2604() -> None:
             difficulty="Easy",
             operating_system="  ",
         ).operating_system
-        == "Ubuntu 26.04"
+        == "Debian 13.7.0"
     )
 
 
 @pytest.mark.asyncio
-async def test_ubuntu_osv_evidence_is_filtered_by_target_release() -> None:
+async def test_debian_osv_evidence_is_filtered_by_target_release() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
                 "affected": [
-                    {"package": {"ecosystem": "Ubuntu:16.04:LTS", "name": "linux"}},
-                    {"package": {"ecosystem": "Ubuntu:26.04:LTS", "name": "linux"}},
+                    {"package": {"ecosystem": "Debian:12", "name": "linux"}},
+                    {"package": {"ecosystem": "Debian:13", "name": "linux"}},
                 ]
             },
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(Settings(), client)
-        evidence = await generator._ubuntu_evidence("CVE-2026-0001", "Ubuntu 26.04")
+        evidence = await generator._debian_evidence("CVE-2026-0001", "Debian 13.7.0")
 
     assert evidence is not None
-    assert evidence["ecosystem"] == "Ubuntu:26.04:LTS"
+    assert evidence["ecosystem"] == "Debian:13"
     assert len(evidence["affected"]) == 1
 
 
@@ -409,8 +409,8 @@ def test_kernel_cve_requires_target_release_osv_evidence() -> None:
     evidence = {
         "descriptions": [{"value": "A race condition in the Linux kernel"}],
         "affected": [],
-        "ubuntu_osv": {
-            "ecosystem": "Ubuntu:26.04:LTS",
+        "debian_osv": {
+            "ecosystem": "Debian:13",
             "tracked": True,
             "affected": [],
         },
@@ -419,7 +419,7 @@ def test_kernel_cve_requires_target_release_osv_evidence() -> None:
     GeminiGenerator._enforce_kernel_evidence(verification, evidence)
 
     assert verification.os_compatible is False
-    assert "Ubuntu:26.04:LTS" in verification.compatibility_reason
+    assert "Debian:13" in verification.compatibility_reason
 
 
 @pytest.mark.asyncio

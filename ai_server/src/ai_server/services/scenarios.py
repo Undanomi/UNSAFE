@@ -71,6 +71,7 @@ class ScenarioCoordinator:
                     scenario=scenario_skills,
                 ),
             )
+            await self.skill_service.finalize_scenario(session_id, scenario)
             state.scenario = scenario
             state.status = SessionStatus.SCENARIO_READY
             await self.repository.save(state)

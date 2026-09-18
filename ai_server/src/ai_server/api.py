@@ -60,7 +60,12 @@ async def get_session(
     repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    if state.build_id:
+    if state.build_id or state.status in {
+        SessionStatus.GENERATING_SCENARIO,
+        SessionStatus.GENERATING_CODE,
+        SessionStatus.BUILD_QUEUED,
+        SessionStatus.BUILDING,
+    }:
         try:
             state = await workflow.synchronize(state)
         except Exception as error:
@@ -80,9 +85,14 @@ async def save_machine_information(
     repository, _, _ = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    if state.build_id:
+    if state.build_id or state.status in {
+        SessionStatus.GENERATING_SCENARIO,
+        SessionStatus.GENERATING_CODE,
+        SessionStatus.BUILD_QUEUED,
+        SessionStatus.BUILDING,
+    }:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="machine build already started"
+            status_code=status.HTTP_409_CONFLICT, detail="machine generation already started"
         )
     await request.app.state.skills.reset(session_id)
     state.machine_information = machine_information
@@ -91,6 +101,16 @@ async def save_machine_information(
     state.error_message = None
     await repository.save(state)
     return _response(request, state)
+
+
+@router.get("/sessions/{session_id}/skills")
+async def skill_selection_report(
+    session_id: str, request: Request, user_id: UserHeader = None
+) -> dict:
+    repository, _, _ = _services(request)
+    state = await repository.get(session_id)
+    _authorize(state, user_id)
+    return await request.app.state.skills.selection_report(session_id)
 
 
 @router.get("/sessions/{session_id}/scenarios/events", name="scenario_events")

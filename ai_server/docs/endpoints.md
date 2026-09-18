@@ -16,7 +16,9 @@ POST /v1/sessions/{session_id}/machines
   ↓
 GET /v1/sessions/{session_id} で状態確認
   ↓
-GET /v1/sessions/{session_id}/download
+POST /v1/sessions/{session_id}/download-url（必要に応じて再発行）
+  ↓
+GET /v1/sessions/{session_id}/download?expires=...&signature=...
 ```
 
 | メソッド | パス | 役割 |
@@ -26,7 +28,8 @@ GET /v1/sessions/{session_id}/download
 | `PUT` | `/v1/sessions/{session_id}/machine-information` | マシン名や難易度などの生成条件を保存する |
 | `GET` | `/v1/sessions/{session_id}/scenarios/events` | シナリオを生成し、結果をSSEで受信する |
 | `POST` | `/v1/sessions/{session_id}/machines` | VMコード生成とbuild_serverへのビルド依頼を開始する |
-| `GET` | `/v1/sessions/{session_id}/download` | 完成したマシンイメージをダウンロードする |
+| `POST` | `/v1/sessions/{session_id}/download-url` | 一時的な署名付きダウンロードURLを発行する |
+| `GET` | `/v1/sessions/{session_id}/download?expires=...&signature=...` | 完成したマシンイメージをダウンロードする |
 | `GET` | `/v1/health/live` | ai_serverプロセスの生存を確認する |
 | `GET` | `/v1/health/ready` | PostgreSQLを含めてリクエスト処理可能か確認する |
 
@@ -40,7 +43,8 @@ X-Authenticated-User-ID: user-123
 
 作成時に指定したユーザーIDがセッション所有者として保存されます。同じセッションを操作する
 リクエストでは、同じ値を指定してください。異なる値を指定した場合は、セッションの存在を
-外部へ開示しないため `404` を返します。
+外部へ開示しないため `404` を返します。例外として、発行済みの署名付きURLからファイル本体を
+取得するGETにはこのヘッダーは不要です。
 
 現在の開発用設定ではこのヘッダーは省略可能です。セッション作成時に省略すると所有者は
 `local-user` になります。本番環境ではBFFが認証済みユーザーIDを必ず設定する想定です。
@@ -72,8 +76,9 @@ X-Authenticated-User-ID: user-123
 }
 ```
 
-`download_url` は、ビルドが完了して成果物が確定した場合だけ設定されます。新しく完了した
-ビルドでは `machine_access` に `{"username":"ubuntu","password":"..."}` が設定され、
+`download_url` は、ビルドが完了して成果物が確定した場合だけ設定されます。値はAIサーバを
+指す一時的な署名付きURLで、既定では発行から30分間有効です。新しく完了した
+ビルドでは `machine_access` に `{"username":"provisioner","password":"..."}` が設定され、
 ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報として扱ってください。
 
 ### セッション状態
@@ -118,7 +123,7 @@ build_serverへ依頼済みの場合は変更できません。
   "visibility": "private",
   "theme": "Web security",
   "difficulty": "Easy",
-  "operating_system": "Ubuntu 26.04",
+  "operating_system": "Debian 13.7.0",
   "needs_user_flag": true,
   "user_flag_details": "/home/student/user.txtをサービス調査後に取得する",
   "needs_system_flag": false,
@@ -132,7 +137,7 @@ build_serverへ依頼済みの場合は変更できません。
 | `visibility` | 必須 | `private`、`public`、`非公開`、`公開` |
 | `theme` | 必須 | 学習テーマ。1〜500文字 |
 | `difficulty` | 必須 | `Very Easy`、`Easy`、`Medium`、`High` |
-| `operating_system` | 任意 | 対象OS。省略時は `Ubuntu 26.04` |
+| `operating_system` | 任意 | 対象OS。省略時は `Debian 13.7.0` |
 | `needs_user_flag` | 任意 | ユーザーフラグを用意するか |
 | `user_flag_details` | 条件付き | `needs_user_flag=true` の場合は空にできない。最大4000文字 |
 | `needs_system_flag` | 任意 | システムフラグを用意するか |
@@ -152,12 +157,21 @@ build_serverへ依頼済みの場合は変更できません。
 生成します。攻撃ステップはCVEに限定せず、Web脆弱性、設定不備、認証情報、ロジック不備などを
 組み合わせられます。循環依存、存在しない前提ステップ、到達不能なflag目標はサーバ側で拒否します。
 
-`kind=cve` のステップが含まれる場合だけ、公式MITREレコードを取得します。Ubuntuの場合はさらに
-CanonicalのOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
+`kind=cve` のステップが含まれる場合だけ、公式MITREレコードを取得します。Debianの場合はさらに
+DebianのOSVデータを対象リリースで絞り込み、OS・脆弱バージョンの適合性を確認します。
 対象OSへ脆弱版を固定導入できないCVEが含まれる案は破棄し、攻撃グラフ全体を生成し直します。
 既定では2024年以降のCVEだけを候補にし、`CVE_MIN_YEAR` で下限年を変更できます。
 攻撃グラフの生成・検証に失敗した場合は既定で最大5回まで別案を作ります
 （`SCENARIO_GENERATION_ATTEMPTS` で変更できます）。
+
+Markdownを含む完成シナリオは、保存前に別のステートレスなAI呼び出しで敵対的・意味的レビューを
+行います。攻撃グラフとの整合、攻略経路の成立性、前提を飛ばす近道、検証計画を確認し、特に各段階の
+実効ユーザー、owner/group/mode、親ディレクトリの探索権限、ACL、sudoers、setuid/capability、
+flagの攻略前後の可読性を重点的に反証します。成立を妨げる権限は`permission_blocker`、広すぎる
+権限による近道は`permission_shortcut`として不合格にします。不合格所見のsummary、evidence、
+remediationは次の設計書生成へ直接渡され、通常は同じ攻撃グラフを維持したまま設計書を修正します。
+`broken_chain`の場合だけ攻撃グラフも再生成します。`SCENARIO_GENERATION_ATTEMPTS`の範囲で再試行し、
+レビューを通過したシナリオだけが保存されます。
 
 完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
 VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
@@ -212,7 +226,8 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 
 1. シナリオから `contents/` 以下のVMソースを生成
 2. 必須ファイル、manifest、Bash、XML、実行ファイルmodeなどを静的検証
-   - WebサービスではIP直アクセスの`/`、アプリ固有マーカー、`Index of`の否定検査を必須化
+   - WebサービスではIP直アクセスの`/`とアプリ固有マーカーの検査を必須化
+   - ディレクトリリスティングは一律禁止せず、攻撃グラフで意図した場合だけ限定的に構成するよう指示
    - Web実行ユーザーでの読み取り・探索権限と、`namei`/`stat`による配置mode検査を必須化
 3. 検証失敗時は既存ファイルと検証レポートをAIへ渡し、問題ファイルだけを差分修正
 4. `source.zip` を作成
@@ -235,13 +250,19 @@ control、requiresで指定された前提を飛ばせないことを確認し�
 `build_repair_attempts`はbuild_serverへの投入に成功した修復ビルドの累積実行回数です。差分履歴は
 生成ソース内の`repair_report.json`で確認できます。生成ソースのvalidation失敗とその差分修正、
 build_serverへの接続失敗では`build_repair_attempts`は増えません。
+各Build枠では`SOURCE_GENERATION_ATTEMPTS`（既定値3）までvalidationと差分修正を試します。
+validationを使い切っても次のBuild枠が残っていれば停止せず次枠へ進みます。したがって初回Buildと
+修復Buildを合わせた1サイクルのvalidation上限は
+`(1 + BUILD_REPAIR_MAX_ATTEMPTS) * SOURCE_GENERATION_ATTEMPTS`です。
 失敗状態のセッションへ同じ`POST /machines`を明示的に再実行した場合は、その時点の累積回数へ
 `BUILD_REPAIR_MAX_ATTEMPTS`を加えた値を新しいサイクルの上限として保存し、さらに設定回数分を
 自動修復できます。投入に成功するたび以前の`build_repair_attempts`へ1加算するため、明示的な
 再リクエストを繰り返すと`BUILD_REPAIR_MAX_ATTEMPTS`を超えます。ai_server再起動などで
 保存状態が古い場合は、build_serverの最新状態を同期してから判定します。
-`GET /sessions/{session_id}`による状態確認だけではカウンターをリセットしないため、ポーリングに
-よって修復予算が意図せず更新されることはありません。
+ビルドの開始と失敗・キャンセル後の再開を要求できるのは`POST /machines`だけです。
+`GET /sessions/{session_id}`と`POST /download-url`はカウンターをリセットせず、修復ビルドも
+開始しません。すでに`POST /machines`から開始済みのバックグラウンド監視と自動修復は、これらの
+エンドポイントへのアクセスに関係なく継続します。
 
 ## セッションとビルド状態を取得する
 
@@ -249,7 +270,8 @@ build_serverへの接続失敗では`build_repair_attempts`は増えません。
 
 画面の再読み込み、進捗ポーリング、エラー表示に使う状態取得エンドポイントです。
 セッションに `build_id` がある場合は、呼び出し時にbuild_serverへ最新状態を問い合わせ、
-`build_status`、`build_progress`、成果物情報を更新してから返します。
+`build_status`、`build_progress`、成果物情報を更新してから返します。この同期から失敗ビルドの
+修復を開始することはありません。再開するには`POST /machines`を使用します。
 
 ```sh
 curl http://localhost:8000/v1/sessions/{session_id} \
@@ -258,25 +280,52 @@ curl http://localhost:8000/v1/sessions/{session_id} \
 
 build_serverの状態が `completed` になると、ai_serverは成果物一覧から`tar.zst`形式の配布物を
 ダウンロード対象に選びます。`tar.zst`がなければ旧形式へフォールバックせずエラーになります。
-選択後、セッション状態が `completed` となり、`download_url`
+選択後、セッション状態が `completed` となり、一時的な署名付き`download_url`
 が設定されます。build_serverが返したランダムなマシンパスワードも `machine_access` として
 同じセッションへ保存されます。変更前に完了したビルドなど、パスワード情報がない場合は
 `machine_access` は `null` のままです。
 
 ## 完成したマシンをダウンロードする
 
-### `GET /v1/sessions/{session_id}/download`
+### `POST /v1/sessions/{session_id}/download-url`
 
-build_serverの内部URLを利用者へ公開せず、選択済み成果物をai_server経由でストリーミング
-します。build_serverのポートはホストへ公開しないため、利用者はこのエンドポイントを使用します。
-レスポンスは `application/zstd` で、ファイル名は
-`Content-Disposition` ヘッダーに設定されます。成果物メタデータにファイルサイズがある場合は
-`Content-Length` も返すため、curlなどのクライアントが進捗率と残り時間を表示できます。
+ログイン状態を確認できる通常のAPI経路から、完成済み成果物用の新しい署名付きURLを発行します。
+所有者以外には`404 Not Found`、未完成の場合は`409 Conflict`を返します。未完成状態の確認時に
+ビルドや修復を開始することはありません。
 
 ```sh
-curl -L -o slsg-machine.tar.zst \
-  http://localhost:8000/v1/sessions/{session_id}/download \
+curl -X POST http://localhost:8000/v1/sessions/{session_id}/download-url \
   -H 'X-Authenticated-User-ID: user-123'
+```
+
+```json
+{
+  "download_url": "http://localhost:8000/v1/sessions/.../download?expires=...&signature=...",
+  "expires_at": "2026-08-27T12:00:00Z"
+}
+```
+
+有効期間は既定で30分であり、`DOWNLOAD_URL_TTL_SECONDS`で60秒〜24時間の範囲に変更できます。
+本番環境では32文字以上のランダムな`DOWNLOAD_SIGNING_SECRET`を設定してください。
+
+### `GET /v1/sessions/{session_id}/download?expires=...&signature=...`
+
+build_serverの内部URLを利用者へ公開せず、選択済み成果物をai_server経由でストリーミング
+します。このリクエスト自体にはユーザー識別ヘッダーは不要ですが、有効な署名と失効時刻が必須です。
+署名はsession ID、build ID、artifact ID、失効時刻に結び付いており、改変または期限切れの場合は
+`403 Forbidden`を返します。build_serverのポートはホストへ公開しないため、利用者はこの
+AIサーバのエンドポイントを使用します。
+レスポンスは `application/zstd` で、ファイル名は
+`Content-Disposition` ヘッダーに設定されます。成果物メタデータにファイルサイズがある場合は
+`Content-Length` も返します。`Range`を指定すると`206 Partial Content`と`Content-Range`を返し、
+範囲外の場合は`416 Range Not Satisfiable`を返します。SHA256チェックサムを`ETag`として返し、
+`If-Range`が一致する場合だけ部分配信を継続します。
+
+```sh
+DOWNLOAD_URL=$(curl -s -X POST \
+  http://localhost:8000/v1/sessions/{session_id}/download-url \
+  -H 'X-Authenticated-User-ID: user-123' | jq -r .download_url)
+curl -L -C - -o slsg-machine.tar.zst "$DOWNLOAD_URL"
 ```
 
 配布物には`image.qcow2`、Windows/macOS/Linux用起動スクリプト、各OS用READMEが含まれます。
@@ -287,8 +336,8 @@ tar --zstd -xf slsg-machine.tar.zst
 cd slsg-machine
 ```
 
-ダウンロード要求時にもbuild_serverの状態を同期します。まだ成果物が完成していない場合は
-`409 Conflict` を返します。
+URL発行時にbuild_serverの状態を同期します。URLが失効した後も開始済みのレスポンスは中断せず、
+切断後の再開時には新しいURLを発行します。まだ成果物が完成していない場合は`409 Conflict`を返します。
 
 ## ヘルスチェック
 

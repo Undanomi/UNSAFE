@@ -19,6 +19,7 @@ from .services.scenarios import ScenarioCoordinator
 from .services.source_archive import SourceArchive
 from .services.stub_ai import StubGenerator
 from .services.workflow import MachineWorkflow
+from .skills.planning import SemanticSkillPlanner
 from .skills.repository import SkillRepository
 from .skills.service import NoopSkillService, SkillResolver, SkillService
 
@@ -58,6 +59,17 @@ def create_app(
                 max_active=resolved.skills_max_active,
                 max_per_phase=resolved.skills_max_per_phase,
                 max_context_chars=resolved.skill_context_max_chars,
+                planner=SemanticSkillPlanner(
+                    generator._generate,
+                    model=resolved.gemini_model,
+                    min_cve_year=resolved.cve_min_year,
+                    max_catalog_chars=resolved.skill_selection_max_chars,
+                    max_skills=resolved.skills_max_per_phase,
+                    max_cves=resolved.skill_selection_max_cves,
+                    retries=resolved.skill_selection_retries,
+                )
+                if isinstance(generator, GeminiGenerator)
+                else None,
             )
         else:
             skill_service = NoopSkillService()
