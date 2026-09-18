@@ -17,6 +17,7 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    ScenarioGeneration,
     ScenarioReview,
     ScenarioRevision,
     SourceFile,
@@ -376,14 +377,18 @@ JSONのみを返してください:
                 if graph is None:
                     candidate = await self._draft_attack_graph(machine, rejected)
                     graph = await self._verify_attack_graph(machine, candidate)
-                definition = await self._generate(
+                response = await self._generate(
                     scenario_prompt(machine, graph.model_dump_json(indent=2), rejected),
+                    json_output=True,
+                    response_schema=ScenarioGeneration,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
+                generated = ScenarioGeneration.model_validate_json(response)
                 scenario = ScenarioDraft(
                     scenario_id=f"scenario-{uuid4().hex}",
                     title=machine.name,
-                    definition=definition,
+                    scenario_description=generated.scenario_description,
+                    definition=generated.definition,
                     target_os=machine.operating_system,
                     attack_graph=graph,
                 )
@@ -509,7 +514,11 @@ JSONのみを返してください:
                 if revised_objectives != expected_objectives:
                     raise ValueError("scenario revision must preserve flag objectives")
                 revision_text = (
-                    revision.definition + "\n" + revision.attack_graph.model_dump_json()
+                    revision.scenario_description
+                    + "\n"
+                    + revision.definition
+                    + "\n"
+                    + revision.attack_graph.model_dump_json()
                 ).casefold()
                 for flag in (scenario.user_flag, scenario.system_flag):
                     if flag and flag.casefold() in revision_text:

@@ -106,6 +106,10 @@ class StubGenerator:
         return ScenarioDraft(
             scenario_id=f"scenario-{uuid4().hex}",
             title=machine.name,
+            scenario_description=(
+                f"{machine.theme}を題材に、隔離された環境を調査するセキュリティ演習です。"
+                "マシンの構成や動作を詳しく調べ、演習環境に隠されたフラグを見つけ出してください。"
+            ),
             definition=definition,
             target_os=machine.operating_system,
             attack_graph=attack_graph,
@@ -231,6 +235,10 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         current: GeneratedSource,
     ) -> ScenarioRevision:
         return ScenarioRevision(
+            scenario_description=(
+                scenario.scenario_description
+                or "この教育用マシンを調査し、設定されたフラグを獲得してください。"
+            ),
             definition=scenario.definition,
             attack_graph=scenario.attack_graph,
             summary="The deterministic stub source remains synchronized with the scenario.",

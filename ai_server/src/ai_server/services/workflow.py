@@ -240,6 +240,7 @@ class MachineWorkflow:
                         )
                         working_scenario = working_scenario.model_copy(
                             update={
+                                "scenario_description": revision.scenario_description,
                                 "definition": revision.definition,
                                 "attack_graph": revision.attack_graph,
                             }

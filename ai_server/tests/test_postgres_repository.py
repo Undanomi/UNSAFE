@@ -42,6 +42,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         loaded.scenario = ScenarioDraft(
             scenario_id="scenario-postgres-test",
             title="Postgres Test",
+            scenario_description="Investigate the database training machine.",
             definition="# persisted scenario",
             target_os="Debian 13.7.0",
             user_flag="flag{user_postgres_test}",
@@ -78,6 +79,9 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         await repository.save(loaded)
         persisted = await repository.get(state.session_id)
         assert persisted.scenario is not None
+        assert (
+            persisted.scenario.scenario_description == "Investigate the database training machine."
+        )
         assert persisted.scenario.definition == "# persisted scenario"
         assert persisted.scenario.target_os == "Debian 13.7.0"
         assert persisted.scenario.user_flag == "flag{user_postgres_test}"

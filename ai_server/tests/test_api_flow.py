@@ -423,6 +423,7 @@ async def test_failed_packer_build_repairs_source(client) -> None:
 
     async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
         return ScenarioRevision(
+            scenario_description="Updated player introduction after source repair.",
             definition="retry synchronized with repaired source",
             attack_graph=scenario.attack_graph,
             summary="Updated the scenario after source repair.",
@@ -448,6 +449,10 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert submitted_state.build_repair_attempts == 1
     assert submitted_state.build_repair_attempt_limit == 3
     assert submitted_state.scenario is not None
+    assert (
+        submitted_state.scenario.scenario_description
+        == "Updated player introduction after source repair."
+    )
     assert submitted_state.scenario.definition == "retry synchronized with repaired source"
     assert fake_build.submitted_request["idempotency_key"].startswith(
         f"ai-session-{state.session_id}-"

@@ -21,6 +21,12 @@ export type AiSessionResponse = {
   download_url: string | null
   user_flag: string | null
   system_flag: string | null
+  scenario: {
+    scenario_id: string
+    title: string
+    scenario_description: string
+    definition: string
+  } | null
 }
 
 type DownloadURLResponse = {

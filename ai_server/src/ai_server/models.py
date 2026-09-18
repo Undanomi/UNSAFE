@@ -150,6 +150,7 @@ class ScenarioDraft(BaseModel):
     scenario_id: str
     scenario_version_id: str = "v1"
     title: str
+    scenario_description: str = Field(default="", max_length=1000)
     definition: str
     target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
@@ -187,6 +188,7 @@ class ScenarioReviewFinding(BaseModel):
         "unintended_shortcut",
         "acceptance_test_gap",
         "unsupported_assumption",
+        "description_spoiler",
     ]
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
@@ -206,9 +208,15 @@ class ScenarioReview(BaseModel):
 
 
 class ScenarioRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=12000)
     attack_graph: AttackGraph
     summary: str = Field(min_length=1, max_length=4000)
+
+
+class ScenarioGeneration(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=12000)
 
 
 class SourceReviewFinding(BaseModel):

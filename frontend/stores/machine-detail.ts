@@ -10,6 +10,7 @@ export type FlagDefinition = {
 export type MachineBuildState = {
   status: MachinesDocument["status"]
   progress: number
+  description?: string
 }
 
 export type MachineDetail = Pick<

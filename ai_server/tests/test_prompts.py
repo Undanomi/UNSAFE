@@ -61,6 +61,10 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "完全なスクリプトや全コマンドはコード生成段階へ委ねる" in prompt
         assert "全親ディレクトリのowner/group/mode" in prompt
 
+    assert "対象マシンを調査すること" in design_prompts[1]
+    assert "フラグを獲得すること" in design_prompts[1]
+    assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
+
     assert len(design_prompts[0]) < 3000
     assert len(design_prompts[1]) < 2500
 
@@ -185,12 +189,15 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "相反する記述" in scenario_review
     assert "任意のコマンド・コード・式" in scenario_review
     assert "操作方法や通信チャネルの変更" in scenario_review
+    assert "description_spoiler" in scenario_review
+    assert "特定の定型句や表記の完全一致は要求しない" in scenario_review
 
     sync_prompt = scenario_sync_prompt(machine, scenario, source)
     assert "実装とシナリオを同期" in sync_prompt
     assert "owner、group、mode、ACL、sudoers、capability" in sync_prompt
     assert "実装と異なる古いパス、権限" in sync_prompt
     assert "正解フラグ値そのもの" in sync_prompt
+    assert "scenario_description" in sync_prompt
     assert "negative control" in scenario_review
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review

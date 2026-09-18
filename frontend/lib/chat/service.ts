@@ -2,6 +2,7 @@ import "server-only"
 
 import { Timestamp } from "firebase-admin/firestore"
 import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
+import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
 import {
   CHAT_STEPS,
   type ChatAnswers,
@@ -195,7 +196,7 @@ export async function createMachineDocumentService(
         created_by: `users/${ownerUserId}`,
         name: chat.answers.name,
         summary: `${chat.answers.theme}を学ぶためのマシンです。`,
-        description: "AIがシナリオとマシンを生成しています。完了までしばらくお待ちください。",
+        description: BUILDING_MACHINE_DESCRIPTION,
         file_path: "",
         level: difficultyToLevel(chat.answers.difficulty),
         published: chat.answers.visibility === "公開",

@@ -8,6 +8,10 @@ import {
   startMachineBuildService,
 } from "@/lib/ai/service"
 import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
+import {
+  BUILDING_MACHINE_DESCRIPTION,
+  completedMachineDescription,
+} from "@/lib/machines/description"
 import type { MachineBuildState, MachineDetail } from "@/stores/machine-detail"
 import type { MachinesDocument } from "@/types/firestore"
 
@@ -57,6 +61,7 @@ async function saveMachineBuildState(
     status: state.status,
     build_progress: state.progress,
     error_message: null,
+    ...(state.description ? { description: state.description } : {}),
   })
   batch.update(firestore.collection("chat_sessions").doc(aiSessionId), {
     creation_status: chatStatus,
@@ -85,6 +90,25 @@ export async function getMachineDetailService(
 
   const ownerSnapshot = await firestore.collection("users").doc(ownerUserId).get()
   const owner = ownerSnapshot.data() as { name?: string } | undefined
+  let description = machine.description
+  if (
+    machine.status === "ready" &&
+    description === BUILDING_MACHINE_DESCRIPTION &&
+    machine.ai_session_id
+  ) {
+    try {
+      const aiSession = await getAiSessionService(ownerUserId, machine.ai_session_id)
+      if (aiSession.status === "completed") {
+        description = completedMachineDescription(
+          machine.name,
+          aiSession.scenario?.scenario_description,
+        )
+        await snapshot.ref.update({ description })
+      }
+    } catch (error) {
+      console.error("Failed to refresh the completed machine description.", error)
+    }
+  }
 
   return {
     id: snapshot.id,
@@ -95,7 +119,7 @@ export async function getMachineDetailService(
     theme: machine.tags[0] ?? "セキュリティ",
     difficulty: toDifficulty(machine.level),
     summary: machine.summary,
-    description: machine.description,
+    description,
     buildProgress: machine.build_progress ?? 0,
     canRetry: isOwner,
     status: machine.status,
@@ -120,7 +144,12 @@ export async function synchronizeMachineBuildService(
   if (!machine.published && !isOwner) return null
 
   const aiSession = await getAiSessionService(ownerUserId, machine.ai_session_id)
-  const state = toMachineBuildState(aiSession)
+  const buildState = toMachineBuildState(aiSession)
+  const description =
+    buildState.status === "ready"
+      ? completedMachineDescription(machine.name, aiSession.scenario?.scenario_description)
+      : undefined
+  const state = { ...buildState, ...(description ? { description } : {}) }
   await saveMachineBuildState(machineId, machine.ai_session_id, state)
   return state
 }
@@ -134,13 +163,23 @@ export async function retryMachineBuildService(
 
   const current = await getAiSessionService(ownerUserId, machine.ai_session_id)
   if (current.status !== "failed") {
-    const state = toMachineBuildState(current)
+    const buildState = toMachineBuildState(current)
+    const description =
+      buildState.status === "ready"
+        ? completedMachineDescription(machine.name, current.scenario?.scenario_description)
+        : undefined
+    const state = { ...buildState, ...(description ? { description } : {}) }
     await saveMachineBuildState(machineId, machine.ai_session_id, state)
     return state
   }
 
   const restarted = await startMachineBuildService(ownerUserId, machine.ai_session_id)
-  const state = toMachineBuildState(restarted)
+  const buildState = toMachineBuildState(restarted)
+  const description =
+    buildState.status === "ready"
+      ? completedMachineDescription(machine.name, restarted.scenario?.scenario_description)
+      : undefined
+  const state = { ...buildState, ...(description ? { description } : {}) }
   await saveMachineBuildState(machineId, machine.ai_session_id, state)
   return state
 }

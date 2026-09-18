@@ -87,6 +87,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
     status: machine.status ?? "ready",
     progress: machine.buildProgress ?? 0,
   })
+  const [description, setDescription] = useState(machine.description)
   const [isRetrying, setIsRetrying] = useState(false)
   const [retryError, setRetryError] = useState("")
   const isBuilding = buildState.status === "building" || buildState.status === "preparing"
@@ -107,6 +108,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         if (!response.ok) throw new Error("ビルド状態を取得できませんでした。")
         const state = (await response.json()) as MachineBuildState
         setBuildState(state)
+        if (state.description) setDescription(state.description)
         if (state.status === "building" || state.status === "preparing") {
           timeoutId = setTimeout(poll, 5000)
         }
@@ -134,6 +136,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         return
       }
       setBuildState(result.state)
+      if (result.state.description) setDescription(result.state.description)
     } catch {
       setRetryError("再ビルドを開始できませんでした。もう一度お試しください。")
     } finally {
@@ -205,7 +208,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
           マシンの説明
         </h2>
-        <p className="mt-3 leading-[1.75] text-[#61605b]">{machine.description}</p>
+        <p className="mt-3 leading-[1.75] text-[#61605b]">{description}</p>
         <div className="mt-5 flex flex-wrap gap-2 text-[0.82rem] text-[#61605b]">
           <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold text-[#20201e]">
             {machine.visibility}
