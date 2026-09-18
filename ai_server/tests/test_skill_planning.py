@@ -40,9 +40,10 @@ def catalog(tmp_path):
     return as_candidates(load_skills(tmp_path, created_by="test"))
 
 
-def decision(*names):
+def decision(*names, supported=True):
     return json.dumps(
         {
+            "input_supported": supported,
             "selected": [
                 {"name": name, "reason": "Matches the requested learning objective"}
                 for name in names
@@ -98,9 +99,9 @@ async def test_semantic_selection_uses_metadata_then_selected_reference_summarie
     used = context_for_graph(context, graph("CVE-2025-1111"))
     assert "BODY-1111" in SkillRenderer.render(used)
     assert "BODY-2222" not in SkillRenderer.render(used)
-    assert used.skills[0].reference_mode == "required"
-    with pytest.raises(SkillSelectionError):
-        context_for_graph(context, graph("CVE-2025-9999"))
+    assert used.skills[0].reference_mode == "used"
+    unlisted = context_for_graph(context, graph("CVE-2025-9999"))
+    assert unlisted.skills[0].selected_reference_ids == []
 
 
 @pytest.mark.asyncio
@@ -149,13 +150,17 @@ async def test_invalid_choices_retry_with_catalog_validation(tmp_path, bad):
 async def test_no_match_and_exhausted_retries_are_explicit_errors(tmp_path):
     items = catalog(tmp_path)
     with pytest.raises(NoMatchingSkillError, match="Evaluation selection"):
-        await SemanticSkillPlanner(Generator(decision()), model="test").plan(machine(), items)
+        await SemanticSkillPlanner(Generator(decision(supported=False)), model="test").plan(
+            machine(), items
+        )
     with pytest.raises(SkillSelectionError, match="Could not validate"):
         await SemanticSkillPlanner(Generator(decision("x"), decision("x")), model="test").plan(
             machine(), items
         )
     with pytest.raises(NoMatchingSkillError):
-        await SemanticSkillPlanner(Generator(), model="test").plan(machine(), [])
+        await SemanticSkillPlanner(Generator(decision(supported=False)), model="test").plan(
+            machine(), []
+        )
 
 
 @pytest.mark.asyncio
@@ -236,7 +241,7 @@ async def test_changed_input_and_cve_phase_mismatch_fail(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_source_only_semantic_skill_does_not_allow_unselected_cves(tmp_path):
+async def test_source_only_semantic_skill_allows_unselected_cves(tmp_path):
     from ai_server.services.ai import GeminiGenerator
     from ai_server.skills.models import ScenarioSkillContexts, skill_checksum
 
@@ -255,11 +260,10 @@ async def test_source_only_semantic_skill_does_not_allow_unselected_cves(tmp_pat
     )
     for _ in range(2):  # Both fresh and persisted phase resolution.
         context = await service.resolve("test", SkillPhase.ATTACK_GRAPH, machine())
-        assert not context.skills and context.restrict_cves
-        with pytest.raises(ValueError, match="No cve Skill"):
-            GeminiGenerator._validate_skill_cves(
-                graph("CVE-2025-1111"), ScenarioSkillContexts(attack_graph=context), machine()
-            )
+        assert not context.skills
+        GeminiGenerator._validate_skill_cves(
+            graph("CVE-2025-1111"), ScenarioSkillContexts(attack_graph=context), machine()
+        )
 
 
 @pytest.mark.asyncio
@@ -271,7 +275,7 @@ async def test_api_automatic_selection_report_reset_and_failure(tmp_path):
     from ai_server.main import create_app
     from ai_server.models import SessionStatus
 
-    generate = Generator(decision("ssti"), decision())
+    generate = Generator(decision("ssti"), decision(supported=False))
     repository = FakeSkillRepository(catalog(tmp_path))
     service = SkillService(
         repository,
@@ -326,7 +330,7 @@ async def test_api_automatic_selection_report_reset_and_failure(tmp_path):
         assert (await client.get(base + "/skills", headers=headers)).json()["plan"] is None
         failed = await client.get(base + "/scenarios/events", headers=headers)
         assert "scenario.error" in failed.text
-        assert "No matching Skill" in failed.text
+        assert "Unsupported learning input" in failed.text
         assert (await app.state.repository.get(sid)).status == SessionStatus.FAILED
 
 
@@ -353,7 +357,7 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
         attack_graph=await service.resolve("test", SkillPhase.ATTACK_GRAPH, m),
         scenario=await service.resolve("test", SkillPhase.SCENARIO, m),
     )
-    used_graph = graph("CVE-2025-1111")
+    used_graph = graph("CVE-2025-1111", "CVE-2025-9999")
     prompts = []
 
     async def draft(machine, rejected, context):
@@ -403,7 +407,7 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
         context = await service.resolve("test", phase, m, result)
         assert context.skills[0].selected_reference_ids == ["CVE-2025-1111"]
         assert "BODY-2222" not in SkillRenderer.render(context)
-    # General Skills must not lead to unregistered CVE additions.
+    # General Skills are advisory and do not prohibit additional CVEs.
     general = context_from_plan(
         await SemanticSkillPlanner(Generator(decision("ssti")), model="test").plan(
             m, repository.candidates
@@ -413,7 +417,4 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
         max_per_phase=8,
         max_context_chars=50000,
     )
-    with pytest.raises(ValueError, match="No cve Skill"):
-        GeminiGenerator._validate_skill_cves(
-            used_graph, ScenarioSkillContexts(attack_graph=general), m
-        )
+    GeminiGenerator._validate_skill_cves(used_graph, ScenarioSkillContexts(attack_graph=general), m)

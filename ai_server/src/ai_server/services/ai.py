@@ -33,6 +33,7 @@ from ..prompts import (
 from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
 from ..skills.planning import context_for_graph
 from ..skills.renderer import SkillRenderer
+from ..skills.selector import SkillSelector
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 GEMINI_JSON_SCHEMA_KEYS = {
@@ -384,6 +385,8 @@ JSONのみを返してください:
         skills: ScenarioSkillContexts | None = None,
     ) -> ScenarioDraft:
         resolved_skills = skills or ScenarioSkillContexts()
+        for requested_id in SkillSelector.cve_ids(machine):
+            self._validate_cve_id(requested_id)
         for skill in resolved_skills.attack_graph.skills:
             if skill.name == "cve":
                 for reference_id in skill.selected_reference_ids:
@@ -468,22 +471,10 @@ JSONのみを返してください:
     def _validate_skill_cves(
         graph: AttackGraph, skills: ScenarioSkillContexts, machine: MachineInformation
     ) -> None:
-        cve_skills = [item for item in skills.attack_graph.skills if item.name == "cve"]
-        if not cve_skills:
-            if machine.cve_ids:
-                raise ValueError("Requested CVEs require an applied cve Skill")
-            if any(step.cve_id for step in graph.steps) and (
-                skills.attack_graph.restrict_cves
-                or machine.skill_names
-                or any(
-                    item.selection_reason.startswith("semantic:")
-                    for item in skills.attack_graph.skills
-                )
-            ):
-                raise ValueError(
-                    "No cve Skill was selected; do not add CVEs outside the selected Skills"
-                )
-            return
+        required = set(SkillSelector.cve_ids(machine))
+        actual = {step.cve_id for step in graph.steps if step.cve_id}
+        if not required <= actual:
+            raise ValueError(f"Attack graph must use requested CVEs: {sorted(required - actual)}")
         try:
             context_for_graph(skills.attack_graph, graph)
         except ValueError as error:

@@ -31,15 +31,15 @@ class SkillRenderer:
                     f"{html.escape(reference.content)}\n</reference>"
                 )
             if skill.name == "cve":
-                details.insert(
-                    0,
-                    (
-                        "今回使用するCVEは次の候補から必要なものを1件以上選び、全候補を無理に組み込まないでください: "
-                        if skill.reference_mode == "candidates"
-                        else "今回使用するCVEは次のreferenceに限定し、指定されたCVEをすべて攻撃グラフに含めてください: "
+                if skill.reference_mode == "required" and skill.selected_reference_ids:
+                    guidance = (
+                        "明示指定された次のCVEはすべて使用してください。追加CVEの利用も可能です: "
                     )
-                    + ", ".join(skill.selected_reference_ids),
-                )
+                elif skill.reference_mode == "used":
+                    guidance = "攻撃グラフで採用したCVEのうち、登録済みreferenceがあるもの: "
+                else:
+                    guidance = "参考となるCVE候補です。採用は任意で、候補以外のCVEも公式情報とOS適合性の検証を通過すれば利用できます: "
+                details.insert(0, guidance + (", ".join(skill.selected_reference_ids) or "なし"))
             sections.append(
                 f'<skill name="{html.escape(skill.name)}" version="{skill.version}">\n'
                 f"{html.escape(skill.instructions)}\n" + "\n".join(details) + "\n"

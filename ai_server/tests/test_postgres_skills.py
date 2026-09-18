@@ -110,7 +110,7 @@ async def test_import_references_round_trip_and_pinning():
             )
             == snapshot
         )
-        snapshot.skills[0].reference_mode = "required"
+        snapshot.skills[0].reference_mode = "used"
         await skills.finalize_references(state.session_id, snapshot)
         assert (
             await skills.get_snapshot(state.session_id, SkillPhase.SCENARIO)
@@ -120,7 +120,7 @@ async def test_import_references_round_trip_and_pinning():
             report["plan"]["skills"][0]["reference_reasons"]["example"]
             == "matches the learning goal"
         )
-        assert report["phases"]["scenario"][0]["reference_mode"] == "required"
+        assert report["phases"]["scenario"][0]["reference_mode"] == "used"
         await planned_service.reset(state.session_id)
         assert await skills.get_plan(state.session_id) is None
         assert await skills.snapshot_manifest(state.session_id) == {}

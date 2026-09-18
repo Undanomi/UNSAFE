@@ -50,14 +50,12 @@ def test_explicit_missing_skill_and_budgets_fail(tmp_path):
         select_context(items, SkillPhase.SOURCE, m, max_context_chars=10)
 
 
-def test_cve_requires_existing_reference_ids(tmp_path):
+def test_cve_uses_available_references_without_requiring_coverage(tmp_path):
     items = candidates(tmp_path)
     m = machine().model_copy(update={"skill_names": ["cve"]})
-    with pytest.raises(ValueError, match="cve_ids"):
-        select_context(items, SkillPhase.ATTACK_GRAPH, m)
+    assert select_context(items, SkillPhase.ATTACK_GRAPH, m).skills[0].selected_reference_ids == []
     m.cve_ids = ["CVE-2025-9999"]
-    with pytest.raises(ValueError, match="Missing CVE references"):
-        select_context(items, SkillPhase.ATTACK_GRAPH, m)
+    assert select_context(items, SkillPhase.ATTACK_GRAPH, m).skills[0].selected_reference_ids == []
     m.cve_ids = ["CVE-2025-1234"]
     context = select_context(items, SkillPhase.ATTACK_GRAPH, m)
     assert context.skills[0].selected_reference_ids == m.cve_ids
@@ -93,7 +91,6 @@ async def test_disabled_skills_reject_explicit_requests():
     [
         {"operating_system": "Ubuntu 26.04"},
         {"skill_names": ["ssti", "ssti"]},
-        {"skill_names": [], "cve_ids": ["CVE-2025-1234"]},
         {"cve_ids": ["invalid"]},
     ],
 )

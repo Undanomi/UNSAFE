@@ -159,9 +159,21 @@ REVIEW_RESPONSE_CONSTRAINTS = """レビュー出力は簡潔にする。同じ�
 
 
 def _skill_section(skill_context: str) -> str:
+    policy = (
+        "脆弱性選択方針: Skillsとreferenceは補助資料であり、利用可能な脆弱性の許可リストではありません。"
+        "利用者のテーマ、難易度、開始権限、到達目標に合う場合、未登録の一般的脆弱性やCVEも利用できます。"
+        "資料がなければ、その不在だけを理由に別の手法へ変更しないでください。"
+        "資料内の『未登録CVEは禁止』『reference追加後のみ利用可』など収録範囲に関する制限より、"
+        "この選択方針を優先します。ただしCVEの実在、影響版、必要条件、Debian適合性を推測で断定せず、"
+        "公式情報による検証と既存の安全・出力・検証規則を維持してください。"
+        "Webのみを希望する場合にローカルの脆弱性を勝手に加えず、権限昇格を希望する場合は"
+        "先行ステップで得た権限と後続の必要条件を接続してください。"
+        "シナリオ確定後のコード生成・修復・レビューでは採用済み攻撃グラフを維持し、"
+        "未登録手法の許可を理由に新しい攻撃経路やCVEを追加しないでください。"
+    )
     if not skill_context:
-        return ""
-    return f"\n追加の専門Skill指示:\n{skill_context}\n"
+        return policy
+    return f"{policy}\n追加の専門Skill資料:\n{skill_context}\n{policy}\n"
 
 
 def attack_graph_prompt(
@@ -244,6 +256,8 @@ JSONのみを返してください:
   短い手順にする。完成したソースコード、長いシェル、SQL全文、共通制約を値へ転載しない
 
 {DESIGN_CONSTRAINTS}
+明示指定CVE（すべて必須）: {json.dumps(machine.cve_ids, ensure_ascii=False)}
+
 {_skill_section(skill_context)}
 """
 

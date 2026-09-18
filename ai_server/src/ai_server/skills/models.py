@@ -127,7 +127,7 @@ class StoredSkill(BaseModel):
 class AppliedSkill(StoredSkill):
     selection_reason: str
     selected_reference_ids: list[str] = Field(default_factory=list)
-    reference_mode: Literal["required", "candidates"] = "required"
+    reference_mode: Literal["required", "candidates", "used"] = "required"
     reference_reasons: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -143,8 +143,6 @@ class AppliedSkill(StoredSkill):
 class SkillContext(BaseModel):
     phase: SkillPhase
     skills: list[AppliedSkill] = Field(default_factory=list)
-    # Derived from the session plan, including when this phase has no Skill body.
-    restrict_cves: bool = False
 
 
 class ScenarioSkillContexts(BaseModel):

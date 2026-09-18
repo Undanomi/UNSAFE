@@ -48,12 +48,6 @@ class MachineInformation(BaseModel):
             raise ValueError("Skill names and CVE IDs must not contain duplicates")
         return values
 
-    @model_validator(mode="after")
-    def validate_cve_skill_choice(self) -> MachineInformation:
-        if self.cve_ids and self.skill_names is not None and "cve" not in self.skill_names:
-            raise ValueError("skill_names must include cve when cve_ids are specified")
-        return self
-
     @field_validator("operating_system", mode="before")
     @classmethod
     def default_operating_system(cls, value):

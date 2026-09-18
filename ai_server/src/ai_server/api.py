@@ -127,7 +127,23 @@ async def skill_selection_report(
     repository, _, _ = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    return await request.app.state.skills.selection_report(session_id)
+    report = await request.app.state.skills.selection_report(session_id)
+    if state.scenario is None:
+        report["cve_usage"] = None
+    else:
+        used = {step.cve_id for step in state.scenario.attack_graph.steps if step.cve_id}
+        references = {
+            reference["id"]
+            for item in report["phases"].get("scenario", [])
+            if item["name"] == "cve"
+            for reference in item["references"]
+        }
+        report["cve_usage"] = {
+            "used": sorted(used),
+            "with_skill_reference": sorted(used & references),
+            "without_skill_reference": sorted(used - references),
+        }
+    return report
 
 
 @router.get("/sessions/{session_id}/scenarios/events", name="scenario_events")

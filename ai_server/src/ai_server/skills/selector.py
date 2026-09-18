@@ -17,8 +17,7 @@ class SkillSelector:
         selected: list[AppliedSkill] = []
         requested = machine.skill_names
         available = {item.name for item in candidates}
-        requested_cves = machine.cve_ids or (self.cve_ids(machine) if requested is None else [])
-        required = set(requested or []) | ({"cve"} if requested_cves else set())
+        required = set(requested or [])
         missing = required - available
         if missing:
             raise ValueError(
@@ -34,16 +33,12 @@ class SkillSelector:
                 references = [item.reference_id for item in candidate.references]
                 if candidate.name == "cve":
                     ids = self.cve_ids(machine, scenario)
-                    if not ids:
-                        raise ValueError("Select CVE reference IDs with cve_ids before generation")
-                    missing_refs = set(ids) - set(references)
-                    if missing_refs:
-                        raise ValueError(
-                            f"Missing CVE references: {', '.join(sorted(missing_refs))}"
-                        )
-                    references = ids
+                    references = [key for key in ids if key in references]
                 selected.append(
                     AppliedSkill(
+                        reference_mode="required"
+                        if candidate.name == "cve" and self.cve_ids(machine)
+                        else "candidates",
                         **candidate.model_dump(),
                         selection_reason=reason,
                         selected_reference_ids=references,

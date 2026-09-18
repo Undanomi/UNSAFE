@@ -45,7 +45,7 @@ class NoopSkillService:
         machine: MachineInformation,
         scenario: ScenarioDraft | None = None,
     ) -> SkillContext:
-        if machine.skill_names or machine.cve_ids:
+        if machine.skill_names:
             raise ValueError("Skills are disabled; explicitly requested Skills cannot be applied")
         return SkillContext(phase=phase)
 
@@ -91,7 +91,7 @@ class SkillService:
                     raise ValueError(
                         "Machine input changed; reset the selection plan before generating"
                     )
-                return existing.model_copy(update={"restrict_cves": bool(plan and plan.skills)})
+                return existing
             return existing
         if self.planner is not None:
             plan = await self.repository.get_plan(session_id)
@@ -121,7 +121,7 @@ class SkillService:
                 max_context_chars=self.max_context_chars,
             )
             snapshot = await self.repository.create_snapshot(session_id, phase, preview.skills)
-            return snapshot.model_copy(update={"restrict_cves": preview.restrict_cves})
+            return snapshot
         candidates = await self.repository.active_versions(self.max_active)
         # Keep the same definitions for later phases, even if a new version was published.
         pinned = {}
@@ -173,6 +173,7 @@ class SkillService:
         plan = await self.repository.get_plan(session_id)
         return {
             "enabled": True,
+            "selection_policy": "advisory",
             "plan": None
             if plan is None
             else {
