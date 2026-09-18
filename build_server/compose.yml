@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: build_service
       POSTGRES_USER: build_service
-      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_PASSWORD: ${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U build_service -d build_service"]
       interval: 5s
@@ -34,9 +34,9 @@ services:
       context: .
       target: server
     environment:
-      DATABASE_URL: postgres://build_service:local-development-only@postgres:5432/build_service?sslmode=disable
+      DATABASE_URL: postgres://build_service:${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}@postgres:5432/build_service?sslmode=disable
       HTTP_ADDRESS: :8080
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-local-development-token}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?INTERNAL_API_TOKEN must be set}
       BUILD_ROOT: /var/lib/slsg/builds
       SCENARIO_ROOT: /var/lib/slsg/scenarios
     depends_on:
@@ -65,7 +65,7 @@ services:
       context: .
       target: worker
     environment:
-      DATABASE_URL: postgres://build_service:local-development-only@postgres:5432/build_service?sslmode=disable
+      DATABASE_URL: postgres://build_service:${BUILD_POSTGRES_PASSWORD:?BUILD_POSTGRES_PASSWORD must be set}@postgres:5432/build_service?sslmode=disable
       WORKER_ID: worker-1
       SCENARIO_ROOT: /var/lib/slsg/scenarios
       BUILD_ROOT: /var/lib/slsg/builds

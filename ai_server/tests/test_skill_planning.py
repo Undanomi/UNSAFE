@@ -335,6 +335,7 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
     import httpx
 
     from ai_server.config import Settings
+    from ai_server.models import ScenarioReview, ScenarioReviewFinding
     from ai_server.services.ai import GeminiGenerator
     from ai_server.skills.models import ScenarioSkillContexts
 
@@ -362,7 +363,26 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
     async def verify(machine, graph):
         return graph
 
+    review_calls = 0
+
     async def definition(prompt, **kwargs):
+        nonlocal review_calls
+        if kwargs.get("response_schema") is ScenarioReview:
+            review_calls += 1
+            if review_calls == 1:
+                return ScenarioReview(
+                    approved=False,
+                    summary="Specify the file owner",
+                    findings=[
+                        ScenarioReviewFinding(
+                            severity="error",
+                            category="implementation_gap",
+                            evidence="Missing owner",
+                            remediation="Specify owner",
+                        )
+                    ],
+                ).model_dump_json()
+            return ScenarioReview(approved=True, summary="Approved", findings=[]).model_dump_json()
         prompts.append(prompt)
         return "# Scenario"
 
@@ -372,7 +392,9 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
         monkeypatch.setattr(generator, "_verify_attack_graph", verify)
         monkeypatch.setattr(generator, "_generate", definition)
         result = await generator.generate_scenario(m, contexts)
-    assert "BODY-1111" in prompts[0] and "BODY-2222" not in prompts[0]
+    assert review_calls == 2 and len(prompts) == 2
+    assert all("BODY-1111" in prompt and "BODY-2222" not in prompt for prompt in prompts)
+    assert "Specify the file owner" in prompts[1]
     await service.finalize_scenario("test", result)
     assert (await repository.get_snapshot("test", SkillPhase.SCENARIO)).skills[
         0

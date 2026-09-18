@@ -179,6 +179,36 @@ class ScenarioDraft(BaseModel):
     attack_graph: AttackGraph
 
 
+class ScenarioReviewFinding(BaseModel):
+    step_id: str | None = Field(default=None, max_length=128)
+    severity: Literal["error", "warning"]
+    category: Literal[
+        "permission_blocker",
+        "permission_shortcut",
+        "broken_chain",
+        "semantic_mismatch",
+        "implementation_gap",
+        "unintended_shortcut",
+        "acceptance_test_gap",
+        "unsupported_assumption",
+    ]
+    evidence: str = Field(min_length=1, max_length=4000)
+    remediation: str = Field(min_length=1, max_length=4000)
+
+
+class ScenarioReview(BaseModel):
+    approved: bool
+    summary: str = Field(min_length=1, max_length=4000)
+    findings: list[ScenarioReviewFinding] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def approval_matches_findings(self) -> ScenarioReview:
+        has_error = any(finding.severity == "error" for finding in self.findings)
+        if self.approved == has_error:
+            raise ValueError("approved must be true exactly when there are no error findings")
+        return self
+
+
 class SourceReviewFinding(BaseModel):
     step_id: str | None = Field(default=None, max_length=128)
     severity: Literal["error", "warning"]
@@ -266,3 +296,8 @@ class CreateMachineRequest(BaseModel):
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
+
+
+class DownloadURLResponse(BaseModel):
+    download_url: str
+    expires_at: datetime

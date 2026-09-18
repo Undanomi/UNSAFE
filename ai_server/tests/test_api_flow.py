@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import zipfile
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -26,6 +25,14 @@ from ai_server.models import (
 )
 from ai_server.repository import SessionNotFoundError
 from ai_server.services.workflow import MachineWorkflow
+
+
+class FakeAsyncStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    async def __aiter__(self):
+        yield self.content
 
 
 class FakeSessionRepository:
@@ -66,6 +73,7 @@ class FakeBuildClient:
         self.get_response: dict | None = None
         self.packer_log_response = ""
         self.download_requests: list[tuple[str, str]] = []
+        self.download_headers: list[tuple[str | None, str | None]] = []
 
     async def submit(self, **request) -> dict:
         self.submitted_request = request
@@ -106,9 +114,35 @@ class FakeBuildClient:
             )
         ]
 
-    async def download(self, build_id: str, artifact_id: str) -> AsyncIterator[bytes]:
+    async def open_download(
+        self,
+        build_id: str,
+        artifact_id: str,
+        *,
+        range_header: str | None = None,
+        if_range: str | None = None,
+    ) -> httpx.Response:
         self.download_requests.append((build_id, artifact_id))
-        yield b"archive"
+        self.download_headers.append((range_header, if_range))
+        request = httpx.Request("GET", "http://build.test/artifact")
+        headers = {
+            "Content-Type": "application/zstd",
+            "Accept-Ranges": "bytes",
+        }
+        if range_header == "bytes=2-" and if_range is None:
+            headers.update({"Content-Length": "5", "Content-Range": "bytes 2-6/7"})
+            return httpx.Response(
+                206, headers=headers, stream=FakeAsyncStream(b"chive"), request=request
+            )
+        if range_header == "bytes=99-":
+            headers.update({"Content-Length": "0", "Content-Range": "bytes */7"})
+            return httpx.Response(
+                416, headers=headers, stream=FakeAsyncStream(b""), request=request
+            )
+        headers["Content-Length"] = "7"
+        return httpx.Response(
+            200, headers=headers, stream=FakeAsyncStream(b"archive"), request=request
+        )
 
 
 def test_distribution_artifact_does_not_fallback_to_qcow2() -> None:
@@ -187,14 +221,25 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
 
     completed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
     assert completed.status_code == 200
+    assert completed.headers["cache-control"] == "private, no-store"
     assert completed.json()["status"] == "completed"
     assert completed.json()["machine_access"] == {
         "username": "provisioner",
         "password": "test-generated-machine-password",
     }
-    assert completed.json()["download_url"].endswith(f"/v1/sessions/{session_id}/download")
+    download_url = completed.json()["download_url"]
+    assert f"/v1/sessions/{session_id}/download?" in download_url
+    assert "expires=" in download_url
+    assert "signature=" in download_url
 
-    download = await http.get(f"/v1/sessions/{session_id}/download", headers=headers)
+    unsigned = await http.get(f"/v1/sessions/{session_id}/download")
+    assert unsigned.status_code == 422
+
+    tampered = await http.get(download_url + "0")
+    assert tampered.status_code == 403
+    assert fake_build.download_requests == []
+
+    download = await http.get(download_url)
     assert download.status_code == 200
     assert download.content == b"archive"
     assert download.headers["content-type"] == "application/zstd"
@@ -208,6 +253,41 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
             "3a3c16bd-6d41-49e1-98c3-927138f8a271",
         )
     ]
+
+    denied = await http.post(
+        f"/v1/sessions/{session_id}/download-url",
+        headers={"X-Authenticated-User-ID": "other"},
+    )
+    assert denied.status_code == 404
+
+    issued = await http.post(f"/v1/sessions/{session_id}/download-url", headers=headers)
+    assert issued.status_code == 200
+    assert issued.headers["cache-control"] == "private, no-store"
+    assert "signature=" in issued.json()["download_url"]
+    assert issued.json()["expires_at"]
+
+    ranged = await http.get(
+        issued.json()["download_url"],
+        headers={"Range": "bytes=2-", "If-Range": '"test-checksum"'},
+    )
+    assert ranged.status_code == 206
+    assert ranged.content == b"chive"
+    assert ranged.headers["content-range"] == "bytes 2-6/7"
+    assert ranged.headers["accept-ranges"] == "bytes"
+    assert ranged.headers["etag"] == '"test-checksum"'
+    assert fake_build.download_headers[-1] == ("bytes=2-", None)
+
+    changed = await http.get(
+        issued.json()["download_url"],
+        headers={"Range": "bytes=2-", "If-Range": '"different-checksum"'},
+    )
+    assert changed.status_code == 200
+    assert changed.content == b"archive"
+    assert fake_build.download_headers[-1] == (None, None)
+
+    unsatisfiable = await http.get(issued.json()["download_url"], headers={"Range": "bytes=99-"})
+    assert unsatisfiable.status_code == 416
+    assert unsatisfiable.headers["content-range"] == "bytes */7"
 
 
 @pytest.mark.asyncio
@@ -274,6 +354,49 @@ async def create_failed_build_state(
     state.error_message = "packer failed"
     state.status = status
     return await app.state.repository.save(state)
+
+
+@pytest.mark.asyncio
+async def test_get_session_does_not_restart_failed_build(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    state.build_repair_attempt_limit = 3
+    await app.state.repository.save(state)
+    fake_build.get_response = {
+        "status": "failed",
+        "progress": 100,
+        "error_message": "packer still failed",
+    }
+
+    response = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["build_repair_attempts"] == 0
+    assert fake_build.submitted_requests == []
+    assert state.session_id not in app.state.workflow.tasks
+
+
+@pytest.mark.asyncio
+async def test_download_url_does_not_restart_failed_build(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    state.build_repair_attempt_limit = 3
+    await app.state.repository.save(state)
+    fake_build.get_response = {
+        "status": "failed",
+        "progress": 100,
+        "error_message": "packer still failed",
+    }
+
+    response = await http.post(f"/v1/sessions/{state.session_id}/download-url", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "machine is not ready"
+    assert fake_build.submitted_requests == []
+    assert state.session_id not in app.state.workflow.tasks
 
 
 @pytest.mark.asyncio
@@ -377,8 +500,11 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
+    repair_calls = 0
 
     async def invalid_repair(*_args, **_kwargs) -> SourcePatch:
+        nonlocal repair_calls
+        repair_calls += 1
         return SourcePatch(
             files=[
                 SourceFile(
@@ -391,22 +517,81 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
 
     app.state.workflow.generator.repair_source = invalid_repair
 
-    for _ in range(2):
-        accepted = await http.post(
-            f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
-        )
-        assert accepted.status_code == 202
-        assert accepted.json()["build_repair_attempts"] == 0
-        for _ in range(100):
-            if state.session_id not in app.state.workflow.tasks:
-                break
-            await asyncio.sleep(0.01)
-        failed = await app.state.repository.get(state.session_id)
-        assert failed.status == SessionStatus.FAILED
-        assert failed.build_repair_attempts == 0
-        assert failed.build_repair_attempt_limit == 3
+    accepted = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert accepted.status_code == 202
+    assert accepted.json()["build_repair_attempts"] == 0
+    for _ in range(100):
+        if state.session_id not in app.state.workflow.tasks:
+            break
+        await asyncio.sleep(0.01)
+    failed = await app.state.repository.get(state.session_id)
+    assert failed.status == SessionStatus.FAILED
+    assert failed.build_repair_attempts == 0
+    assert failed.build_repair_attempt_limit == 0
+    assert repair_calls == (
+        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
+    )
 
     assert fake_build.submitted_requests == []
+    status_response = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
+    assert status_response.status_code == 200
+    await asyncio.sleep(0)
+    assert repair_calls == (
+        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
+    )
+
+
+@pytest.mark.asyncio
+async def test_validation_continues_into_next_build_slot(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_calls = 0
+
+    async def repair_after_first_validation_batch(
+        _machine, _scenario, current, _failure_report, _skills=None
+    ) -> SourcePatch:
+        nonlocal repair_calls
+        repair_calls += 1
+        if repair_calls <= app.state.workflow.source_generation_attempts:
+            return SourcePatch(
+                files=[
+                    SourceFile(
+                        path="contents/scripts/provision.sh",
+                        content="#!/bin/bash\nset -euo pipefail\necho invalid mode\n",
+                        mode="0644",
+                    )
+                ]
+            )
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + "\nRecovered in the next build slot.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    app.state.workflow.generator.repair_source = repair_after_first_validation_batch
+
+    accepted = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert accepted.status_code == 202
+
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert repair_calls == app.state.workflow.source_generation_attempts + 1
+    submitted = await app.state.repository.get(state.session_id)
+    assert submitted.build_repair_attempts == 1
 
 
 @pytest.mark.asyncio
@@ -627,3 +812,8 @@ async def test_explicit_reaccess_refreshes_stale_status_before_extending_cycle(c
 def test_build_repair_limit_can_be_set_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("BUILD_REPAIR_MAX_ATTEMPTS", "2")
     assert Settings(_env_file=None).build_repair_max_attempts == 2
+
+
+def test_source_generation_attempts_can_be_set_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE_GENERATION_ATTEMPTS", "5")
+    assert Settings(_env_file=None).source_generation_attempts == 5

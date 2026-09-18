@@ -142,7 +142,7 @@ async def test_api_passes_explicit_skill_to_scenario_generator(tmp_path):
 
 @pytest.mark.asyncio
 async def test_gemini_gets_only_selected_cve_reference(tmp_path, monkeypatch):
-    from ai_server.models import AttackGraph, AttackStep
+    from ai_server.models import AttackGraph, AttackStep, ScenarioReview
 
     items = candidates(tmp_path)
     m = machine().model_copy(update={"skill_names": ["cve"], "cve_ids": ["CVE-2025-1234"]})
@@ -173,6 +173,8 @@ async def test_gemini_gets_only_selected_cve_reference(tmp_path, monkeypatch):
         return graph
 
     async def generate(prompt, **kwargs):
+        if kwargs.get("response_schema") is ScenarioReview:
+            return ScenarioReview(approved=True, summary="Approved", findings=[]).model_dump_json()
         prompts.append(prompt)
         return "# Scenario"
 

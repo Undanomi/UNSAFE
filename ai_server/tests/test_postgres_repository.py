@@ -58,7 +58,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             scenario_id="scenario-postgres-test",
             title="Postgres Test",
             definition="# persisted scenario",
-            target_os="Debian 12.11.0",
+            target_os="Debian 13.7.0",
             attack_graph=AttackGraph(
                 objectives=[
                     AttackObjective(
@@ -92,7 +92,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted = await repository.get(state.session_id)
         assert persisted.scenario is not None
         assert persisted.scenario.definition == "# persisted scenario"
-        assert persisted.scenario.target_os == "Debian 12.11.0"
+        assert persisted.scenario.target_os == "Debian 13.7.0"
         assert persisted.scenario.attack_graph.steps[0].vulnerable_version == "1.0"
 
         persisted.source_path = "/tmp/generated/source"

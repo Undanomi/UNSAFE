@@ -17,6 +17,7 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    ScenarioReview,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -26,6 +27,7 @@ from ..prompts import (
     code_prompt,
     repair_prompt,
     scenario_prompt,
+    scenario_review_prompt,
     source_review_prompt,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
@@ -96,6 +98,10 @@ class AIGenerator(Protocol):
         machine: MachineInformation,
         skills: ScenarioSkillContexts | None = None,
     ) -> ScenarioDraft: ...
+
+    async def review_scenario(
+        self, machine: MachineInformation, scenario: ScenarioDraft
+    ) -> ScenarioReview: ...
 
     async def generate_source(
         self,
@@ -385,11 +391,15 @@ JSONのみを返してください:
         attack_graph_skills = SkillRenderer.render(resolved_skills.attack_graph)
         last_error: Exception | None = None
         rejected: list[str] = []
+        graph: AttackGraph | None = None
         for _ in range(self.settings.scenario_generation_attempts):
             try:
-                graph = await self._draft_attack_graph(machine, rejected, attack_graph_skills)
-                self._validate_skill_cves(graph, resolved_skills, machine)
-                graph = await self._verify_attack_graph(machine, graph)
+                if graph is None:
+                    candidate = await self._draft_attack_graph(
+                        machine, rejected, attack_graph_skills
+                    )
+                    self._validate_skill_cves(candidate, resolved_skills, machine)
+                    graph = await self._verify_attack_graph(machine, candidate)
                 scenario_skills = SkillRenderer.render(
                     context_for_graph(resolved_skills.scenario, graph)
                 )
@@ -397,17 +407,31 @@ JSONのみを返してください:
                     scenario_prompt(
                         machine,
                         graph.model_dump_json(indent=2),
-                        scenario_skills,
+                        review_feedback=rejected,
+                        skill_context=scenario_skills,
                     ),
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
-                return ScenarioDraft(
+                scenario = ScenarioDraft(
                     scenario_id=f"scenario-{uuid4().hex}",
                     title=machine.name,
                     definition=definition,
                     target_os=machine.operating_system,
                     attack_graph=graph,
                 )
+                review = await self.review_scenario(machine, scenario)
+                if review.approved:
+                    return scenario
+                review_report = _compact_scenario_review(review)
+                last_error = ValueError(f"scenario semantic review failed: {review.summary}")
+                rejected.append(
+                    "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
+                )
+                if any(
+                    finding.severity == "error" and finding.category == "broken_chain"
+                    for finding in review.findings
+                ):
+                    graph = None
             except (
                 httpx.HTTPError,
                 KeyError,
@@ -418,7 +442,27 @@ JSONのみを返してください:
             ) as error:
                 last_error = error
                 rejected.append(str(error))
-        raise RuntimeError(f"Could not generate a verified attack graph: {last_error}")
+                graph = None
+        raise RuntimeError(f"Could not generate an approved scenario: {last_error}")
+
+    async def review_scenario(
+        self, machine: MachineInformation, scenario: ScenarioDraft
+    ) -> ScenarioReview:
+        last_error: Exception | None = None
+        prompt = scenario_review_prompt(machine, scenario)
+        for _ in range(self.settings.generation_retries):
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=ScenarioReview,
+                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                )
+                return ScenarioReview.model_validate_json(response)
+            except (httpx.HTTPError, RuntimeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error)
+        raise RuntimeError(f"Could not review scenario: {last_error}")
 
     @staticmethod
     def _validate_skill_cves(
@@ -556,3 +600,22 @@ def _prompt_with_rejection(prompt: str, error: Exception) -> str:
         + "全体を正しいJSONとして再生成してください:\n"
         + str(error)[:2_000]
     )
+
+
+def _compact_scenario_review(review: ScenarioReview) -> dict:
+    findings = []
+    for finding in review.findings[:8]:
+        findings.append(
+            {
+                "step_id": finding.step_id,
+                "severity": finding.severity,
+                "category": finding.category,
+                "evidence": finding.evidence[:500],
+                "remediation": finding.remediation[:500],
+            }
+        )
+    return {
+        "summary": review.summary[:1_000],
+        "findings": findings,
+        "omitted_findings": max(0, len(review.findings) - len(findings)),
+    }

@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ai_service
       POSTGRES_USER: ai_service
-      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_PASSWORD: ${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ai_service -d ai_service"]
       interval: 5s
@@ -37,8 +37,9 @@ services:
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-600}
       CVE_MIN_YEAR: ${CVE_MIN_YEAR:-2024}
       SCENARIO_GENERATION_ATTEMPTS: ${SCENARIO_GENERATION_ATTEMPTS:-5}
+      SOURCE_GENERATION_ATTEMPTS: ${SOURCE_GENERATION_ATTEMPTS:-3}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      DATABASE_URL: postgresql://ai_service:local-development-only@ai-postgres:5432/ai_service
+      DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
       SKILLS_ENABLED: ${SKILLS_ENABLED:-true}
       SKILLS_MAX_ACTIVE: ${SKILLS_MAX_ACTIVE:-32}
@@ -55,8 +56,10 @@ services:
       # Use a Compose-specific override so a host-side BUILD_SERVER_URL such as
       # http://localhost:8080 cannot leak into the container network.
       BUILD_SERVER_URL: ${AI_BUILD_SERVER_URL:-http://server:8080}
-      BUILD_SERVER_TOKEN: ${BUILD_SERVER_TOKEN:-local-development-token}
+      BUILD_SERVER_TOKEN: ${BUILD_SERVER_TOKEN:?BUILD_SERVER_TOKEN must be set}
       BUILD_REPAIR_MAX_ATTEMPTS: ${BUILD_REPAIR_MAX_ATTEMPTS:-3}
+      DOWNLOAD_SIGNING_SECRET: ${DOWNLOAD_SIGNING_SECRET:-local-development-download-signing-secret-change-me}
+      DOWNLOAD_URL_TTL_SECONDS: ${DOWNLOAD_URL_TTL_SECONDS:-1800}
     depends_on:
       ai-postgres:
         condition: service_healthy

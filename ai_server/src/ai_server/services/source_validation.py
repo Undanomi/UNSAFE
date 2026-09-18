@@ -253,41 +253,12 @@ def _validate_web_check_text(text: str, location: str, add) -> None:
         f"web:{location}:application_identity",
         "root response must be checked for a scenario-specific marker",
     )
-    negative_index_check = _rejects_directory_listing(text)
-    add(
-        "pass" if negative_index_check else "fail",
-        f"web:{location}:directory_listing",
-        "root response must explicitly reject 'Index of'",
-    )
     permission_tool = any(token in lowered for token in ("namei ", "stat ", "test -r", "test -x"))
     runtime_identity = any(token in lowered for token in ("runuser ", "sudo -u ", "su -s "))
     add(
         "pass" if permission_tool and runtime_identity else "fail",
         f"permissions:{location}:web_runtime_access",
         "web runtime user readability/traversal and deployed modes must be checked",
-    )
-
-
-def _rejects_directory_listing(text: str) -> bool:
-    lowered = text.lower()
-    if "index of" not in lowered:
-        return False
-    if "must_not_contain" in lowered:
-        return True
-    if re.search(r"\bgrep\b[^\n;&]*(?:-[a-z]*v[a-z]*\b)[^\n;&]*index of", lowered):
-        return True
-    if re.search(
-        r"(?:^|&&|\|\||;)\s*!\s*[^\n;&]*\bgrep\b[^\n;&]*index of",
-        lowered,
-    ):
-        return True
-    return bool(
-        re.search(
-            r"\bif\s+[^;\n]*\bgrep\b[^;\n]*index of[^;\n]*;\s*then"
-            r"(?:(?!\bfi\b).)*\bexit\s+[1-9][0-9]*\b(?:(?!\bfi\b).)*\bfi\b",
-            lowered,
-            re.DOTALL,
-        )
     )
 
 

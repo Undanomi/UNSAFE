@@ -18,7 +18,7 @@ cd slsg-machine
 - DHCPを利用できる隔離ブリッジ
 - `image.qcow2`、このREADME、`start-linux.sh`を同じディレクトリへ配置
 
-Debian/Ubuntuでは次のようにQEMUを導入できます。
+Debianでは次のようにQEMUを導入できます。
 
 ```sh
 sudo apt update

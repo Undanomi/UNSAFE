@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from pathlib import Path
 
 import httpx
@@ -66,12 +65,29 @@ class BuildClient:
         self._raise(response)
         return [Artifact.model_validate(item) for item in response.json().get("items", [])]
 
-    async def download(self, build_id: str, artifact_id: str) -> AsyncIterator[bytes]:
+    async def open_download(
+        self,
+        build_id: str,
+        artifact_id: str,
+        *,
+        range_header: str | None = None,
+        if_range: str | None = None,
+    ) -> httpx.Response:
         url = f"{self.base_url}/v1/builds/{build_id}/artifacts/{artifact_id}/content"
-        async with self.client.stream("GET", url, headers=self.headers) as response:
-            self._raise(response)
-            async for chunk in response.aiter_bytes():
-                yield chunk
+        headers = dict(self.headers)
+        if range_header:
+            headers["Range"] = range_header
+        if if_range:
+            headers["If-Range"] = if_range
+        request = self.client.build_request("GET", url, headers=headers)
+        response = await self.client.send(request, stream=True)
+        if response.status_code not in {200, 206, 416}:
+            await response.aread()
+            try:
+                self._raise(response)
+            finally:
+                await response.aclose()
+        return response
 
     @staticmethod
     def _raise(response: httpx.Response) -> None:

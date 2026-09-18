@@ -5,6 +5,9 @@ import json
 from .models import GeneratedSource, MachineInformation, ScenarioDraft
 
 HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
+- rockyou.txtはハッシュの一覧ではなく、攻撃者が自分のマシンで辞書攻撃に使う平文パスワード候補の
+  wordlistである。ターゲットVMへインストールする教材コンポーネントや、ハッシュの保存先として
+  扱わない
 - 攻略経路にハッシュクラックを含める場合、平文パスワードは標準的なrockyou.txtに
   変形なしで完全一致するエントリから選ぶ
 - 攻略者がrockyou.txtだけを指定した辞書攻撃で発見できるようにし、追加辞書、ルール、
@@ -14,6 +17,17 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - 内部用の攻撃グラフとシナリオ仕様書には、選んだ平文パスワード、完全なハッシュ、
   ハッシュ方式、HashcatのモードまたはJohnの形式、再現用コマンドを明確に記載する
 - 実装する認証情報は仕様書に記載した値と完全に一致させ、受け入れテストでも検証できるようにする
+- 通常、rockyou.txtの用意とHashcatまたはJohnの実行は攻撃者側の準備・操作として扱う。
+  「選んだ平文がrockyou.txtに含まれる」という要件だけを理由に、ターゲットVMへ辞書を導入したり、
+  VMビルド中にクラックを実行したりする必要はない
+- ターゲット側でrockyou.txtの取得やクラック実行がシナリオまたは自動検証上、本当に必要な場合は
+  使用してよい。その場合は目的を明記し、単一の未検証URLへ無条件に依存せず、取得失敗時の診断、
+  内容またはchecksumの確認、妥当なtimeoutを備えて再現可能にする
+- ターゲット側の受け入れテストは、通常はアプリケーションやデータベースに仕様どおりの完全な
+  ハッシュが格納されていることと、クラック後の認証情報で意図した認証経路が成立することを確認する。
+  ターゲット上での辞書クラックまで検証するかは、シナリオの目的と必要性に応じて判断する
+- READMEの攻略手順では、rockyou.txtを攻撃者側とターゲット側のどちらで使う設計なのかを明記し、
+  実際の配置や取得方法と矛盾させない
 - この条件を確実に満たせない場合は、ハッシュクラックを攻略の必須ステップにしない
 """
 
@@ -33,18 +47,46 @@ DEPLOYMENT_VERIFICATION_CONSTRAINTS = """デプロイ結果の共通検証制約
   scenario_manifest.jsonのhealth_checksとacceptance_testsへ記載する
 """
 
+SYNTAX_VALIDATION_CONSTRAINTS = """構文・設定ファイル検査の共通制約:
+- 使用する言語、スクリプト、設定ファイルに公式または標準的な構文検査・設定検査コマンドがある場合、
+  検査可能なものを省略せず、生成した全対象ファイルへ実行する。目視確認やファイル存在確認だけで
+  構文が正しいと判断しない
+- 検査は対象ランタイムやソフトウェアをインストールし、ファイルを最終配置した後に実行する。
+  build.shまたはprovision.shを`set -euo pipefail`で実行し、検査失敗を無視せずビルドを非ゼロ終了させる
+- 例として、PHPは`php -l`、Bash/shは`bash -n`または`sh -n`、Pythonは
+  `python3 -m py_compile`、Node.jsのJavaScriptは`node --check`、Rubyは`ruby -c`、Perlは`perl -c`を使う
+- 構文検査が対象コードを認識せず単なるテキストとして扱う偽陰性も防ぐ。特にPHPは`php -l`に加え、
+  Web経由の応答に`<?php`、変数名、意図しないリテラル`\\n`などのソース断片が露出しないことを
+  否定確認し、期待する動的処理の結果を肯定確認する
+- JSONは`python3 -m json.tool`または`jq empty`、XMLは`xmllint --noout`などで、生成したデータ・
+  マニフェスト・設定ファイルをパーサーへ実際に読み込ませる。YAMLやTOMLなども利用可能な公式CLIや
+  対応ライブラリでparseし、単なるgrepで代用しない
+- Nginxは`nginx -t`、Apache HTTP Serverは`apache2ctl configtest`、OpenSSH serverは`sshd -t`、
+  sudoersは`visudo -cf`、systemd unitは`systemd-analyze verify`、HAProxyは`haproxy -c -f`、
+  BINDは`named-checkconf`など、使用したソフトウェア固有の設定検査を実行する
+- SQLなど単体の標準構文検査が難しいものは、隔離した教材用DBへschemaとseedを実際に適用し、
+  期待するtable・column・rowを問い合わせる。テンプレートや埋め込みコードも可能なら実際の
+  renderer、compiler、interpreterへ読み込ませる
+- 構文検査の後に実行時検査も行う。構文検査合格だけでサービス成立とみなさず、サービス起動、
+  攻撃者側入口からの応答、benign control、exploit、negative controlを引き続き検証する
+- scenario_manifest.jsonのhealth_checksとacceptance_testsにも主要な構文・設定検査を明記し、
+  どのファイルをどのコマンドで検査するか追跡可能にする
+"""
+
 WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッションの共通制約:
 - HTTP/HTTPSサービスを作る場合、攻撃者がDNS名、Hostヘッダー、隠しパスを知らなくても、
   ブラウザへターゲットのIPアドレスだけを入力すれば意図した入口へ到達できるようにする
 - アプリを`/`で直接提供するか、`/`から正しいランディングページへリダイレクトする。名前ベースの
   VirtualHostを使う場合も、IP宛て要求を受けるdefault_serverまたはcatch-allを必ず構成する
-- `/`にはシナリオ固有のタイトル、デザイン、自然な導線を備えた完成済みページを用意し、
-  `Index of`、Webサーバー既定ページ、素の404、ファイル一覧を利用者へ見せない
-- Apacheの`Options Indexes`やNginxの`autoindex on`などのディレクトリ一覧を無効化し、
-  indexファイルまたは明示的なルートハンドラーを設ける。意図的な脆弱性でも入口の完成度は落とさない
+- 通常は`/`にシナリオ固有のタイトル、デザイン、自然な導線を備えた完成済みページを用意し、
+  Webサーバー既定ページ、素の404、意図しないファイル一覧を利用者へ見せない
+- 攻撃グラフがディレクトリリスティングを攻略要素として明示している場合に限り、Apacheの
+  `Options Indexes`やNginxの`autoindex on`などを必要なパスへ限定して構成する。公開する項目と
+  そこから得られる成果物をシナリオに一致させ、別パスや不要なファイルまで露出させない
 - build.shから実行されるシェルとmanifestのhealth_checks/acceptance_testsの両方で、Hostを
-  上書きせず`curl -fsSL http://127.0.0.1/`相当を実行し、アプリ固有マーカーを肯定確認すると同時に
-  `Index of`とWebサーバー既定ページが含まれないことを否定確認する
+  上書きせず`curl -fsSL http://127.0.0.1/`相当を実行し、アプリ固有マーカーを肯定確認する。
+  ディレクトリリスティングを意図する場合は必要なパスと項目を肯定確認し、意図しない場合は
+  `Index of`やWebサーバー既定ページが含まれないことを否定確認する
 - 配置時は所有者、group、modeを偶然の既定値に任せず、`install -d -m`、`install -m`、
   `chown`、限定的な`chmod`で明示する。ディレクトリは通常0755/0750、静的ファイルと通常の
   PHPソースは0644/0640、秘密情報は0600/0640、実行スクリプトは0755/0750を基準にする
@@ -94,6 +136,25 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   自己充足的なテストにしない
 - 実装または修復の完了前に、より短い別経路、情報の先出し、意図しない別種の脆弱性、前提を飛ばせる
   権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
+"""
+
+DESIGN_CONSTRAINTS = """設計段階の共通制約（詳細な実装規則やコマンドを本文へ転載しない）:
+- 攻撃経路はテーマと難易度を満たす必要最小限のステップにし、各requiresの成果物を後段で実際に使う。
+  benign control、exploit固有の成功、negative control、前提なしでは失敗することを検証計画に含める
+- WebはIPアドレスの`/`から意図した入口へ到達でき、既定ページや意図しない一覧・近道を公開しない
+- 各段階の実効ユーザーと、重要なファイルおよび全親ディレクトリのowner/group/modeを定義する。
+  必要な読み取り・書き込み・探索・実行を許可しつつ、攻略前の主体へ成果物を公開しない
+- flagは指定パスだけへ配置し、攻略後の主体だけが読める権限と、攻略前後の可読性検証を計画する
+- ハッシュクラックを使う場合、rockyou.txtは平文wordlistで通常は攻撃者側で使うものと理解し、
+  完全なハッシュ、方式、モード、短時間で得られる収録済み平文を一貫させる。ターゲット側で辞書を
+  使う合理的な理由があれば許可するが、不要な導入や未検証URLへの依存は避ける
+- 使用する言語とソフトウェアに応じ、標準的な構文・設定検査と実行時検査を計画する。ここでは
+  検査対象と目的だけを簡潔に示し、完全なスクリプトや全コマンドはコード生成段階へ委ねる
+"""
+
+REVIEW_RESPONSE_CONSTRAINTS = """レビュー出力は簡潔にする。同じ根本原因の所見を統合し、findingsは
+重大度の高い順に最大20件とする。summaryは3文以内、各evidenceとremediationは必要な根拠と修正を
+短く示し、入力されたシナリオ、攻撃グラフ、生成ファイル、共通制約を転載しない。
 """
 
 
@@ -179,28 +240,25 @@ JSONのみを返してください:
 - 非CVEステップではcve_idをnullにする
 - 各ステップのimplementation_stepsに、VMへ意図的な教材状態を構築する具体的手順を含める
 - 実環境を攻撃する手順ではなく、隔離された演習VMで再現できる構成にする
+- ステップ数は攻略に必要な最小限にし、descriptionは1〜3文、implementation_stepsは2〜8個の
+  短い手順にする。完成したソースコード、長いシェル、SQL全文、共通制約を値へ転載しない
 
+{DESIGN_CONSTRAINTS}
 {_skill_section(skill_context)}
-
-{HASH_CRACKING_CONSTRAINTS}
-
-{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
-
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
-
-{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
-
-{FLAG_PLACEMENT_CONSTRAINTS}
 """
 
 
 def scenario_prompt(
-    machine: MachineInformation, attack_graph_json: str, skill_context: str = ""
+    machine: MachineInformation,
+    attack_graph_json: str,
+    review_feedback: list[str] | None = None,
+    skill_context: str = "",
 ) -> str:
     flag_context = (
         f"User flag: {machine.needs_user_flag}; details: {machine.user_flag_details or 'none'}\n"
         f"System flag: {machine.needs_system_flag}; details: {machine.system_flag_details or 'none'}"
     )
+    feedback_context = "\n".join((review_feedback or [])[-5:]) or "なし（初回生成）"
     return f"""あなたはHack The Box風の教育用Linuxマシンを設計するアーキテクトです。
 次の条件と検証済み攻撃グラフを使い、実装可能で一貫したシナリオ設計書をMarkdownで1つ作成してください。
 
@@ -212,6 +270,13 @@ def scenario_prompt(
 
 攻撃グラフ:
 {attack_graph_json}
+
+前回までの棄却理由とシナリオレビュー:
+{feedback_context}
+
+レビュー指摘がある場合はsummaryだけでなく、各findingのevidenceとremediationをすべて反映して
+ください。提示された攻撃グラフのstep、requires、achievesは変更せず、設計書の実装順序、主体、
+権限、設定、検証計画を具体化・修正して、同じ指摘を繰り返さないでください。
 
 必ず次の章をこの順で含めてください。
 # [マシン名] シナリオ設計書
@@ -226,23 +291,86 @@ def scenario_prompt(
 記載してください。CVEステップではCVE-ID、対象コンポーネント、脆弱な厳密バージョン、
 対象OSとの適合根拠、入手元とリファレンスも記載してください。攻撃グラフの情報を省略せず、
 存在しないURLを追加しないでください。
+- 設計書は12,000文字以内を目安に簡潔にする。攻撃グラフの全フィールドを文章で反復せず、
+  完成したPHP/Python等のソース、完全なprovision script、長いSQLや設定ファイルを埋め込まない。
+  環境実装計画には実装者が判断できる要点、パス、主体、権限、検証対象だけを記載する
 
+{DESIGN_CONSTRAINTS}
 {_skill_section(skill_context)}
+"""
 
-{HASH_CRACKING_CONSTRAINTS}
 
-{DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+def scenario_review_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
+    return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
+作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
+前提を飛ばす近道がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
+再現可能かつ一貫した形で成立させられるかを審査します。
 
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
+マシン: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {scenario.target_os}
+User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
+System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
 
-{WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
+攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
 
-{FLAG_PLACEMENT_CONSTRAINTS}
+シナリオ設計書:
+```markdown
+{scenario.definition}
+```
+
+JSONのみを返してください:
+{{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
+"category":"permission_blocker","evidence":"成立しない権限遷移とその理由",
+"remediation":"所有者・group・mode・実行主体を含む具体的な設計修正"}}]}}
+
+審査規則:
+- 全攻撃ステップを順に追い、各requiresの成果物が後段で実際に必要か、各achievesへ到達できるかを
+  攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
+  errorにする
+- 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
+  semantic_mismatchのerrorにする
+- 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
+  攻略成立性を保証できない場合はimplementation_gapまたはunsupported_assumptionのerrorにする
+- acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
+  飛ばした失敗を観測可能な形で確認できない場合はacceptance_test_gapのerrorにする
+- warningは成立性を損なわない改善提案だけに使い、成立可否が不明な点をwarningへ弱めない
+- errorが1件でもあればapproved=false、errorがなければapproved=trueにする
+- evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
+  記載する。単なる一般論や推測だけで不合格にしない
+
+パーミッションは最重点項目として、各ステップで次を明示的に反証する:
+- 攻撃前、各ステップ完了後、flag取得時点の実効UID・主group・補助groupと、サービスの実行ユーザー
+- 読み取り、書き込み、作成、置換、探索、実行が必要な全パスについて、対象ファイルだけでなく全親
+  ディレクトリのowner・group・modeと、ACL、sudoers、setuid/setgid、Linux capabilitiesの影響
+- Web/PHP/CGI/systemdなど実際の実行形態。PHP-FPMやApache moduleのPHPへ実行ビットを付けても
+  読めなければ成立せず、CGIやExecStart対象は読み取り・探索に加えて実行可能でなければ成立しない
+- アップロード、cache、session、ログ、鍵、設定、実行ファイル、ホーム、flagの権限が厳しすぎて
+  intended exploitを阻害しないこと。阻害する場合はpermission_blockerのerrorにする
+- 権限が広すぎて未権限主体が成果物やflagを先に読める、実行ファイルや設定を書き換えられる、
+  requiresを飛ばせる場合はpermission_shortcutのerrorにする
+- 権限昇格では、攻撃前後の実効UIDまたはcapabilityと保護対象へのアクセス差を説明できること。
+  root所有という記述だけ、chmod 777、無差別なchown、設計にないgroup所属を成立根拠にしない
+- flagについて、指定パスと全親ディレクトリの権限が、意図したステップ完了後の主体には読め、
+  完了前の主体には読めないこと。配置先の重複、リンク、ログや設定への値の漏洩も近道として扱う
+- レビュー時点では実ファイルが未生成であるため、具体値が設計書に十分定義されているかを審査する。
+  根拠なくOS既定値を仮定せず、実装時に明示すべきowner・group・mode・検証コマンドが欠けていて
+  成立性を判断できない場合はerrorにする
+
+{DESIGN_CONSTRAINTS}
+
+{REVIEW_RESPONSE_CONSTRAINTS}
 """
 
 
 def code_prompt(
-    machine: MachineInformation, scenario: ScenarioDraft, skill_context: str = ""
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    skill_context: str = "",
 ) -> str:
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。
@@ -291,17 +419,18 @@ JSON以外は返さないでください。形式:
 - User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 - System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
 
-{_skill_section(skill_context)}
-
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
 
 
@@ -365,17 +494,18 @@ JSON以外は返さないでください。形式:
   JSONエスケープを作らない
 - Markdownと攻撃グラフに矛盾がある場合は攻撃グラフを正とする
 
-{_skill_section(skill_context)}
-
 {HASH_CRACKING_CONSTRAINTS}
 
 {DEPLOYMENT_VERIFICATION_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
 
 {EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
 
 
@@ -418,8 +548,18 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+- 生成物で利用可能な構文・設定検査が省略されている、対象ファイルの一部しか検査していない、
+  または検査失敗を無視する実装はacceptance_test_gapのerrorにする。言語・ソフトウェアに適した
+  実際のparser、compiler、interpreter、config testを使っていることを確認する
+- rockyou.txtをハッシュ集やターゲット用コンポーネントと誤認していないか確認する。ターゲット側で
+  取得または使用していても一律に不合格にはせず、シナリオ上の目的がなく追加されている場合や、
+  未検証の単一URLへの依存によってビルド再現性を損なう場合だけ、影響に応じてwarningまたは
+  implementation_mismatchのerrorにする
 
+{HASH_CRACKING_CONSTRAINTS}
+
+{SYNTAX_VALIDATION_CONSTRAINTS}
+
+{REVIEW_RESPONSE_CONSTRAINTS}
 {_skill_section(skill_context)}
-
-{EXPLOITABILITY_VERIFICATION_CONSTRAINTS}
 """
