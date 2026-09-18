@@ -12,6 +12,7 @@ from ..models import (
     MachineInformation,
     ScenarioDraft,
     ScenarioReview,
+    ScenarioRevision,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -221,6 +222,18 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     + "\nRepair applied for local integration testing.\n",
                 )
             ]
+        )
+
+    async def synchronize_scenario(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> ScenarioRevision:
+        return ScenarioRevision(
+            definition=scenario.definition,
+            attack_graph=scenario.attack_graph,
+            summary="The deterministic stub source remains synchronized with the scenario.",
         )
 
     async def review_source(

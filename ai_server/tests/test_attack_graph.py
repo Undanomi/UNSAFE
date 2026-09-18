@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ai_server.models import AttackGraph, AttackObjective, AttackStep
+from ai_server.models import AttackGraph, AttackObjective, AttackStep, ScenarioDraft
 
 
 def step(step_id: str, *, requires=None, achieves=None) -> AttackStep:
@@ -78,4 +78,15 @@ def test_non_cve_step_rejects_cve_id() -> None:
             description="training step",
             cve_id="CVE-2026-1234",
             implementation_steps=["provision"],
+        )
+
+
+def test_scenario_rejects_noncanonical_flag_case() -> None:
+    with pytest.raises(ValidationError, match="user_flag"):
+        ScenarioDraft(
+            scenario_id="scenario-invalid-flag",
+            title="Invalid flag",
+            definition="# Invalid flag",
+            attack_graph=AttackGraph(steps=[step("entry")]),
+            user_flag="FLAG{USER_A1D51D7F803F51F0356F3E547C842A0B}",
         )

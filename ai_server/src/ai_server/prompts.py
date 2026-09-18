@@ -330,6 +330,10 @@ JSONのみを返してください:
   記載する。単なる一般論や推測だけで不合格にしない
 
 パーミッションは最重点項目として、各ステップで次を明示的に反証する:
+- 重要な全パスについて、攻撃前と各ステップ完了後のowner・group・mode・ACL・sudoers・capabilityと、
+  各主体から見た読み取り・書き込み・探索・実行可否を時系列の権限表として内部的に組み立てる
+- 同じ時点・同じパスに対して「読める／読めない」、異なるowner・group・modeなど相反する記述が
+  1つでもあればsemantic_mismatchのerrorにする。negative controlの条件を完成構成へ混入させない
 - 攻撃前、各ステップ完了後、flag取得時点の実効UID・主group・補助groupと、サービスの実行ユーザー
 - 読み取り、書き込み、作成、置換、探索、実行が必要な全パスについて、対象ファイルだけでなく全親
   ディレクトリのowner・group・modeと、ACL、sudoers、setuid/setgid、Linux capabilitiesの影響
@@ -341,6 +345,12 @@ JSONのみを返してください:
   requiresを飛ばせる場合はpermission_shortcutのerrorにする
 - 権限昇格では、攻撃前後の実効UIDまたはcapabilityと保護対象へのアクセス差を説明できること。
   root所有という記述だけ、chmod 777、無差別なchown、設計にないgroup所属を成立根拠にしない
+- 任意のコマンド・コード・式を実行できる段階へ到達した主体は、その時点のUIDで利用可能な
+  ファイル操作、資格情報、sudo、setuid、capability、インタープリタ、ローカルサービスをすべて
+  利用できるものとして扱う。「対話シェルをまだ得ていない」など実行経路の名前の違いだけを、
+  後続ステップの前提が必要である根拠にしない
+- 各requiresは、前段完了前には存在せず完了後に初めて得られる権限・秘密・到達性・実効IDなどの
+  能力差を生むこと。単なる操作方法や通信チャネルの変更で同じ操作が既に可能ならbroken_chainにする
 - flagについて、指定パスと全親ディレクトリの権限が、意図したステップ完了後の主体には読め、
   完了前の主体には読めないこと。配置先の重複、リンク、ログや設定への値の漏洩も近道として扱う
 - レビュー時点では実ファイルが未生成であるため、具体値が設計書に十分定義されているかを審査する。
@@ -496,6 +506,52 @@ JSON以外は返さないでください。形式:
 """
 
 
+def scenario_sync_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    current: GeneratedSource,
+) -> str:
+    return f"""あなたは教育用攻撃マシンの実装とシナリオを同期する設計担当です。
+ソース修復後の実装ファイルを唯一の実装事実として読み取り、シナリオ本文と攻撃グラフを、実際の
+パス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、脆弱性、前提関係、
+検証方法に一致するよう改訂してください。変更が不要な箇所は維持してください。
+
+マシン: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {scenario.target_os}
+
+修復前の攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+修復前のシナリオ:
+```markdown
+{scenario.definition}
+```
+
+修復後の実装ファイル:
+```json
+{current.model_dump_json(indent=2)}
+```
+
+JSONのみを返してください:
+{{"definition":"改訂後のMarkdown","attack_graph":{{"objectives":[],"steps":[]}},
+"summary":"同期した事実の要約"}}
+
+制約:
+- 実装に存在しない挙動を追加せず、実装と異なる古いパス、権限、資格情報、手順、検証を残さない
+- 実装側の変更が誤りに見えても隠さず忠実に反映する。後続の敵対的シナリオレビューで不合格にする
+- 攻撃グラフのrequiresとachievesも実装上の能力遷移に合わせ、前提を飛ばせる状態を正当化しない
+- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionやattack_graphへ記載しない
+- scenario_id、scenario_version_id、タイトル、対象OSは変更対象にしない
+- owner・group・mode等を変えた場合、本文の実装計画、攻略手順、肯定・否定テストをすべて同期する
+
+{DESIGN_CONSTRAINTS}
+"""
+
+
 def source_review_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
@@ -516,6 +572,11 @@ System flag正解値: {scenario.system_flag or "未設定"}
 {scenario.attack_graph.model_dump_json(indent=2)}
 ```
 
+シナリオ設計書:
+```markdown
+{scenario.definition}
+```
+
 生成ファイル:
 ```json
 {current.model_dump_json(indent=2)}
@@ -528,6 +589,8 @@ JSONのみを返してください:
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
 - 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
+- シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
+  脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
 - intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
 - 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
   acceptance_test_gapのerrorにする

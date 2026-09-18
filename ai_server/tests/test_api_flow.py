@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from ai_server.models import (
     AttackStep,
     MachineInformation,
     ScenarioDraft,
+    ScenarioRevision,
     SessionState,
     SessionStatus,
     SourceFile,
@@ -207,7 +209,7 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     scenario = (await app.state.repository.get(session_id)).scenario
     assert scenario is not None
     assert scenario.user_flag is not None
-    assert scenario.user_flag.startswith("flag{user_")
+    assert re.fullmatch(r"flag\{user_[0-9a-f]{32}\}", scenario.user_flag)
     assert scenario.system_flag is None
     assert scenario.user_flag not in events.text
     scenario_id = scenario.scenario_id
@@ -419,6 +421,15 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     state = await create_failed_build_state(app)
     fake_build.packer_log_response = "command before failure\nerror detail"
 
+    async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
+        return ScenarioRevision(
+            definition="retry synchronized with repaired source",
+            attack_graph=scenario.attack_graph,
+            summary="Updated the scenario after source repair.",
+        )
+
+    app.state.workflow.generator.synchronize_scenario = synchronize_scenario
+
     accepted = await http.post(
         f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
     )
@@ -436,6 +447,8 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     submitted_state = await app.state.repository.get(state.session_id)
     assert submitted_state.build_repair_attempts == 1
     assert submitted_state.build_repair_attempt_limit == 3
+    assert submitted_state.scenario is not None
+    assert submitted_state.scenario.definition == "retry synchronized with repaired source"
     assert fake_build.submitted_request["idempotency_key"].startswith(
         f"ai-session-{state.session_id}-"
     )
@@ -448,6 +461,7 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert "contents/README.md" in repair_report
     assert "command before failure" in repair_report
     assert "error detail" in repair_report
+    assert '"scenario_sync_status": "approved"' in repair_report
 
 
 @pytest.mark.asyncio

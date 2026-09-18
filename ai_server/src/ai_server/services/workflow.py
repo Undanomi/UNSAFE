@@ -8,6 +8,7 @@ from ..models import (
     Artifact,
     GeneratedSource,
     MachineAccess,
+    ScenarioReview,
     SessionState,
     SessionStatus,
     SourceReview,
@@ -185,6 +186,7 @@ class MachineWorkflow:
             is_build_repair = failure_report is not None
             state = await self.repository.get(session_id)
             assert state.machine_information is not None and state.scenario is not None
+            working_scenario = state.scenario
             archive_path = self._existing_archive(state) if failure_report is None else None
             checksum = state.source_checksum
             last_validation_error: Exception | None = None
@@ -192,7 +194,7 @@ class MachineWorkflow:
             best_validation_failures = 0 if failure_report is not None else None
             if archive_path is None and generated is None:
                 generated = await self.generator.generate_source(
-                    state.machine_information, state.scenario
+                    state.machine_information, working_scenario
                 )
             if archive_path is not None:
                 build_slots_remaining -= 1
@@ -200,6 +202,7 @@ class MachineWorkflow:
                 for _ in range(self.source_generation_attempts):
                     assert generated is not None
                     retry_base = generated
+                    retry_scenario = working_scenario
                     patch_applied = False
                     if failure_report is not None:
                         repair_context = {
@@ -209,7 +212,7 @@ class MachineWorkflow:
                         }
                         patch = await self.generator.repair_source(
                             state.machine_information,
-                            state.scenario,
+                            working_scenario,
                             generated,
                             repair_context,
                         )
@@ -230,9 +233,36 @@ class MachineWorkflow:
                                 "deleted_files": sorted(patch.delete_paths),
                             }
                         )
+                        revision = await self.generator.synchronize_scenario(
+                            state.machine_information,
+                            working_scenario,
+                            generated,
+                        )
+                        working_scenario = working_scenario.model_copy(
+                            update={
+                                "definition": revision.definition,
+                                "attack_graph": revision.attack_graph,
+                            }
+                        )
+                        repair_history[-1]["scenario_sync_summary"] = revision.summary
+                        scenario_review = await self.generator.review_scenario(
+                            state.machine_information,
+                            working_scenario,
+                        )
+                        if not scenario_review.approved:
+                            review_report = _scenario_review_report(scenario_review)
+                            repair_history[-1]["scenario_sync_status"] = "rejected"
+                            last_validation_error = InvalidSourceError(
+                                "synchronized scenario semantic review failed: "
+                                + scenario_review.summary,
+                                review_report,
+                            )
+                            failure_report = review_report
+                            continue
+                        repair_history[-1]["scenario_sync_status"] = "approved"
                     try:
                         archive_path, checksum = self.source_archive.create(
-                            session_id, state.scenario, generated, repair_history
+                            session_id, working_scenario, generated, repair_history
                         )
                     except InvalidSourceError as error:
                         last_validation_error = error
@@ -244,13 +274,14 @@ class MachineWorkflow:
                             and failed_count >= best_validation_failures
                         ):
                             generated = retry_base
+                            working_scenario = retry_scenario
                         elif failed_count is not None:
                             best_validation_failures = failed_count
                         failure_report = _invalid_source_report(error, "source_validation")
                         continue
                     review = await self.generator.review_source(
                         state.machine_information,
-                        state.scenario,
+                        working_scenario,
                         generated,
                     )
                     if review.approved:
@@ -281,6 +312,7 @@ class MachineWorkflow:
                 raise RuntimeError(
                     f"source validation failed after retries: {last_validation_error}"
                 )
+            state.scenario = working_scenario
             state.source_path = str(archive_path.parent / "source")
             state.source_checksum = checksum
             state.build_id = None
@@ -465,6 +497,8 @@ def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:
                 "deleted_files": attempt.get("deleted_files", []),
                 "validation_status_after": attempt.get("validation_status_after"),
                 "validation_summary_after": attempt.get("validation_summary_after"),
+                "scenario_sync_status": attempt.get("scenario_sync_status"),
+                "scenario_sync_summary": attempt.get("scenario_sync_summary"),
             }
         )
     return compact
@@ -511,6 +545,26 @@ def _source_review_report(review: SourceReview) -> dict:
     warnings = sum(check["status"] == "warn" for check in checks)
     return {
         "kind": "source_semantic_review",
+        "status": "fail",
+        "error_message": review.summary,
+        "summary": {"passed": 0, "failed": failed, "warnings": warnings},
+        "checks": checks,
+    }
+
+
+def _scenario_review_report(review: ScenarioReview) -> dict:
+    checks = [
+        {
+            "status": "fail" if finding.severity == "error" else "warn",
+            "name": (f"scenario_sync:{finding.category}:{finding.step_id or 'scenario'}"),
+            "message": f"{finding.evidence} Remediation: {finding.remediation}",
+        }
+        for finding in review.findings
+    ]
+    failed = sum(check["status"] == "fail" for check in checks)
+    warnings = sum(check["status"] == "warn" for check in checks)
+    return {
+        "kind": "scenario_sync_review",
         "status": "fail",
         "error_message": review.summary,
         "summary": {"passed": 0, "failed": failed, "warnings": warnings},

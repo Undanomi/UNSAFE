@@ -14,6 +14,7 @@ from ai_server.prompts import (
     repair_prompt,
     scenario_prompt,
     scenario_review_prompt,
+    scenario_sync_prompt,
     source_review_prompt,
 )
 
@@ -170,6 +171,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
     assert "実際のデータフロー" in review_prompt
+    assert "シナリオ設計書" in review_prompt
+    assert scenario.definition in review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
     assert "独立した敵対的レビュー担当" in scenario_review
@@ -178,6 +181,16 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "全親ディレクトリ" in scenario_review
     assert "実効UID" in scenario_review
     assert "benign control" in scenario_review
+    assert "時系列の権限表" in scenario_review
+    assert "相反する記述" in scenario_review
+    assert "任意のコマンド・コード・式" in scenario_review
+    assert "操作方法や通信チャネルの変更" in scenario_review
+
+    sync_prompt = scenario_sync_prompt(machine, scenario, source)
+    assert "実装とシナリオを同期" in sync_prompt
+    assert "owner、group、mode、ACL、sudoers、capability" in sync_prompt
+    assert "実装と異なる古いパス、権限" in sync_prompt
+    assert "正解フラグ値そのもの" in sync_prompt
     assert "negative control" in scenario_review
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
