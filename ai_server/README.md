@@ -196,20 +196,27 @@ OpenAPI UI は `http://localhost:8000/docs` で確認できます。
 ## SQLAdmin 管理画面
 
 セッション、シナリオ、シナリオバージョンを確認・編集できる
-SQLAdminを `/admin` に用意しています。通常は無効です。有効にする場合は `.env` に
-次の値を設定してai_serverを再起動します。
+SQLAdminはAPIとは別の管理サービスとして用意しています。通常は起動しません。使用する場合は
+`.env` に次の値を設定します。
 
 ```dotenv
-SQLADMIN_ENABLED=true
 SQLADMIN_USERNAME=admin
 SQLADMIN_PASSWORD=<十分に長いランダムなパスワード>
 SQLADMIN_SESSION_SECRET=<32文字以上のランダム値>
 SQLADMIN_SECURE_COOKIES=false
 ```
 
-起動後は `http://localhost:8000/admin` からログインできます。本番環境ではHTTPSを使用し、
+Composeでは`admin`プロファイルを指定して起動します。
+
+```console
+docker compose --profile admin --env-file ai_server/.env -f ai_server/compose.yml up --build
+```
+
+起動後は `http://localhost:8001/admin` からログインできます。管理ポートは既定で
+`127.0.0.1`だけに公開され、APIの8000番ポートから管理画面へはアクセスできません。
+本番環境でリバースプロキシ経由で公開する場合はHTTPSを使用し、
 `SQLADMIN_SECURE_COOKIES=true` にしてください。認証値が不足している場合やセッション秘密鍵が
-32文字未満の場合、ai_serverは設定エラーで起動しません。管理画面から既存レコードを編集できますが、
+32文字未満の場合、ai-adminは設定エラーで起動しません。管理画面から既存レコードを編集できますが、
 主キーと作成日時の変更、およびレコードの作成・削除は無効化しています。ステータスや外部IDの
 編集は実行中のワークフローへ影響するため、運用上必要な場合に限って変更してください。
 

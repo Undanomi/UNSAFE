@@ -41,11 +41,6 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
-      SQLADMIN_ENABLED: ${SQLADMIN_ENABLED:-false}
-      SQLADMIN_USERNAME: ${SQLADMIN_USERNAME:-}
-      SQLADMIN_PASSWORD: ${SQLADMIN_PASSWORD:-}
-      SQLADMIN_SESSION_SECRET: ${SQLADMIN_SESSION_SECRET:-}
-      SQLADMIN_SECURE_COOKIES: ${SQLADMIN_SECURE_COOKIES:-false}
       # Use a Compose-specific override so a host-side BUILD_SERVER_URL such as
       # http://localhost:8080 cannot leak into the container network.
       BUILD_SERVER_URL: ${AI_BUILD_SERVER_URL:-http://server:8080}
@@ -60,8 +55,48 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health/ready', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 10
     volumes:
       - ai-scenario-data:/var/lib/slsg/scenarios
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  ai-admin:
+    build:
+      context: .
+    profiles: ["admin"]
+    command:
+      - uvicorn
+      - ai_server.admin_app:create_admin_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+    environment:
+      DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
+      SQLADMIN_USERNAME: ${SQLADMIN_USERNAME:-}
+      SQLADMIN_PASSWORD: ${SQLADMIN_PASSWORD:-}
+      SQLADMIN_SESSION_SECRET: ${SQLADMIN_SESSION_SECRET:-}
+      SQLADMIN_SECURE_COOKIES: ${SQLADMIN_SECURE_COOKIES:-false}
+    depends_on:
+      ai-server:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8001"
     user: "10001:10001"
     read_only: true
     tmpfs:
