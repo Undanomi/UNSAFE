@@ -1,9 +1,11 @@
 "use client"
 
-import { ArrowLeft, ImageUp, Pencil } from "lucide-react"
+import { ArrowLeft, Pencil } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
-import { type ChangeEvent, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useState } from "react"
+import { updateProfileAction } from "@/app/actions/profile"
 import { PROFILE_DATA, type ProfileMachine, type UserProfile } from "@/stores/profile"
 
 type ProfileEditorProps = {
@@ -17,54 +19,73 @@ export function ProfileEditor({
   canEdit = true,
   showBackLink = true,
 }: ProfileEditorProps) {
+  const router = useRouter()
   const [isEditing, setIsEditing] = useState(false)
   const [profileFields, setProfileFields] = useState(() => ({
-    avatarUrl: "",
+    avatarUrl: profile.avatarUrl ?? "",
     bio: profile.bio,
     name: profile.name,
   }))
   const [draftFields, setDraftFields] = useState(profileFields)
-  const [isImageLoading, setIsImageLoading] = useState(false)
-  const imageReadId = useRef(0)
+  const [iconMode, setIconMode] = useState<"google" | "initial">(
+    profileFields.avatarUrl ? "google" : "initial",
+  )
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState("")
 
-  const profileInitial = profileFields.name.trim().charAt(0).toUpperCase() || profile.initial
+  const displayFields = isEditing ? draftFields : profileFields
+  const displayAvatarUrl = isEditing && iconMode === "initial" ? "" : displayFields.avatarUrl
+  const profileInitial = displayFields.name.trim().charAt(0).toUpperCase() || profile.initial
 
   function startEditing() {
     setDraftFields(profileFields)
+    setIconMode(profileFields.avatarUrl ? "google" : "initial")
+    setSaveError("")
     setIsEditing(true)
   }
 
-  function saveProfile() {
-    if (isImageLoading) return
-    setProfileFields(draftFields)
-    setIsEditing(false)
+  async function saveProfile() {
+    if (isSaving) return
+
+    setSaveError("")
+    setIsSaving(true)
+
+    try {
+      const formData = new FormData()
+      formData.set("name", draftFields.name)
+      formData.set("bio", draftFields.bio)
+      formData.set("icon_mode", iconMode)
+
+      const result = await updateProfileAction(formData)
+
+      if (!result.success) {
+        setSaveError(result.message)
+        return
+      }
+
+      const updatedFields = {
+        ...profileFields,
+        avatarUrl: result.profile.iconUrl,
+        name: result.profile.name,
+        bio: result.profile.bio,
+      }
+      setProfileFields(updatedFields)
+      setDraftFields(updatedFields)
+      setIconMode(updatedFields.avatarUrl ? "google" : "initial")
+      setIsEditing(false)
+      router.refresh()
+    } catch {
+      setSaveError("プロフィールを保存できませんでした。もう一度お試しください。")
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   function cancelEditing() {
-    imageReadId.current += 1
-    setIsImageLoading(false)
+    setSaveError("")
     setDraftFields(profileFields)
+    setIconMode(profileFields.avatarUrl ? "google" : "initial")
     setIsEditing(false)
-  }
-
-  function updateProfileImage(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const readId = imageReadId.current + 1
-    imageReadId.current = readId
-    setIsImageLoading(true)
-    const reader = new FileReader()
-    reader.addEventListener("load", () => {
-      if (readId !== imageReadId.current) return
-      const avatarUrl = reader.result
-      if (typeof avatarUrl !== "string") return
-      setDraftFields((current) => ({ ...current, avatarUrl }))
-    })
-    reader.addEventListener("loadend", () => {
-      if (readId === imageReadId.current) setIsImageLoading(false)
-    })
-    reader.readAsDataURL(file)
   }
 
   return (
@@ -91,13 +112,13 @@ export function ProfileEditor({
 
       <section className="relative flex items-start gap-6 rounded-3xl border border-[#e5e5e2] bg-white p-7 shadow-sm max-sm:flex-col">
         <div className="relative grid size-20 shrink-0 place-items-center overflow-hidden rounded-full bg-[#20201e] text-2xl font-bold text-white">
-          {profileFields.avatarUrl ? (
+          {displayAvatarUrl ? (
             <Image
-              alt={`${profileFields.name}のプロフィール画像`}
+              alt={`${displayFields.name}のプロフィール画像`}
               fill
               className="size-full object-cover"
               sizes="80px"
-              src={profileFields.avatarUrl}
+              src={displayAvatarUrl}
               unoptimized
             />
           ) : (
@@ -118,43 +139,57 @@ export function ProfileEditor({
                   value={draftFields.name}
                 />
               </label>
+              <fieldset className="grid gap-2">
+                <legend className="text-[0.86rem] font-extrabold">アイコンの表示</legend>
+                <div className="flex flex-wrap gap-3">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#d6d6d2] px-4 py-3 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1]">
+                    <input
+                      checked={iconMode === "google"}
+                      name="profile-icon-mode"
+                      onChange={() => setIconMode("google")}
+                      type="radio"
+                    />
+                    <span className="text-[0.82rem] font-bold">Googleアイコン</span>
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#d6d6d2] px-4 py-3 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1]">
+                    <input
+                      checked={iconMode === "initial"}
+                      name="profile-icon-mode"
+                      onChange={() => setIconMode("initial")}
+                      type="radio"
+                    />
+                    <span className="text-[0.82rem] font-bold">イニシャル</span>
+                  </label>
+                </div>
+              </fieldset>
               <label className="grid gap-2 text-[0.86rem] font-extrabold">
                 <span>自己紹介</span>
                 <textarea
                   className="min-h-28 w-full resize-y rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+                  maxLength={500}
                   onChange={(event) =>
                     setDraftFields((current) => ({ ...current, bio: event.target.value }))
                   }
                   value={draftFields.bio}
                 />
               </label>
-              <fieldset className="grid gap-2">
-                <legend className="text-[0.86rem] font-extrabold">プロフィール画像</legend>
-                <label className="flex w-fit cursor-pointer items-center gap-2 rounded-[14px] border border-dashed border-[#bcbcb7] bg-[#f8f8f7] px-4 py-3 text-[0.86rem] font-bold transition hover:border-[#20201e] hover:bg-white">
-                  <ImageUp aria-hidden="true" size={18} strokeWidth={2} />
-                  画像をアップロード
-                  <input
-                    accept="image/png,image/jpeg,image/webp"
-                    className="sr-only"
-                    onChange={updateProfileImage}
-                    type="file"
-                  />
-                </label>
-                <p className="text-[0.75rem] text-[#61605b]">
-                  {isImageLoading ? "画像を読み込んでいます…" : "PNG、JPG、WebP を選択できます。"}
+              {saveError ? (
+                <p className="text-[0.86rem] font-bold text-[#b14334]" role="alert">
+                  {saveError}
                 </p>
-              </fieldset>
+              ) : null}
               <div className="flex flex-wrap gap-3">
                 <button
-                  className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37]"
-                  disabled={isImageLoading}
+                  className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
+                  disabled={isSaving}
                   onClick={saveProfile}
                   type="button"
                 >
-                  保存する
+                  {isSaving ? "保存しています…" : "保存する"}
                 </button>
                 <button
                   className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-transparent bg-transparent px-[18px] text-[0.92rem] font-extrabold text-[#61605b] hover:bg-[#f5f5f3]"
+                  disabled={isSaving}
                   onClick={cancelEditing}
                   type="button"
                 >
