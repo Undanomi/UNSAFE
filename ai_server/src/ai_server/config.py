@@ -7,22 +7,24 @@ from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class DatabaseSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "SLSG AI Server"
-    log_level: str = "INFO"
     database_url: str
     database_pool_min_size: int = Field(default=1, ge=1, le=20)
     database_pool_max_size: int = Field(default=10, ge=1, le=100)
-    source_root: Path = Path("./data/scenarios")
 
-    sqladmin_enabled: bool = False
-    sqladmin_username: str | None = None
-    sqladmin_password: SecretStr | None = None
-    sqladmin_session_secret: SecretStr | None = None
-    sqladmin_secure_cookies: bool = False
-    sqladmin_session_max_age_seconds: int = Field(default=28800, ge=300, le=86400)
+    @model_validator(mode="after")
+    def validate_database_pool_settings(self) -> DatabaseSettings:
+        if self.database_pool_min_size > self.database_pool_max_size:
+            raise ValueError("database_pool_min_size must not exceed database_pool_max_size")
+        return self
+
+
+class Settings(DatabaseSettings):
+    log_level: str = "INFO"
+    source_root: Path = Path("./data/scenarios")
 
     ai_provider: str = "gemini"
     gemini_api_key: str | None = None
@@ -55,28 +57,29 @@ class Settings(BaseSettings):
     skill_selection_max_cves: int = Field(default=3, ge=1, le=10)
 
     @model_validator(mode="after")
-    def validate_database_and_admin_settings(self) -> Settings:
-        if self.database_pool_min_size > self.database_pool_max_size:
-            raise ValueError("database_pool_min_size must not exceed database_pool_max_size")
+    def validate_download_signing_settings(self) -> Settings:
         if len(self.download_signing_secret.get_secret_value()) < 32:
             raise ValueError("DOWNLOAD_SIGNING_SECRET must contain at least 32 characters")
-        if not self.sqladmin_enabled:
-            return self
+        return self
+
+
+class AdminSettings(DatabaseSettings):
+    sqladmin_username: str
+    sqladmin_password: SecretStr
+    sqladmin_session_secret: SecretStr
+    sqladmin_secure_cookies: bool = False
+    sqladmin_session_max_age_seconds: int = Field(default=28800, ge=300, le=86400)
+
+    @model_validator(mode="after")
+    def validate_admin_settings(self) -> AdminSettings:
         configured_values = (
             ("SQLADMIN_USERNAME", self.sqladmin_username),
-            ("SQLADMIN_PASSWORD", self.sqladmin_password),
-            ("SQLADMIN_SESSION_SECRET", self.sqladmin_session_secret),
+            ("SQLADMIN_PASSWORD", self.sqladmin_password.get_secret_value()),
+            ("SQLADMIN_SESSION_SECRET", self.sqladmin_session_secret.get_secret_value()),
         )
-        missing = []
-        for name, value in configured_values:
-            secret_value = value.get_secret_value() if isinstance(value, SecretStr) else value
-            if not secret_value:
-                missing.append(name)
+        missing = [name for name, value in configured_values if not value]
         if missing:
-            raise ValueError(
-                f"SQLAdmin is enabled but these settings are missing: {', '.join(missing)}"
-            )
-        assert self.sqladmin_session_secret is not None
+            raise ValueError(f"SQLAdmin settings are missing: {', '.join(missing)}")
         if len(self.sqladmin_session_secret.get_secret_value()) < 32:
             raise ValueError("SQLADMIN_SESSION_SECRET must contain at least 32 characters")
         return self

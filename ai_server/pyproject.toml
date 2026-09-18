@@ -25,6 +25,7 @@ dev = [
 [project.scripts]
 ai-server = "ai_server.main:run"
 ai-server-skills = "ai_server.skills.cli:main"
+ai-admin = "ai_server.admin_app:run"
 
 [build-system]
 requires = ["hatchling"]

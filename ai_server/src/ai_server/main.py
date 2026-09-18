@@ -8,7 +8,6 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from .admin import configure_sqladmin
 from .api import router
 from .config import Settings, get_settings
 from .repository import SessionNotFoundError, SessionRepository
@@ -114,8 +113,6 @@ def create_app(
 
     app = FastAPI(title=resolved.app_name, version="0.1.0", lifespan=lifespan)
     app.include_router(router)
-    if resolved.sqladmin_enabled and isinstance(repository, SessionRepository):
-        app.state.sqladmin = configure_sqladmin(app, repository.engine, resolved)
 
     @app.exception_handler(SessionNotFoundError)
     async def session_not_found(_: Request, __: SessionNotFoundError) -> JSONResponse:
