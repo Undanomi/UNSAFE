@@ -94,9 +94,12 @@ class SessionRepository:
             select(
                 AISessionRecord,
                 ScenarioRecord.title,
+                ScenarioRecord.description,
                 ScenarioVersionRecord.scenario_definition,
                 ScenarioVersionRecord.target_os,
                 ScenarioVersionRecord.attack_graph,
+                ScenarioVersionRecord.user_flag,
+                ScenarioVersionRecord.system_flag,
             )
             .outerjoin(ScenarioRecord, ScenarioRecord.scenario_id == AISessionRecord.scenario_id)
             .outerjoin(
@@ -120,9 +123,12 @@ class SessionRepository:
                 scenario_id=record.scenario_id,
                 scenario_version_id=record.scenario_version_id or "v1",
                 title=row[1],
-                definition=row[2],
-                target_os=row[3],
-                attack_graph=AttackGraph.model_validate(row[4]),
+                scenario_description=row[2],
+                definition=row[3],
+                target_os=row[4],
+                attack_graph=AttackGraph.model_validate(row[5]),
+                user_flag=row[6],
+                system_flag=row[7],
             )
         return SessionState(
             session_id=str(record.session_id),
@@ -196,7 +202,7 @@ class SessionRepository:
             scenario_id=state.scenario.scenario_id,
             owner_user_id=state.owner_user_id,
             title=state.scenario.title,
-            description=state.machine_information.theme,
+            description=state.scenario.scenario_description,
             difficulty=state.machine_information.difficulty,
             status="draft",
             current_version=1,
@@ -221,6 +227,8 @@ class SessionRepository:
             scenario_definition=state.scenario.definition,
             target_os=state.scenario.target_os,
             attack_graph=state.scenario.attack_graph.model_dump(mode="json"),
+            user_flag=state.scenario.user_flag,
+            system_flag=state.scenario.system_flag,
             generated_code_path=state.source_path,
             generated_code_checksum=state.source_checksum,
             created_by=state.owner_user_id,
@@ -236,6 +244,8 @@ class SessionRepository:
                     "scenario_definition": version_insert.excluded.scenario_definition,
                     "target_os": version_insert.excluded.target_os,
                     "attack_graph": version_insert.excluded.attack_graph,
+                    "user_flag": version_insert.excluded.user_flag,
+                    "system_flag": version_insert.excluded.system_flag,
                     "generated_code_path": version_insert.excluded.generated_code_path,
                     "generated_code_checksum": version_insert.excluded.generated_code_checksum,
                 },

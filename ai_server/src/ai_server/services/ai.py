@@ -17,7 +17,9 @@ from ..models import (
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    ScenarioGeneration,
     ScenarioReview,
+    ScenarioRevision,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -28,6 +30,7 @@ from ..prompts import (
     repair_prompt,
     scenario_prompt,
     scenario_review_prompt,
+    scenario_sync_prompt,
     source_review_prompt,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
@@ -119,6 +122,13 @@ class AIGenerator(Protocol):
         failure_report: dict,
         skills: SkillContext | None = None,
     ) -> SourcePatch: ...
+
+    async def synchronize_scenario(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> ScenarioRevision: ...
 
     async def review_source(
         self,
@@ -403,22 +413,25 @@ JSONのみを返してください:
                     )
                     self._validate_skill_cves(candidate, resolved_skills, machine)
                     graph = await self._verify_attack_graph(machine, candidate)
-                scenario_skills = SkillRenderer.render(
-                    context_for_graph(resolved_skills.scenario, graph)
-                )
-                definition = await self._generate(
+                response = await self._generate(
                     scenario_prompt(
                         machine,
                         graph.model_dump_json(indent=2),
                         review_feedback=rejected,
-                        skill_context=scenario_skills,
+                        skill_context=SkillRenderer.render(
+                            context_for_graph(resolved_skills.scenario, graph)
+                        ),
                     ),
+                    json_output=True,
+                    response_schema=ScenarioGeneration,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
+                generated = ScenarioGeneration.model_validate_json(response)
                 scenario = ScenarioDraft(
                     scenario_id=f"scenario-{uuid4().hex}",
                     title=machine.name,
-                    definition=definition,
+                    scenario_description=generated.scenario_description,
+                    definition=generated.definition,
                     target_os=machine.operating_system,
                     attack_graph=graph,
                 )
@@ -542,6 +555,49 @@ JSONのみを返してください:
                     "model_output_validation_error": str(error),
                 }
         raise RuntimeError(f"Could not repair VM source: {last_error}")
+
+    async def synchronize_scenario(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> ScenarioRevision:
+        last_error: Exception | None = None
+        prompt = scenario_sync_prompt(machine, scenario, current)
+        for _ in range(self.settings.generation_retries):
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=ScenarioRevision,
+                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                )
+                revision = ScenarioRevision.model_validate_json(response)
+                expected_objectives = {
+                    (objective.objective_id, objective.objective_type)
+                    for objective in scenario.attack_graph.objectives
+                }
+                revised_objectives = {
+                    (objective.objective_id, objective.objective_type)
+                    for objective in revision.attack_graph.objectives
+                }
+                if revised_objectives != expected_objectives:
+                    raise ValueError("scenario revision must preserve flag objectives")
+                revision_text = (
+                    revision.scenario_description
+                    + "\n"
+                    + revision.definition
+                    + "\n"
+                    + revision.attack_graph.model_dump_json()
+                ).casefold()
+                for flag in (scenario.user_flag, scenario.system_flag):
+                    if flag and flag.casefold() in revision_text:
+                        raise ValueError("scenario revision must not expose a correct flag value")
+                return revision
+            except (httpx.HTTPError, RuntimeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error)
+        raise RuntimeError(f"Could not synchronize scenario with VM source: {last_error}")
 
     async def review_source(
         self,

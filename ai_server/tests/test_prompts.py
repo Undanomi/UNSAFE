@@ -14,6 +14,7 @@ from ai_server.prompts import (
     repair_prompt,
     scenario_prompt,
     scenario_review_prompt,
+    scenario_sync_prompt,
     source_review_prompt,
 )
 
@@ -60,8 +61,12 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "完全なスクリプトや全コマンドはコード生成段階へ委ねる" in prompt
         assert "全親ディレクトリのowner/group/mode" in prompt
 
+    assert "対象マシンを調査すること" in design_prompts[1]
+    assert "フラグを獲得すること" in design_prompts[1]
+    assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
+
     assert len(design_prompts[0]) < 3000
-    assert len(design_prompts[1]) < 2500
+    assert len(design_prompts[1]) < 3000
 
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt
@@ -170,6 +175,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
     assert "実際のデータフロー" in review_prompt
+    assert "シナリオ設計書" in review_prompt
+    assert scenario.definition in review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
     assert "独立した敵対的レビュー担当" in scenario_review
@@ -178,6 +185,19 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "全親ディレクトリ" in scenario_review
     assert "実効UID" in scenario_review
     assert "benign control" in scenario_review
+    assert "時系列の権限表" in scenario_review
+    assert "相反する記述" in scenario_review
+    assert "任意のコマンド・コード・式" in scenario_review
+    assert "操作方法や通信チャネルの変更" in scenario_review
+    assert "description_spoiler" in scenario_review
+    assert "特定の定型句や表記の完全一致は要求しない" in scenario_review
+
+    sync_prompt = scenario_sync_prompt(machine, scenario, source)
+    assert "実装とシナリオを同期" in sync_prompt
+    assert "owner、group、mode、ACL、sudoers、capability" in sync_prompt
+    assert "実装と異なる古いパス、権限" in sync_prompt
+    assert "正解フラグ値そのもの" in sync_prompt
+    assert "scenario_description" in sync_prompt
     assert "negative control" in scenario_review
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
@@ -189,3 +209,49 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "`apache2ctl configtest`" in review_prompt
     assert "implementation_mismatch" in review_prompt
     assert "一律に不合格にはせず" in review_prompt
+
+
+def test_source_prompts_include_persisted_flag_values() -> None:
+    machine = MachineInformation(
+        name="Flag Test",
+        visibility="private",
+        theme="Flags",
+        difficulty="Easy",
+        needs_user_flag=True,
+        user_flag_details="/home/student/user.txt",
+        needs_system_flag=True,
+        system_flag_details="/root/system.txt",
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-flags",
+        title="Flag Test",
+        definition="# Flag Test",
+        user_flag="flag{user_exact_value}",
+        system_flag="flag{system_exact_value}",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="flags",
+                    title="Read flags",
+                    kind="custom",
+                    phase="objective",
+                    description="Read both flags",
+                    implementation_steps=["Place both flags"],
+                )
+            ]
+        ),
+    )
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/scripts/provision.sh", content="#!/bin/bash\n")]
+    )
+
+    for prompt in (
+        code_prompt(machine, scenario),
+        repair_prompt(machine, scenario, source, {"error": "test"}),
+        source_review_prompt(machine, scenario, source),
+    ):
+        assert "flag{user_exact_value}" in prompt
+        assert "flag{system_exact_value}" in prompt
+
+    assert "user_flag" not in scenario.model_dump()
+    assert "system_flag" not in scenario.model_dump()

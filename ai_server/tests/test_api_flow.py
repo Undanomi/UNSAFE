@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from ai_server.models import (
     AttackStep,
     MachineInformation,
     ScenarioDraft,
+    ScenarioRevision,
     SessionState,
     SessionStatus,
     SourceFile,
@@ -204,7 +206,13 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert "event: scenario.completed" in events.text
     assert '"target_os": "Debian 13.7.0"' in events.text
 
-    scenario_id = (await app.state.repository.get(session_id)).scenario.scenario_id
+    scenario = (await app.state.repository.get(session_id)).scenario
+    assert scenario is not None
+    assert scenario.user_flag is not None
+    assert re.fullmatch(r"flag\{user_[0-9a-f]{32}\}", scenario.user_flag)
+    assert scenario.system_flag is None
+    assert scenario.user_flag not in events.text
+    scenario_id = scenario.scenario_id
     accepted = await http.post(
         f"/v1/sessions/{session_id}/machines",
         json={"scenario_id": scenario_id},
@@ -212,12 +220,17 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     )
     assert accepted.status_code == 202
     assert accepted.json()["status"] == "generating_code"
+    assert accepted.json()["user_flag"] == scenario.user_flag
+    assert accepted.json()["system_flag"] is None
 
     for _ in range(50):
         if (await app.state.repository.get(session_id)).build_id:
             break
         await asyncio.sleep(0.01)
     assert fake_build.submitted_archive is not None
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        provision = archive.read("contents/scripts/provision.sh").decode()
+    assert scenario.user_flag in provision
 
     completed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
     assert completed.status_code == 200
@@ -406,6 +419,16 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     state = await create_failed_build_state(app)
     fake_build.packer_log_response = "command before failure\nerror detail"
 
+    async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
+        return ScenarioRevision(
+            scenario_description="Updated player introduction after source repair.",
+            definition="retry synchronized with repaired source",
+            attack_graph=scenario.attack_graph,
+            summary="Updated the scenario after source repair.",
+        )
+
+    app.state.workflow.generator.synchronize_scenario = synchronize_scenario
+
     accepted = await http.post(
         f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
     )
@@ -423,6 +446,12 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     submitted_state = await app.state.repository.get(state.session_id)
     assert submitted_state.build_repair_attempts == 1
     assert submitted_state.build_repair_attempt_limit == 3
+    assert submitted_state.scenario is not None
+    assert (
+        submitted_state.scenario.scenario_description
+        == "Updated player introduction after source repair."
+    )
+    assert submitted_state.scenario.definition == "retry synchronized with repaired source"
     assert fake_build.submitted_request["idempotency_key"].startswith(
         f"ai-session-{state.session_id}-"
     )
@@ -435,6 +464,7 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert "contents/README.md" in repair_report
     assert "command before failure" in repair_report
     assert "error detail" in repair_report
+    assert '"scenario_sync_status": "approved"' in repair_report
 
 
 @pytest.mark.asyncio

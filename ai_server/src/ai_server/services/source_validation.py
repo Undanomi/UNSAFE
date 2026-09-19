@@ -6,7 +6,7 @@ import stat
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
-from ..models import AttackGraph
+from ..models import AttackGraph, ScenarioDraft
 
 REQUIRED_FILES = {
     "contents/README.md",
@@ -50,7 +50,7 @@ WEB_SERVICE_NAMES = {"apache", "caddy", "http", "https", "lighttpd", "nginx", "p
 
 
 def validate_source(
-    root: Path, attack_graph: AttackGraph, repair_history: list[dict] | None = None
+    root: Path, scenario: ScenarioDraft, repair_history: list[dict] | None = None
 ) -> dict:
     checks: list[dict[str, str]] = []
 
@@ -62,11 +62,12 @@ def validate_source(
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
     if manifest is not None:
         _validate_manifest(root, manifest, add)
-        _validate_attack_graph(manifest, attack_graph, add)
+        _validate_attack_graph(manifest, scenario.attack_graph, add)
     _validate_build(root / "contents/build.sh", add)
     _validate_source_modes(root / "contents", add)
     if manifest is not None:
         _validate_web_delivery(root / "contents", manifest, add)
+        _validate_flag_values(root / "contents", manifest, scenario, add)
     _validate_base_image_compatibility(root / "contents", repair_history or [], add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
@@ -86,6 +87,44 @@ def validate_source(
         },
         "checks": checks,
     }
+
+
+def _validate_flag_values(contents: Path, manifest: dict, scenario: ScenarioDraft, add) -> None:
+    manifest_text = json.dumps(manifest, ensure_ascii=False)
+    text_files = [path for path in sorted(contents.rglob("*")) if path.is_file()]
+    deployment_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in text_files
+        if path.name not in {"README.md", "scenario_manifest.json"}
+    )
+    for kind, expected in (("user", scenario.user_flag), ("system", scenario.system_flag)):
+        if expected is None:
+            continue
+        add(
+            "pass" if expected in deployment_text else "fail",
+            f"flag:{kind}:deployment_exact_value",
+            "deployment input must contain the exact case-sensitive persisted flag value",
+        )
+        add(
+            "pass" if expected in manifest_text else "fail",
+            f"flag:{kind}:manifest_exact_value",
+            "manifest checks must contain the exact case-sensitive persisted flag value",
+        )
+        mismatched_paths = []
+        pattern = re.compile(re.escape(expected), re.IGNORECASE)
+        for path in text_files:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if any(match.group(0) != expected for match in pattern.finditer(text)):
+                mismatched_paths.append(path.relative_to(contents).as_posix())
+        add(
+            "fail" if mismatched_paths else "pass",
+            f"flag:{kind}:case_consistency",
+            (
+                "case-mismatched flag value found in: " + ", ".join(mismatched_paths)
+                if mismatched_paths
+                else "all flag occurrences preserve the persisted value's case"
+            ),
+        )
 
 
 def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:

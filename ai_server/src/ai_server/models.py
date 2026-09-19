@@ -168,9 +168,30 @@ class ScenarioDraft(BaseModel):
     scenario_id: str
     scenario_version_id: str = "v1"
     title: str
+    scenario_description: str = Field(default="", max_length=1000)
     definition: str
     target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
+    user_flag: str | None = Field(
+        default=None,
+        min_length=22,
+        max_length=134,
+        pattern=r"^flag\{[A-Za-z0-9][A-Za-z0-9_-]{15,127}\}$",
+        exclude=True,
+    )
+    system_flag: str | None = Field(
+        default=None,
+        min_length=22,
+        max_length=134,
+        pattern=r"^flag\{[A-Za-z0-9][A-Za-z0-9_-]{15,127}\}$",
+        exclude=True,
+    )
+
+    @model_validator(mode="after")
+    def flags_must_be_distinct(self) -> ScenarioDraft:
+        if self.user_flag and self.system_flag and self.user_flag == self.system_flag:
+            raise ValueError("user_flag and system_flag must be different")
+        return self
 
 
 class ScenarioReviewFinding(BaseModel):
@@ -185,6 +206,7 @@ class ScenarioReviewFinding(BaseModel):
         "unintended_shortcut",
         "acceptance_test_gap",
         "unsupported_assumption",
+        "description_spoiler",
     ]
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
@@ -201,6 +223,18 @@ class ScenarioReview(BaseModel):
         if self.approved == has_error:
             raise ValueError("approved must be true exactly when there are no error findings")
         return self
+
+
+class ScenarioRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=12000)
+    attack_graph: AttackGraph
+    summary: str = Field(min_length=1, max_length=4000)
+
+
+class ScenarioGeneration(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=12000)
 
 
 class SourceReviewFinding(BaseModel):
@@ -290,6 +324,8 @@ class CreateMachineRequest(BaseModel):
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
+    user_flag: str | None = None
+    system_flag: str | None = None
 
 
 class DownloadURLResponse(BaseModel):

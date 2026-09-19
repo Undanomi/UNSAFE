@@ -11,9 +11,10 @@ import {
 } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
-import { useState } from "react"
+import { usePathname } from "next/navigation"
+import { useEffect, useState } from "react"
 import { logoutAction } from "@/app/actions/auth"
-import { CHAT_SESSIONS } from "@/stores/chat"
+import type { ChatSessionSummary } from "@/stores/chat"
 
 type SiteSidebarProps = {
   user: {
@@ -25,7 +26,41 @@ type SiteSidebarProps = {
 export function SiteSidebar({ user }: SiteSidebarProps) {
   const [isChatListOpen, setIsChatListOpen] = useState(false)
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
+  const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([])
+  const [isLoadingChats, setIsLoadingChats] = useState(false)
+  const pathname = usePathname()
   const userInitial = user.name.trim().charAt(0).toUpperCase() || "U"
+
+  useEffect(() => {
+    if (pathname) setIsChatListOpen(false)
+  }, [pathname])
+
+  useEffect(() => {
+    if (!isChatListOpen) return
+    const abortController = new AbortController()
+
+    async function loadChatSessions() {
+      setIsLoadingChats(true)
+      try {
+        const response = await fetch("/api/chat/sessions", {
+          cache: "no-store",
+          signal: abortController.signal,
+        })
+        if (!response.ok) return
+        const body = (await response.json()) as { sessions?: ChatSessionSummary[] }
+        setChatSessions(body.sessions ?? [])
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          console.error("Failed to load chat sessions.", error)
+        }
+      } finally {
+        if (!abortController.signal.aborted) setIsLoadingChats(false)
+      }
+    }
+
+    void loadChatSessions()
+    return () => abortController.abort()
+  }, [isChatListOpen])
 
   return (
     <aside className="fixed top-0 bottom-0 left-0 z-10 flex w-[218px] flex-col border border-[#3d3d38] bg-[#20201e] px-[14px] py-5 text-[#f8f7f2] max-lg:static max-lg:w-full">
@@ -81,7 +116,15 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
             className="grid max-h-[156px] gap-[5px] overflow-y-auto pr-0.5"
             id="sidebar-chat-list"
           >
-            {CHAT_SESSIONS.map((session) => (
+            {isLoadingChats ? (
+              <span className="px-[9px] py-2 text-[0.75rem] text-[#aaa9a3]">読み込み中…</span>
+            ) : null}
+            {!isLoadingChats && chatSessions.length === 0 ? (
+              <span className="px-[9px] py-2 text-[0.75rem] text-[#aaa9a3]">
+                保存済みのチャットはありません
+              </span>
+            ) : null}
+            {chatSessions.map((session) => (
               <Link
                 className="overflow-hidden rounded-[10px] px-[9px] py-2 text-[0.78rem] font-bold text-[#c5c4bd] text-ellipsis whitespace-nowrap hover:bg-[#3a3934] hover:text-white"
                 href={`/machines/chat/${session.id}`}

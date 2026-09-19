@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from skill_helpers import as_candidates
@@ -173,7 +175,12 @@ async def test_gemini_gets_only_selected_cve_reference(tmp_path, monkeypatch):
         if kwargs.get("response_schema") is ScenarioReview:
             return ScenarioReview(approved=True, summary="Approved", findings=[]).model_dump_json()
         prompts.append(prompt)
-        return "# Scenario"
+        return json.dumps(
+            {
+                "scenario_description": "Investigate the generated training machine.",
+                "definition": "# Scenario",
+            }
+        )
 
     async with httpx.AsyncClient() as client:
         generator = GeminiGenerator(Settings(gemini_api_key="test"), client)

@@ -274,7 +274,8 @@ def scenario_prompt(
     )
     feedback_context = "\n".join((review_feedback or [])[-5:]) or "なし（初回生成）"
     return f"""あなたはHack The Box風の教育用Linuxマシンを設計するアーキテクトです。
-次の条件と検証済み攻撃グラフを使い、実装可能で一貫したシナリオ設計書をMarkdownで1つ作成してください。
+次の条件と検証済み攻撃グラフを使い、プレイヤー向けの紹介文と、実装者向けの一貫した
+シナリオ設計書を作成してください。
 
 マシン名: {machine.name}
 テーマ: {machine.theme}
@@ -292,7 +293,22 @@ def scenario_prompt(
 ください。提示された攻撃グラフのstep、requires、achievesは変更せず、設計書の実装順序、主体、
 権限、設定、検証計画を具体化・修正して、同じ指摘を繰り返さないでください。
 
-必ず次の章をこの順で含めてください。
+JSONのみを返してください:
+{{"scenario_description":"プレイヤー向け紹介文","definition":"Markdown形式のシナリオ設計書"}}
+
+scenario_descriptionは、シナリオの背景や雰囲気、調査する動機、学習テーマなどから適切な要素を選び、
+プレイヤーが挑戦したくなる自然な日本語で自由に記述してください。特定の役割設定、文体、文章構成、
+定型的な書き出しは要求しません。最後は「対象マシンを調査すること」と「フラグを獲得すること」の
+両方が具体的に伝わる指示文で、直前までの背景説明から自然につなげてください。例えば、侵害が疑われる
+サーバーという背景なら「サーバー内部を詳しく調べ、攻撃の証拠とともにフラグを見つけ出して下さい」、
+設定不備を扱う演習なら「マシンの構成を調査し、隠されたフラグを取得してください」のような流れです。
+例文を定型句として逐語的に使う必要はありません。「ください／下さい」「獲得／取得／発見」などの
+表記や語彙は、文章全体として自然で意味が明確なら自由に選んでください。
+テーマまたは脆弱性の大分類には触れて構いませんが、具体的な攻撃手順、侵入口、URLやパス、ポート、
+製品バージョン、認証情報、コマンド、権限昇格経路、フラグの場所や値、攻撃連鎖の順序は明かさないで
+ください。Markdownは使わず、設計書と矛盾する説明にしないでください。
+
+definitionには必ず次の章をこの順で含めてください。
 # [マシン名] シナリオ設計書
 ## 1. 基本情報 (Metadata)
 ## 2. 背景ストーリー & コンテキスト
@@ -327,6 +343,11 @@ def scenario_review_prompt(machine: MachineInformation, scenario: ScenarioDraft)
 User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
 
+プレイヤー向け紹介文:
+```text
+{scenario.scenario_description}
+```
+
 攻撃グラフ:
 ```json
 {scenario.attack_graph.model_dump_json(indent=2)}
@@ -343,6 +364,11 @@ JSONのみを返してください:
 "remediation":"所有者・group・mode・実行主体を含む具体的な設計修正"}}]}}
 
 審査規則:
+- プレイヤー向け紹介文の締めから、対象マシンを調査することとフラグを獲得することの両方が明確に
+  読み取れない場合はsemantic_mismatchのerrorにする。特定の定型句や表記の完全一致は要求しない
+- プレイヤー向け紹介文が設計書と矛盾する、または具体的な侵入口、URLやパス、ポート、製品バージョン、
+  認証情報、コマンド、権限昇格経路、フラグの場所や値、攻撃連鎖の順序を漏らす場合は
+  description_spoilerのerrorにする。役割、状況、目的、脆弱性の大分類だけなら許容する
 - 全攻撃ステップを順に追い、各requiresの成果物が後段で実際に必要か、各achievesへ到達できるかを
   攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
   errorにする
@@ -358,6 +384,10 @@ JSONのみを返してください:
   記載する。単なる一般論や推測だけで不合格にしない
 
 パーミッションは最重点項目として、各ステップで次を明示的に反証する:
+- 重要な全パスについて、攻撃前と各ステップ完了後のowner・group・mode・ACL・sudoers・capabilityと、
+  各主体から見た読み取り・書き込み・探索・実行可否を時系列の権限表として内部的に組み立てる
+- 同じ時点・同じパスに対して「読める／読めない」、異なるowner・group・modeなど相反する記述が
+  1つでもあればsemantic_mismatchのerrorにする。negative controlの条件を完成構成へ混入させない
 - 攻撃前、各ステップ完了後、flag取得時点の実効UID・主group・補助groupと、サービスの実行ユーザー
 - 読み取り、書き込み、作成、置換、探索、実行が必要な全パスについて、対象ファイルだけでなく全親
   ディレクトリのowner・group・modeと、ACL、sudoers、setuid/setgid、Linux capabilitiesの影響
@@ -369,6 +399,12 @@ JSONのみを返してください:
   requiresを飛ばせる場合はpermission_shortcutのerrorにする
 - 権限昇格では、攻撃前後の実効UIDまたはcapabilityと保護対象へのアクセス差を説明できること。
   root所有という記述だけ、chmod 777、無差別なchown、設計にないgroup所属を成立根拠にしない
+- 任意のコマンド・コード・式を実行できる段階へ到達した主体は、その時点のUIDで利用可能な
+  ファイル操作、資格情報、sudo、setuid、capability、インタープリタ、ローカルサービスをすべて
+  利用できるものとして扱う。「対話シェルをまだ得ていない」など実行経路の名前の違いだけを、
+  後続ステップの前提が必要である根拠にしない
+- 各requiresは、前段完了前には存在せず完了後に初めて得られる権限・秘密・到達性・実効IDなどの
+  能力差を生むこと。単なる操作方法や通信チャネルの変更で同じ操作が既に可能ならbroken_chainにする
 - flagについて、指定パスと全親ディレクトリの権限が、意図したステップ完了後の主体には読め、
   完了前の主体には読めないこと。配置先の重複、リンク、ログや設定への値の漏洩も近道として扱う
 - レビュー時点では実ファイルが未生成であるため、具体値が設計書に十分定義されているかを審査する。
@@ -393,6 +429,10 @@ def code_prompt(
 
 検証済みの攻撃グラフ:
 {scenario.attack_graph.model_dump_json(indent=2)}
+
+配置する正解フラグ（未設定は配置しない）:
+- User flag: {scenario.user_flag or "未設定"}
+- System flag: {scenario.system_flag or "未設定"}
 
 JSON以外は返さないでください。形式:
 {{"files":[{{"path":"contents/build.sh","content":"#!/bin/bash\\nset -euo pipefail\\n...","mode":"0755"}}]}}
@@ -432,6 +472,7 @@ JSON以外は返さないでください。形式:
 - 何度実行しても壊れにくい処理にする
 - User flag設定: {machine.needs_user_flag}, {machine.user_flag_details or "指定なし"}
 - System flag設定: {machine.needs_system_flag}, {machine.system_flag_details or "指定なし"}
+- 設定された正解フラグは1文字も変更せず、指定された配置先へそのまま保存する
 
 {HASH_CRACKING_CONSTRAINTS}
 
@@ -463,6 +504,8 @@ def repair_prompt(
 マシン: {machine.name}
 シナリオID: {scenario.scenario_id}
 対象OS: {scenario.target_os}
+User flag正解値: {scenario.user_flag or "未設定"}
+System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
 {scenario.attack_graph.model_dump_json(indent=2)}
@@ -502,6 +545,7 @@ JSON以外は返さないでください。形式:
   contents/scripts/以下を修正し、VMへの配置変更はprovision.shのinstall/cp/chownで行う
 - 対象OSのリポジトリにないパッケージとフルOSアップグレードを使わない
 - 既存のシナリオ意図、flag、manifestの整合性を維持する
+- 設定された正解フラグは1文字も変更せず、修復後も同じ値を維持する
 - contents/scenario_manifest.jsonを変更する場合、そのcontentはMarkdownやコメントを含まない
   厳密なJSON objectとし、単独でPythonのjson.loadsに成功させる。command文字列内の
   バックスラッシュもJSON規則で必ずエスケープし、セミコロンやドル記号の直前に未定義の
@@ -523,6 +567,63 @@ JSON以外は返さないでください。形式:
 """
 
 
+def scenario_sync_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    current: GeneratedSource,
+) -> str:
+    return f"""あなたは教育用攻撃マシンの実装とシナリオを同期する設計担当です。
+ソース修復後の実装ファイルを唯一の実装事実として読み取り、シナリオ本文と攻撃グラフを、実際の
+パス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、脆弱性、前提関係、
+検証方法に一致するよう改訂してください。変更が不要な箇所は維持してください。
+
+マシン: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {scenario.target_os}
+
+修復前のプレイヤー向け紹介文:
+```text
+{scenario.scenario_description}
+```
+
+修復前の攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+修復前のシナリオ:
+```markdown
+{scenario.definition}
+```
+
+修復後の実装ファイル:
+```json
+{current.model_dump_json(indent=2)}
+```
+
+JSONのみを返してください:
+{{"scenario_description":"改訂後のプレイヤー向け紹介文","definition":"改訂後のMarkdown",
+"attack_graph":{{"objectives":[],"steps":[]}},
+"summary":"同期した事実の要約"}}
+
+制約:
+- 実装に存在しない挙動を追加せず、実装と異なる古いパス、権限、資格情報、手順、検証を残さない
+- 実装側の変更が誤りに見えても隠さず忠実に反映する。後続の敵対的シナリオレビューで不合格にする
+- 攻撃グラフのrequiresとachievesも実装上の能力遷移に合わせ、前提を飛ばせる状態を正当化しない
+- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionやattack_graphへ記載しない
+- scenario_id、scenario_version_id、タイトル、対象OSは変更対象にしない
+- owner・group・mode等を変えた場合、本文の実装計画、攻略手順、肯定・否定テストをすべて同期する
+- scenario_descriptionも実装と本文に合わせて更新する。ただし、具体的な侵入口、URLやパス、ポート、
+  製品バージョン、認証情報、コマンド、権限昇格経路、フラグの場所や値、攻撃連鎖の順序を明かさず、
+  特定の役割設定や定型的な構成を強制しない、プレイヤー向けの自然な日本語を維持する。最後は
+  シナリオ固有の背景から自然につながる表現で、対象マシンの調査とフラグ獲得の両方を明確に指示する。
+  語彙や表記の完全一致は要求せず、同じ定型句を繰り返さない
+
+{DESIGN_CONSTRAINTS}
+"""
+
+
 def source_review_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
@@ -537,9 +638,16 @@ def source_review_prompt(
 テーマ: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {scenario.target_os}
+User flag正解値: {scenario.user_flag or "未設定"}
+System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
 {scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+シナリオ設計書:
+```markdown
+{scenario.definition}
 ```
 
 生成ファイル:
@@ -553,6 +661,9 @@ JSONのみを返してください:
 
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
+- 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
+- シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
+  脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
 - intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
 - 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
   acceptance_test_gapのerrorにする

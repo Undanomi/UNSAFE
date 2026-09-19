@@ -343,7 +343,12 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
         if request_number == 1:
             return gemini_response(graph)
         if request_number in {2, 4}:
-            return gemini_response(f"# Generated scenario attempt {request_number}")
+            return gemini_response(
+                {
+                    "scenario_description": f"Player introduction attempt {request_number}.",
+                    "definition": f"# Generated scenario attempt {request_number}",
+                }
+            )
         if request_number == 3:
             return gemini_response(
                 {
@@ -375,6 +380,7 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
         )
 
     assert scenario.definition == "# Generated scenario attempt 4"
+    assert scenario.scenario_description == "Player introduction attempt 4."
     assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
@@ -415,7 +421,12 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
         if request_number in {1, 4}:
             return gemini_response(graph)
         if request_number in {2, 5}:
-            return gemini_response(f"# Generated scenario attempt {request_number}")
+            return gemini_response(
+                {
+                    "scenario_description": f"Player introduction attempt {request_number}.",
+                    "definition": f"# Generated scenario attempt {request_number}",
+                }
+            )
         if request_number == 3:
             return gemini_response(
                 {
@@ -711,7 +722,12 @@ async def test_generate_scenario_without_cve_does_not_request_cve_services() -> 
         if len(requests) == 1:
             return gemini_response(graph)
         if len(requests) == 2:
-            return gemini_response("# Generated scenario")
+            return gemini_response(
+                {
+                    "scenario_description": "Investigate the training machine and capture the flag.",
+                    "definition": "# Generated scenario",
+                }
+            )
         return gemini_response(
             {"approved": True, "summary": "Scenario is internally consistent.", "findings": []}
         )
@@ -723,6 +739,9 @@ async def test_generate_scenario_without_cve_does_not_request_cve_services() -> 
         )
 
     assert scenario.definition == "# Generated scenario"
+    assert scenario.scenario_description == (
+        "Investigate the training machine and capture the flag."
+    )
     assert scenario.attack_graph.steps[0].kind == "logic_flaw"
     assert len(requests) == 3
     assert all("cveawg" not in url and "osv.dev" not in url for url in requests)

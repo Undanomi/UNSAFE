@@ -388,7 +388,12 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
                 ).model_dump_json()
             return ScenarioReview(approved=True, summary="Approved", findings=[]).model_dump_json()
         prompts.append(prompt)
-        return "# Scenario"
+        return json.dumps(
+            {
+                "scenario_description": "Investigate the generated training machine.",
+                "definition": "# Scenario",
+            }
+        )
 
     async with httpx.AsyncClient() as client:
         generator = GeminiGenerator(Settings(gemini_api_key="test"), client)

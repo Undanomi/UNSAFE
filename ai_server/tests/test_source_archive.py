@@ -122,6 +122,32 @@ def test_accepts_web_checks_without_directory_listing_policy(tmp_path: Path) -> 
     assert archive_path.is_file()
 
 
+def test_rejects_case_mismatched_flag_in_provisioning_source(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    mismatched = expected.upper()
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    for source_file in generated.files:
+        if source_file.path == "contents/scripts/provision.sh":
+            source_file.content += f"printf '%s\\n' '{mismatched}' > /home/user/user.txt\n"
+        if source_file.path == "contents/scenario_manifest.json":
+            manifest = json.loads(source_file.content)
+            manifest["acceptance_tests"].append(
+                {"command": f"grep -Fxq '{mismatched}' /home/user/user.txt"}
+            )
+            source_file.content = json.dumps(manifest)
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", flag_scenario, generated)
+
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "flag:user:deployment_exact_value" in failures
+    assert "flag:user:manifest_exact_value" in failures
+    assert "flag:user:case_consistency" in failures
+
+
 def test_generation_manifest_records_pinned_skills(tmp_path: Path) -> None:
     skill_snapshot = {
         "source": [

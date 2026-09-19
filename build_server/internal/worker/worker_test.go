@@ -28,6 +28,46 @@ func TestNewMachinePassword(t *testing.T) {
 	}
 }
 
+func TestDriveConversionUpdate(t *testing.T) {
+	tests := []struct {
+		name         string
+		line         string
+		wantProgress int
+		wantMessage  string
+		wantMatched  bool
+	}{
+		{
+			name:         "packer conversion output",
+			line:         "==> security-scenario.qemu.debian1370_result: Converting hard drive...",
+			wantProgress: 80,
+			wantMessage:  "converting hard drive image",
+			wantMatched:  true,
+		},
+		{
+			name:        "unrelated packer output",
+			line:        "==> security-scenario.qemu.debian1370_result: Gracefully halting virtual machine...",
+			wantMatched: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			progress, message, matched := driveConversionUpdate(test.line)
+			if progress != test.wantProgress || message != test.wantMessage || matched != test.wantMatched {
+				t.Fatalf(
+					"driveConversionUpdate(%q) = (%d, %q, %t), want (%d, %q, %t)",
+					test.line,
+					progress,
+					message,
+					matched,
+					test.wantProgress,
+					test.wantMessage,
+					test.wantMatched,
+				)
+			}
+		})
+	}
+}
+
 func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	template, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
 	if err != nil {
@@ -47,6 +87,35 @@ func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("Packer template is missing %q", required)
+		}
+	}
+}
+
+func TestPackerNetworkDeviceMatchesBootScript(t *testing.T) {
+	packerTemplate, err := os.ReadFile("../../builder/packer/build.pkr.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootScript, err := os.ReadFile("../../builder/scripts/boot.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, required := range []string{
+		`machine_type     = "q35"`,
+		`net_device       = "virtio-net-pci"`,
+	} {
+		if !strings.Contains(string(packerTemplate), required) {
+			t.Fatalf("Packer template is missing boot-compatible setting %q", required)
+		}
+	}
+	for _, required := range []string{
+		`-machine q35`,
+		`-netdev user,id=net0,hostfwd=tcp::2222-:22`,
+		`-device virtio-net-pci,netdev=net0`,
+	} {
+		if !strings.Contains(string(bootScript), required) {
+			t.Fatalf("boot.sh is missing expected network setting %q", required)
 		}
 	}
 }

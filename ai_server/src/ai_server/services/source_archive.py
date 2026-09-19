@@ -53,7 +53,7 @@ class SourceArchive:
             destination.write_text(source_file.content, encoding="utf-8")
             destination.chmod(int(source_file.mode, 8))
         history = repair_history or []
-        validation = validate_source(candidate_root, scenario.attack_graph, history)
+        validation = validate_source(candidate_root, scenario, history)
         (candidate_root / "validation_report.json").write_text(
             json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8"
         )

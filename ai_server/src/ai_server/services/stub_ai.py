@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from uuid import uuid4
 
 from ..models import (
@@ -11,6 +12,7 @@ from ..models import (
     MachineInformation,
     ScenarioDraft,
     ScenarioReview,
+    ScenarioRevision,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -109,6 +111,10 @@ class StubGenerator:
         return ScenarioDraft(
             scenario_id=f"scenario-{uuid4().hex}",
             title=machine.name,
+            scenario_description=(
+                f"{machine.theme}を題材に、隔離された環境を調査するセキュリティ演習です。"
+                "マシンの構成や動作を詳しく調べ、演習環境に隠されたフラグを見つけ出してください。"
+            ),
             definition=definition,
             target_os=machine.operating_system,
             attack_graph=attack_graph,
@@ -140,6 +146,30 @@ printf '%s\n' 'SLSG local demonstration scenario is ready.' > /etc/motd.d/90-sls
 set -euo pipefail
 id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-student
 """
+        acceptance_tests = [{"command": "test -f /opt/slsg-scenario/README.md"}]
+        if scenario.user_flag:
+            quoted_user_flag = shlex.quote(scenario.user_flag)
+            provision += (
+                f"printf '%s\\n' {quoted_user_flag} > /home/slsg-student/user.txt\n"
+                "chown slsg-student:slsg-student /home/slsg-student/user.txt\n"
+                "chmod 0400 /home/slsg-student/user.txt\n"
+            )
+            acceptance_tests.append(
+                {
+                    "command": (
+                        f"test \"$(cat /home/slsg-student/user.txt)\" = {quoted_user_flag}"
+                    )
+                }
+            )
+        if scenario.system_flag:
+            quoted_system_flag = shlex.quote(scenario.system_flag)
+            provision += (
+                f"printf '%s\\n' {quoted_system_flag} > /root/system.txt\n"
+                "chmod 0400 /root/system.txt\n"
+            )
+            acceptance_tests.append(
+                {"command": f"test \"$(cat /root/system.txt)\" = {quoted_system_flag}"}
+            )
         readme = (
             f"# {machine.name}\n\nTheme: {machine.theme}; difficulty: {machine.difficulty}.\n\n"
             "Packer executes `contents/build.sh`. Use `systemctl` or the MOTD for a health check. "
@@ -158,7 +188,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     "contents/scripts/provision.sh",
                 ],
                 "services": [{"name": "ssh", "port": 22}],
-                "acceptance_tests": [{"command": "test -f /opt/slsg-scenario/README.md"}],
+                "acceptance_tests": acceptance_tests,
                 "expected_vulnerabilities": [{"name": "local demonstration setting"}],
                 "health_checks": [{"command": "test -f /etc/motd.d/90-slsg-scenario"}],
                 "attack_steps": [
@@ -205,6 +235,22 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     + "\nRepair applied for local integration testing.\n",
                 )
             ]
+        )
+
+    async def synchronize_scenario(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+    ) -> ScenarioRevision:
+        return ScenarioRevision(
+            scenario_description=(
+                scenario.scenario_description
+                or "この教育用マシンを調査し、設定されたフラグを獲得してください。"
+            ),
+            definition=scenario.definition,
+            attack_graph=scenario.attack_graph,
+            summary="The deterministic stub source remains synchronized with the scenario.",
         )
 
     async def review_source(

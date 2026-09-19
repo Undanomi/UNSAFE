@@ -1,8 +1,25 @@
 "use client"
 
-import { ArrowRight, Bot, ChevronDown, ChevronUp, MessageSquareText, Pencil } from "lucide-react"
+import {
+  AlertCircle,
+  ArrowRight,
+  Bot,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  LoaderCircle,
+  MessageSquareText,
+  Pencil,
+} from "lucide-react"
 import Link from "next/link"
-import { useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  markMachineCreationFailedAction,
+  prepareMachineCreationAction,
+  saveChatProgressAction,
+  startMachineBuildAction,
+} from "@/app/actions/chat"
 import {
   CHAT_CONFIG,
   CHAT_COPY,
@@ -18,6 +35,76 @@ import {
 
 type ChatWorkspaceProps = {
   session: ChatSession
+}
+
+type ScenarioEvent = {
+  event: string
+  data: unknown
+}
+
+function readScenarioId(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("scenario" in data)) return null
+  const scenario = data.scenario
+  if (!scenario || typeof scenario !== "object" || !("scenario_id" in scenario)) return null
+  return typeof scenario.scenario_id === "string" ? scenario.scenario_id : null
+}
+
+async function consumeScenarioStream(
+  response: Response,
+  onProgress: (generatedCharacters: number) => void,
+): Promise<string> {
+  if (!response.ok || !response.body) {
+    throw new Error("AIサーバーに接続できませんでした。")
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let generatedCharacters = 0
+
+  function parseEvent(block: string): ScenarioEvent | null {
+    let event = "message"
+    const dataLines: string[] = []
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim()
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trim())
+    }
+    if (dataLines.length === 0) return null
+    try {
+      return { event, data: JSON.parse(dataLines.join("\n")) }
+    } catch {
+      return null
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n")
+    const blocks = buffer.split("\n\n")
+    buffer = blocks.pop() ?? ""
+
+    for (const block of blocks) {
+      const parsed = parseEvent(block)
+      if (!parsed) continue
+      if (parsed.event === "scenario.delta") {
+        const content =
+          parsed.data && typeof parsed.data === "object" && "content" in parsed.data
+            ? parsed.data.content
+            : ""
+        generatedCharacters += typeof content === "string" ? content.length : 0
+        onProgress(generatedCharacters)
+      }
+      if (parsed.event === "scenario.error") throw new Error("シナリオ生成に失敗しました。")
+      if (parsed.event === "scenario.completed") {
+        const scenarioId = readScenarioId(parsed.data)
+        if (!scenarioId) throw new Error("生成されたシナリオを確認できませんでした。")
+        return scenarioId
+      }
+    }
+    if (done) break
+  }
+
+  throw new Error("AIサーバーとの接続が途中で終了しました。")
 }
 
 function buildInitialAnswers(session: ChatSession): ChatAnswers {
@@ -128,14 +215,22 @@ function formatFlagSetting(value: boolean | null) {
 }
 
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
+  const router = useRouter()
   const [answers, setAnswers] = useState<ChatAnswers>(() => buildInitialAnswers(session))
   const [step, setStep] = useState(session.initialStep)
   const [basicReady, setBasicReady] = useState(() => session.status === "基本設定完了")
+  const [sessionId, setSessionId] = useState<string | null>(() =>
+    session.id === "session-new" ? null : session.id,
+  )
+  const [creationStatus, setCreationStatus] = useState(session.creationStatus)
+  const [creationMessage, setCreationMessage] = useState("")
   const [error, setError] = useState("")
   const [editingStep, setEditingStep] = useState<number | null>(null)
   const [editingError, setEditingError] = useState("")
   const [isSummaryOpen, setIsSummaryOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
+  const creationStartedRef = useRef(false)
 
   const progress = Math.min(step, CHAT_STEPS.systemFlagDetails)
   const isFinalStep = step === CHAT_STEPS.complete
@@ -157,26 +252,93 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setEditingError("")
   }
 
-  function advance() {
+  async function persistProgress(nextStep: number, nextBasicReady: boolean) {
+    setIsSaving(true)
+    const result = await saveChatProgressAction({
+      sessionId,
+      answers,
+      currentStep: nextStep,
+      basicReady: nextBasicReady,
+    })
+    setIsSaving(false)
+    if (!result.success) {
+      setError(result.message)
+      return false
+    }
+
+    if (!sessionId) {
+      setSessionId(result.sessionId)
+      router.replace(`/machines/chat/${result.sessionId}`)
+    }
+    return true
+  }
+
+  async function advance() {
     if (!isChatStepComplete(step, answers)) {
       setError(getChatValidationMessage(step))
       return
     }
     if (step === CHAT_STEPS.difficulty) {
+      if (!(await persistProgress(step, true))) return
       setBasicReady(true)
       return
     }
     const nextStep = getNextChatStep(step, answers)
+    if (!(await persistProgress(nextStep, false))) return
     setStep(nextStep)
   }
 
-  function continueDetails() {
+  async function continueDetails() {
+    if (!(await persistProgress(CHAT_STEPS.userFlagChoice, false))) return
     setBasicReady(false)
     setStep(CHAT_STEPS.userFlagChoice)
   }
 
+  const runMachineCreation = useCallback(
+    async (resume = false) => {
+      if (!sessionId || creationStartedRef.current) return
+      creationStartedRef.current = true
+      setCreationStatus("generating_scenario")
+      setCreationMessage("AIにマシン設定を送信しています…")
+      setError("")
+
+      try {
+        if (!resume) {
+          const preparation = await prepareMachineCreationAction(sessionId, answers)
+          if (!preparation.success) throw new Error(preparation.message)
+        }
+
+        setCreationMessage("AIがシナリオを生成しています…")
+        const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/scenario`, {
+          cache: "no-store",
+        })
+        const scenarioId = await consumeScenarioStream(response, (characters) => {
+          setCreationMessage(`AIがシナリオを生成しています… ${characters.toLocaleString()}文字`)
+        })
+
+        setCreationMessage("シナリオが完成しました。ビルドを開始しています…")
+        const build = await startMachineBuildAction(sessionId, scenarioId)
+        if (!build.success || !build.machineId) {
+          throw new Error(build.success ? "マシン情報を保存できませんでした。" : build.message)
+        }
+
+        setCreationStatus("building")
+        setCreationMessage("マシンの生成・ビルドを受け付けました。")
+        router.push(`/machines/${build.machineId}`)
+      } catch (creationError) {
+        console.error("Machine creation failed.", creationError)
+        setCreationStatus("failed")
+        setCreationMessage("")
+        await markMachineCreationFailedAction(sessionId)
+      } finally {
+        creationStartedRef.current = false
+      }
+    },
+    [answers, router, sessionId],
+  )
+
   function handleMachineCreation() {
-    return { answers, sessionId: session.id }
+    void runMachineCreation(false)
   }
 
   function startEditing(targetStep: number) {
@@ -184,14 +346,22 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setEditingError("")
   }
 
-  function completeEditing() {
+  async function completeEditing() {
     if (editingStep === null) return
     if (!isChatStepComplete(editingStep, answers)) {
       setEditingError(getChatValidationMessage(editingStep))
       return
     }
+    if (!(await persistProgress(step, basicReady))) {
+      setEditingError("変更を保存できませんでした。もう一度お試しください。")
+      return
+    }
     setEditingStep(null)
   }
+
+  useEffect(() => {
+    if (session.creationStatus === "generating_scenario") void runMachineCreation(true)
+  }, [runMachineCreation, session.creationStatus])
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-92px)] max-w-5xl min-h-0 flex-col max-lg:h-[calc(100dvh-64px)]">
@@ -279,14 +449,22 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
         </div>
 
         <div className="border-t border-[#e5e5e2] bg-white px-7 py-5 max-sm:px-5">
-          {!basicReady && !isFinalStep ? (
+          {creationStatus === "input" && !basicReady && !isFinalStep ? (
             <StepInput answers={answers} onChange={updateAnswers} step={step} />
           ) : null}
           {error ? <p className="mt-3 text-[0.86rem] font-bold text-[#b14334]">{error}</p> : null}
-          {basicReady ? (
+          {creationStatus !== "input" ? (
+            <CreationStatusPanel
+              machineId={session.machineId}
+              message={creationMessage || "マシンを作成しています…"}
+              onRetry={handleMachineCreation}
+              status={creationStatus}
+            />
+          ) : basicReady ? (
             <div className="mt-5 flex flex-wrap gap-3">
               <button
                 className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
+                disabled={isSaving}
                 onClick={handleMachineCreation}
                 type="button"
               >
@@ -294,6 +472,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               </button>
               <button
                 className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px"
+                disabled={isSaving}
                 onClick={continueDetails}
                 type="button"
               >
@@ -303,6 +482,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           ) : isFinalStep ? (
             <button
               className="mt-5 inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={isSaving}
               onClick={handleMachineCreation}
               type="button"
             >
@@ -311,10 +491,16 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           ) : (
             <button
               className="mt-4 inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-transparent bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={isSaving}
               onClick={advance}
               type="button"
             >
-              {step === CHAT_STEPS.difficulty ? (
+              {isSaving ? (
+                <>
+                  <LoaderCircle aria-hidden="true" className="animate-spin" size={16} />
+                  保存中…
+                </>
+              ) : step === CHAT_STEPS.difficulty ? (
                 CHAT_COPY.buttons.setBasic
               ) : (
                 <>
@@ -326,6 +512,62 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           )}
         </div>
       </section>
+    </div>
+  )
+}
+
+function CreationStatusPanel({
+  machineId,
+  message,
+  onRetry,
+  status,
+}: {
+  machineId: string | null
+  message: string
+  onRetry: () => void
+  status: ChatSession["creationStatus"]
+}) {
+  if (status === "building" || status === "completed") {
+    return (
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
+        <span className="flex items-center gap-2 text-[0.88rem] font-bold">
+          <CheckCircle2 aria-hidden="true" className="text-[#357a4b]" size={18} />
+          {status === "completed" ? "マシンのビルドが完了しました。" : message}
+        </span>
+        {machineId ? (
+          <Link
+            className="inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
+            href={`/machines/${machineId}`}
+          >
+            マシンの状態を確認
+          </Link>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (status === "failed") {
+    return (
+      <div className="mt-4 rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-4">
+        <p className="flex items-start gap-2 text-[0.88rem] font-bold text-[#9a392d]">
+          <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
+          マシンを作成できませんでした。
+        </p>
+        <button
+          className="mt-4 inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
+          onClick={onRetry}
+          type="button"
+        >
+          もう一度試す
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
+      <LoaderCircle aria-hidden="true" className="shrink-0 animate-spin" size={19} />
+      <p className="text-[0.88rem] font-bold">{message}</p>
     </div>
   )
 }
