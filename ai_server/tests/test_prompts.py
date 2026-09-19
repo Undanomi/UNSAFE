@@ -66,7 +66,7 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
     assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
 
     assert len(design_prompts[0]) < 3000
-    assert len(design_prompts[1]) < 2500
+    assert len(design_prompts[1]) < 3000
 
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt

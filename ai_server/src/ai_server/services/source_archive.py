@@ -28,6 +28,7 @@ class SourceArchive:
         scenario: ScenarioDraft,
         generated: GeneratedSource,
         repair_history: list[dict] | None = None,
+        skill_snapshot: dict[str, list[dict]] | None = None,
     ) -> tuple[Path, str]:
         version_root = self.root / session_id / scenario.scenario_version_id
         version_root.mkdir(parents=True, exist_ok=True)
@@ -74,6 +75,7 @@ class SourceArchive:
             "validation_report": "validation_report.json",
             "repair_attempts": len(history),
             "repair_report": "repair_report.json",
+            "skills": skill_snapshot or {},
         }
         (candidate_root / "generation_manifest.json").write_text(
             json.dumps(generation_manifest, ensure_ascii=False, indent=2), encoding="utf-8"

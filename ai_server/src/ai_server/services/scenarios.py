@@ -6,6 +6,8 @@ import secrets
 
 from ..models import SessionStatus
 from ..repository import SessionRepository
+from ..skills.models import ScenarioSkillContexts, SkillPhase
+from ..skills.service import NoopSkillService, SkillResolver
 from .ai import AIGenerator
 from .errors import exception_detail
 from .events import EventBroker, ServerEvent
@@ -24,11 +26,13 @@ class ScenarioCoordinator:
         generator: AIGenerator,
         broker: EventBroker,
         chunk_size: int,
+        skill_service: SkillResolver | None = None,
     ) -> None:
         self.repository = repository
         self.generator = generator
         self.broker = broker
         self.chunk_size = chunk_size
+        self.skill_service = skill_service or NoopSkillService()
         self.tasks: dict[str, asyncio.Task[None]] = {}
 
     def ensure_started(self, session_id: str) -> None:
@@ -55,7 +59,23 @@ class ScenarioCoordinator:
             await self.broker.publish(
                 session_id, ServerEvent("scenario.started", {"session_id": session_id})
             )
-            scenario = await self.generator.generate_scenario(state.machine_information)
+            attack_graph_skills = await self.skill_service.resolve(
+                session_id,
+                SkillPhase.ATTACK_GRAPH,
+                state.machine_information,
+            )
+            scenario_skills = await self.skill_service.resolve(
+                session_id,
+                SkillPhase.SCENARIO,
+                state.machine_information,
+            )
+            scenario = await self.generator.generate_scenario(
+                state.machine_information,
+                ScenarioSkillContexts(
+                    attack_graph=attack_graph_skills,
+                    scenario=scenario_skills,
+                ),
+            )
             scenario = scenario.model_copy(
                 update={
                     "user_flag": (
@@ -66,6 +86,7 @@ class ScenarioCoordinator:
                     ),
                 }
             )
+            await self.skill_service.finalize_scenario(session_id, scenario)
             state.scenario = scenario
             state.status = SessionStatus.SCENARIO_READY
             await self.repository.save(state)

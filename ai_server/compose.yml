@@ -10,8 +10,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    ports:
-      - "5433:5432"
     volumes:
       - ai-postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
@@ -41,6 +39,13 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
+      SKILLS_ENABLED: ${SKILLS_ENABLED:-true}
+      SKILLS_MAX_ACTIVE: ${SKILLS_MAX_ACTIVE:-32}
+      SKILLS_MAX_PER_PHASE: ${SKILLS_MAX_PER_PHASE:-8}
+      SKILL_CONTEXT_MAX_CHARS: ${SKILL_CONTEXT_MAX_CHARS:-50000}
+      SKILL_SELECTION_MAX_CHARS: ${SKILL_SELECTION_MAX_CHARS:-60000}
+      SKILL_SELECTION_RETRIES: ${SKILL_SELECTION_RETRIES:-2}
+      SKILL_SELECTION_MAX_CVES: ${SKILL_SELECTION_MAX_CVES:-3}
       # Use a Compose-specific override so a host-side BUILD_SERVER_URL such as
       # http://localhost:8080 cannot leak into the container network.
       BUILD_SERVER_URL: ${AI_BUILD_SERVER_URL:-http://server:8080}

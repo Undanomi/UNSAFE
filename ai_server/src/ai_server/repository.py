@@ -36,12 +36,34 @@ class SessionRepository:
         self.session_factory: async_sessionmaker = create_session_factory(self.engine)
 
     async def initialize(self) -> None:
-        migration = Path(__file__).with_name("migrations").joinpath("001_init.sql").read_text()
-        statements = (statement.strip() for statement in migration.split(";"))
         async with self.engine.begin() as connection:
-            for statement in statements:
-                if statement:
-                    await connection.exec_driver_sql(statement)
+            await connection.execute(text("SELECT pg_advisory_xact_lock(739247151)"))
+            await connection.exec_driver_sql(
+                """CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version varchar(128) PRIMARY KEY,
+                    applied_at timestamptz NOT NULL
+                )"""
+            )
+            applied = set(
+                (await connection.execute(text("SELECT version FROM schema_migrations"))).scalars()
+            )
+            migration_root = Path(__file__).with_name("migrations")
+            for migration_path in sorted(migration_root.glob("[0-9][0-9][0-9]_*.sql")):
+                version = migration_path.stem
+                if version in applied:
+                    continue
+                for statement in (
+                    item.strip() for item in migration_path.read_text(encoding="utf-8").split(";")
+                ):
+                    if statement:
+                        await connection.exec_driver_sql(statement)
+                await connection.execute(
+                    text(
+                        "INSERT INTO schema_migrations (version, applied_at) "
+                        "VALUES (:version, now())"
+                    ),
+                    {"version": version},
+                )
 
     async def close(self) -> None:
         await self.engine.dispose()

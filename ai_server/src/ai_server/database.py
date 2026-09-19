@@ -4,7 +4,18 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CHAR, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    CHAR,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
 from sqlalchemy.engine import URL, make_url
@@ -73,6 +84,94 @@ class AISessionRecord(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SkillRecord(Base):
+    __tablename__ = "skills"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'active', 'disabled')", name="skills_status_check"),
+        Index("skills_status_idx", "status"),
+    )
+
+    skill_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    current_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SkillVersionRecord(Base):
+    __tablename__ = "skill_versions"
+    __table_args__ = (CheckConstraint("version > 0", name="skill_versions_version_check"),)
+
+    skill_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True), ForeignKey("skills.skill_id"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    references: Mapped[list[dict[str, Any]]] = mapped_column(
+        "reference_documents", JSONB, nullable=False, default=list
+    )
+    phases: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    selectors: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    content_checksum: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SessionSkillSnapshotRecord(Base):
+    __tablename__ = "session_skill_snapshots"
+
+    session_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("ai_sessions.session_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    phase: Mapped[str] = mapped_column(String(32), primary_key=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SessionSkillPlanRecord(Base):
+    __tablename__ = "session_skill_plans"
+
+    session_id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("ai_sessions.session_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class SessionSkillSnapshotItemRecord(Base):
+    __tablename__ = "session_skill_snapshot_items"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id", "phase"],
+            ["session_skill_snapshots.session_id", "session_skill_snapshots.phase"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["skill_id", "skill_version"],
+            ["skill_versions.skill_id", "skill_versions.version"],
+        ),
+        CheckConstraint("position >= 0", name="skill_snapshot_position_check"),
+        UniqueConstraint("session_id", "phase", "position"),
+        Index("skill_snapshot_items_version_idx", "skill_id", "skill_version"),
+    )
+
+    session_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
+    phase: Mapped[str] = mapped_column(String(32), primary_key=True)
+    skill_id: Mapped[UUID] = mapped_column(PostgresUUID(as_uuid=True), primary_key=True)
+    skill_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    selection_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    selected_reference_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    selection_details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    content_checksum: Mapped[str] = mapped_column(CHAR(64), nullable=False)
 
 
 def sqlalchemy_database_url(database_url: str) -> URL:

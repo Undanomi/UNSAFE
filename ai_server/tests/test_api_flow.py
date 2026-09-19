@@ -298,9 +298,7 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert changed.content == b"archive"
     assert fake_build.download_headers[-1] == (None, None)
 
-    unsatisfiable = await http.get(
-        issued.json()["download_url"], headers={"Range": "bytes=99-"}
-    )
+    unsatisfiable = await http.get(issued.json()["download_url"], headers={"Range": "bytes=99-"})
     assert unsatisfiable.status_code == 416
     assert unsatisfiable.headers["content-range"] == "bytes */7"
 
@@ -563,8 +561,7 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
     assert failed.build_repair_attempts == 0
     assert failed.build_repair_attempt_limit == 0
     assert repair_calls == (
-        app.state.workflow.build_repair_max_attempts
-        * app.state.workflow.source_generation_attempts
+        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
     )
 
     assert fake_build.submitted_requests == []
@@ -572,8 +569,7 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
     assert status_response.status_code == 200
     await asyncio.sleep(0)
     assert repair_calls == (
-        app.state.workflow.build_repair_max_attempts
-        * app.state.workflow.source_generation_attempts
+        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
     )
 
 
@@ -585,7 +581,7 @@ async def test_validation_continues_into_next_build_slot(client) -> None:
     repair_calls = 0
 
     async def repair_after_first_validation_batch(
-        _machine, _scenario, current, _failure_report
+        _machine, _scenario, current, _failure_report, _skills=None
     ) -> SourcePatch:
         nonlocal repair_calls
         repair_calls += 1
@@ -636,7 +632,7 @@ async def test_unsafe_absolute_repair_path_is_retried(client) -> None:
     repair_contexts: list[dict] = []
 
     async def repair_with_unsafe_path_then_recover(
-        _machine, _scenario, current, failure_report
+        _machine, _scenario, current, failure_report, _skills=None
     ) -> SourcePatch:
         repair_contexts.append(failure_report)
         if len(repair_contexts) == 1:
@@ -696,7 +692,7 @@ async def test_failed_semantic_review_is_repaired_before_build_submission(client
     repair_contexts: list[dict] = []
     review_calls = 0
 
-    async def repair(_machine, _scenario, current, failure_report) -> SourcePatch:
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
         repair_contexts.append(failure_report)
         readme = next(file for file in current.files if file.path == "contents/README.md")
         return SourcePatch(

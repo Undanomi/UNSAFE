@@ -6,7 +6,13 @@ from uuid import UUID
 import pytest
 from sqlalchemy import delete, text
 
-from ai_server.database import AISessionRecord, ScenarioRecord, ScenarioVersionRecord
+from ai_server.database import (
+    AISessionRecord,
+    ScenarioRecord,
+    ScenarioVersionRecord,
+    SkillRecord,
+    SkillVersionRecord,
+)
 from ai_server.models import (
     Artifact,
     AttackGraph,
@@ -18,6 +24,14 @@ from ai_server.models import (
     SessionStatus,
 )
 from ai_server.repository import SessionRepository
+from ai_server.skills.models import (
+    AppliedSkill,
+    SkillCreate,
+    SkillPhase,
+    SkillSelectors,
+    SkillVersionCreate,
+)
+from ai_server.skills.repository import SkillRepository
 
 
 @pytest.mark.asyncio
@@ -28,6 +42,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
     repository = SessionRepository(database_url)
     await repository.initialize()
     state = await repository.create("integration-user")
+    skill_id = None
     try:
         loaded = await repository.get(state.session_id)
         assert loaded.session_id == state.session_id
@@ -120,6 +135,34 @@ async def test_postgres_migration_and_session_round_trip() -> None:
                 text("SELECT to_regclass('public.generation_jobs')")
             )
         assert generation_jobs is None
+
+        skill_repository = SkillRepository(repository.session_factory)
+        skill_id = await skill_repository.create_skill(
+            SkillCreate(
+                name="postgres-integration-skill",
+                description="Skill repository integration test",
+            )
+        )
+        published = await skill_repository.publish_version(
+            skill_id,
+            SkillVersionCreate(
+                instructions="Apply PostgreSQL-specific test guidance.",
+                phases=[SkillPhase.SOURCE],
+                selectors=SkillSelectors(themes=["database"]),
+                created_by="integration-user",
+            ),
+        )
+        active = await skill_repository.active_versions(limit=10)
+        assert [skill.name for skill in active if skill.skill_id == skill_id] == [
+            "postgres-integration-skill"
+        ]
+        snapshot = await skill_repository.create_snapshot(
+            state.session_id,
+            SkillPhase.SOURCE,
+            [AppliedSkill(**published.model_dump(), selection_reason="theme:database")],
+        )
+        assert snapshot.skills[0].version == 1
+        assert await skill_repository.get_snapshot(state.session_id, SkillPhase.SOURCE) == snapshot
     finally:
         async with repository.session_factory.begin() as session:
             await session.execute(
@@ -133,4 +176,9 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             await session.execute(
                 delete(ScenarioRecord).where(ScenarioRecord.scenario_id == "scenario-postgres-test")
             )
+            if skill_id is not None:
+                await session.execute(
+                    delete(SkillVersionRecord).where(SkillVersionRecord.skill_id == skill_id)
+                )
+                await session.execute(delete(SkillRecord).where(SkillRecord.skill_id == skill_id))
         await repository.close()

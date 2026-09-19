@@ -37,8 +37,7 @@ def web_generated_source(
     provision_mode: str = "0755",
 ) -> GeneratedSource:
     root_check = (
-        "body=$(curl -fsSL http://127.0.0.1/); "
-        "printf '%s' \"$body\" | grep -q 'SLSG_PORTAL'"
+        "body=$(curl -fsSL http://127.0.0.1/); printf '%s' \"$body\" | grep -q 'SLSG_PORTAL'"
     )
     permission_check = (
         "namei -l /var/www/html/index.php; runuser -u www-data -- test -r /var/www/html/index.php"
@@ -147,6 +146,29 @@ def test_rejects_case_mismatched_flag_in_provisioning_source(tmp_path: Path) -> 
     assert "flag:user:deployment_exact_value" in failures
     assert "flag:user:manifest_exact_value" in failures
     assert "flag:user:case_consistency" in failures
+
+
+def test_generation_manifest_records_pinned_skills(tmp_path: Path) -> None:
+    skill_snapshot = {
+        "source": [
+            {
+                "skill_id": "11111111-1111-1111-1111-111111111111",
+                "name": "web-sqli",
+                "version": 2,
+                "checksum": "a" * 64,
+                "selection_reason": "attack_step_kind:web_vulnerability",
+            }
+        ]
+    }
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session",
+        scenario(),
+        web_generated_source(),
+        skill_snapshot=skill_snapshot,
+    )
+
+    manifest = json.loads((archive_path.parent / "source" / "generation_manifest.json").read_text())
+    assert manifest["skills"] == skill_snapshot
 
 
 def test_rejects_web_source_without_ip_root_quality_checks(tmp_path: Path) -> None:

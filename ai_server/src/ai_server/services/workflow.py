@@ -14,6 +14,8 @@ from ..models import (
     SourceReview,
 )
 from ..repository import SessionRepository
+from ..skills.models import SkillPhase
+from ..skills.service import NoopSkillService, SkillResolver
 from .ai import AIGenerator
 from .build_client import BuildClient
 from .errors import exception_detail
@@ -39,6 +41,7 @@ class MachineWorkflow:
         build_client: BuildClient,
         source_generation_attempts: int,
         build_repair_max_attempts: int,
+        skill_service: SkillResolver | None = None,
     ) -> None:
         self.repository = repository
         self.generator = generator
@@ -46,6 +49,7 @@ class MachineWorkflow:
         self.build_client = build_client
         self.source_generation_attempts = source_generation_attempts
         self.build_repair_max_attempts = build_repair_max_attempts
+        self.skill_service = skill_service or NoopSkillService()
         self.tasks: dict[str, asyncio.Task[None]] = {}
 
     async def start(self, session_id: str, scenario_id: str | None = None) -> SessionState:
@@ -187,6 +191,25 @@ class MachineWorkflow:
             state = await self.repository.get(session_id)
             assert state.machine_information is not None and state.scenario is not None
             working_scenario = state.scenario
+            source_skills = await self.skill_service.resolve(
+                session_id,
+                SkillPhase.SOURCE,
+                state.machine_information,
+                state.scenario,
+            )
+            repair_skills = await self.skill_service.resolve(
+                session_id,
+                SkillPhase.REPAIR,
+                state.machine_information,
+                state.scenario,
+            )
+            review_skills = await self.skill_service.resolve(
+                session_id,
+                SkillPhase.REVIEW,
+                state.machine_information,
+                state.scenario,
+            )
+            skill_snapshot = await self.skill_service.snapshot_manifest(session_id)
             archive_path = self._existing_archive(state) if failure_report is None else None
             checksum = state.source_checksum
             last_validation_error: Exception | None = None
@@ -194,7 +217,7 @@ class MachineWorkflow:
             best_validation_failures = 0 if failure_report is not None else None
             if archive_path is None and generated is None:
                 generated = await self.generator.generate_source(
-                    state.machine_information, working_scenario
+                    state.machine_information, working_scenario, source_skills
                 )
             if archive_path is not None:
                 build_slots_remaining -= 1
@@ -215,6 +238,7 @@ class MachineWorkflow:
                             working_scenario,
                             generated,
                             repair_context,
+                            repair_skills,
                         )
                         try:
                             generated = apply_source_patch(generated, patch)
@@ -263,7 +287,11 @@ class MachineWorkflow:
                         repair_history[-1]["scenario_sync_status"] = "approved"
                     try:
                         archive_path, checksum = self.source_archive.create(
-                            session_id, working_scenario, generated, repair_history
+                            session_id,
+                            working_scenario,
+                            generated,
+                            repair_history,
+                            skill_snapshot,
                         )
                     except InvalidSourceError as error:
                         last_validation_error = error
@@ -284,6 +312,7 @@ class MachineWorkflow:
                         state.machine_information,
                         working_scenario,
                         generated,
+                        review_skills,
                     )
                     if review.approved:
                         logger.info(

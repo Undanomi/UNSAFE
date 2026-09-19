@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -33,13 +34,30 @@ class MachineInformation(BaseModel):
     user_flag_details: str = Field(default="", max_length=4000)
     needs_system_flag: bool | None = None
     system_flag_details: str = Field(default="", max_length=4000)
+    skill_names: (
+        list[Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=64)]] | None
+    ) = Field(default=None, max_length=32)
+    cve_ids: list[Annotated[str, Field(pattern=r"^CVE-\d{4}-\d{4,7}$")]] = Field(
+        default_factory=list, max_length=20
+    )
+
+    @field_validator("skill_names", "cve_ids")
+    @classmethod
+    def unique_skill_choices(cls, values):
+        if values is not None and len(values) != len(set(values)):
+            raise ValueError("Skill names and CVE IDs must not contain duplicates")
+        return values
 
     @field_validator("operating_system", mode="before")
     @classmethod
     def default_operating_system(cls, value):
         if value is None or not str(value).strip():
             return "Debian 13.7.0"
-        return str(value).strip()
+        value = str(value).strip()
+        match = re.fullmatch(r"debian\s+(\d+(?:\.\d+){0,2})", value, re.IGNORECASE)
+        if not match:
+            raise ValueError("Only versioned Debian base images are supported (e.g. Debian 13.7.0)")
+        return f"Debian {match.group(1)}"
 
     @model_validator(mode="after")
     def validate_flag_details(self) -> MachineInformation:

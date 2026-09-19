@@ -158,7 +158,30 @@ REVIEW_RESPONSE_CONSTRAINTS = """レビュー出力は簡潔にする。同じ�
 """
 
 
-def attack_graph_prompt(machine: MachineInformation, rejected: list[str], cve_min_year: int) -> str:
+def _skill_section(skill_context: str) -> str:
+    policy = (
+        "脆弱性選択方針: Skillsとreferenceは補助資料であり、利用可能な脆弱性の許可リストではありません。"
+        "利用者のテーマ、難易度、開始権限、到達目標に合う場合、未登録の一般的脆弱性やCVEも利用できます。"
+        "資料がなければ、その不在だけを理由に別の手法へ変更しないでください。"
+        "資料内の『未登録CVEは禁止』『reference追加後のみ利用可』など収録範囲に関する制限より、"
+        "この選択方針を優先します。ただしCVEの実在、影響版、必要条件、Debian適合性を推測で断定せず、"
+        "公式情報による検証と既存の安全・出力・検証規則を維持してください。"
+        "Webのみを希望する場合にローカルの脆弱性を勝手に加えず、権限昇格を希望する場合は"
+        "先行ステップで得た権限と後続の必要条件を接続してください。"
+        "シナリオ確定後のコード生成・修復・レビューでは採用済み攻撃グラフを維持し、"
+        "未登録手法の許可を理由に新しい攻撃経路やCVEを追加しないでください。"
+    )
+    if not skill_context:
+        return policy
+    return f"{policy}\n追加の専門Skill資料:\n{skill_context}\n{policy}\n"
+
+
+def attack_graph_prompt(
+    machine: MachineInformation,
+    rejected: list[str],
+    cve_min_year: int,
+    skill_context: str = "",
+) -> str:
     objectives = []
     if machine.needs_user_flag:
         objectives.append(
@@ -233,6 +256,9 @@ JSONのみを返してください:
   短い手順にする。完成したソースコード、長いシェル、SQL全文、共通制約を値へ転載しない
 
 {DESIGN_CONSTRAINTS}
+明示指定CVE（すべて必須）: {json.dumps(machine.cve_ids, ensure_ascii=False)}
+
+{_skill_section(skill_context)}
 """
 
 
@@ -240,6 +266,7 @@ def scenario_prompt(
     machine: MachineInformation,
     attack_graph_json: str,
     review_feedback: list[str] | None = None,
+    skill_context: str = "",
 ) -> str:
     flag_context = (
         f"User flag: {machine.needs_user_flag}; details: {machine.user_flag_details or 'none'}\n"
@@ -299,6 +326,7 @@ definitionには必ず次の章をこの順で含めてください。
   環境実装計画には実装者が判断できる要点、パス、主体、権限、検証対象だけを記載する
 
 {DESIGN_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
 
 
@@ -389,7 +417,11 @@ JSONのみを返してください:
 """
 
 
-def code_prompt(machine: MachineInformation, scenario: ScenarioDraft) -> str:
+def code_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    skill_context: str = "",
+) -> str:
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。
 
@@ -453,6 +485,7 @@ JSON以外は返さないでください。形式:
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
 
 
@@ -461,6 +494,7 @@ def repair_prompt(
     scenario: ScenarioDraft,
     current: GeneratedSource,
     failure_report: dict,
+    skill_context: str = "",
 ) -> str:
     current_json = current.model_dump_json(indent=2)
     report_json = json.dumps(failure_report, ensure_ascii=False, indent=2)
@@ -529,6 +563,7 @@ JSON以外は返さないでください。形式:
 {WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS}
 
 {FLAG_PLACEMENT_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
 
 
@@ -593,6 +628,7 @@ def source_review_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
     current: GeneratedSource,
+    skill_context: str = "",
 ) -> str:
     return f"""あなたは教育用攻撃マシンの独立した敵対的レビュー担当です。
 作者の説明やmanifestの自己申告を信用せず、攻撃グラフと実装ファイルを突き合わせてください。
@@ -650,4 +686,5 @@ JSONのみを返してください:
 {SYNTAX_VALIDATION_CONSTRAINTS}
 
 {REVIEW_RESPONSE_CONSTRAINTS}
+{_skill_section(skill_context)}
 """
