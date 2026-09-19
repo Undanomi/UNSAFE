@@ -3,9 +3,15 @@ name: slsg
 include:
   - path: build_server/compose.yml
   - path: ai_server/compose.yml
+  - path: frontend/compose.yml
 
 services:
   ai-server:
     networks:
       - default
       - build-api
+
+  frontend:
+    depends_on:
+      ai-server:
+        condition: service_healthy

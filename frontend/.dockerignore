@@ -1,0 +1,14 @@
+.git
+.next
+.pnpm-store
+node_modules
+
+.env
+.env.*
+!.env.example
+
+*.log
+*.tsbuildinfo
+coverage
+Dockerfile*
+README.md
