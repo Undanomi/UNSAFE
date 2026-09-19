@@ -25,7 +25,7 @@ export type MachinesDocument = {
   system_flag: string
   user_flag: string
   tags: string[]
-  created_at: string // UTC ISO 8601、ミリ秒固定（Date.toISOString()）。一覧の DB ソートに使用。
+  created_at: string
   ai_session_id?: string
   build_progress?: number
 }

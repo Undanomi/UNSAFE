@@ -88,27 +88,26 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
           />
         </label>
         <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr]">
-          <label className="flex min-w-0 flex-col gap-2 text-sm leading-5 font-bold">
-            難易度
-            <span className="relative block">
-              <select
-                className={`${fieldClass} appearance-none`}
-                name="level"
-                defaultValue={query.level}
-              >
-                <option value="">すべて</option>
-                <option value="easy">{difficultyLabels.easy}</option>
-                <option value="medium">{difficultyLabels.medium}</option>
-                <option value="hard">{difficultyLabels.hard}</option>
-              </select>
-              <ChevronDown
-                aria-hidden="true"
-                className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2"
-                size={18}
-                strokeWidth={1.8}
-              />
-            </span>
-          </label>
+          <fieldset className="min-w-0 sm:col-span-2 xl:col-span-1">
+            <legend className="mb-2 p-0 text-sm leading-5 font-bold">難易度</legend>
+            <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[#d6d6d2] bg-white px-3">
+              {(["easy", "medium", "hard"] as const).map((level) => (
+                <label
+                  key={level}
+                  className="flex min-h-[42px] shrink-0 items-center gap-2 text-sm leading-5"
+                >
+                  <input
+                    className="size-4 accent-[#20201e]"
+                    type="checkbox"
+                    name="level"
+                    value={level}
+                    defaultChecked={query.level.includes(level)}
+                  />
+                  {difficultyLabels[level]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
           <label className="flex min-w-0 flex-col gap-2 text-sm leading-5 font-bold">
             回答状態
             <span className="relative block">
