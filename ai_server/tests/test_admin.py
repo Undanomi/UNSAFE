@@ -103,6 +103,20 @@ def test_api_app_does_not_expose_sqladmin() -> None:
 
 
 @pytest.mark.asyncio
+async def test_admin_app_redirects_root_to_admin() -> None:
+    app = create_admin_app(admin_settings())
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", follow_redirects=False
+    ) as client:
+        response = await client.get("/")
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/admin"
+
+
+@pytest.mark.asyncio
 async def test_sqladmin_lists_sessions_from_postgres() -> None:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
