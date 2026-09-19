@@ -250,7 +250,7 @@ export function MachineListResults({
                           className="max-w-full rounded-md bg-[#f1f1ee] px-2 py-1 text-xs text-[#61605b] [overflow-wrap:anywhere]"
                           key={tag}
                         >
-                          #{tag}
+                          {tag}
                         </li>
                       ))}
                     </ul>
