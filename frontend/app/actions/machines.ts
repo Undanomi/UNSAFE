@@ -1,5 +1,6 @@
 "use server"
 
+import { revalidatePath } from "next/cache"
 import { cookies } from "next/headers"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
@@ -54,6 +55,7 @@ export async function verifyMachineFlagAction(
 
   try {
     const correct = await verifyMachineFlagService(user.uid, machineId, kind, answer)
+    if (correct) revalidatePath("/machines")
     return correct === null ? { success: false } : { success: true, correct }
   } catch (error) {
     console.error("Failed to verify machine flag.", error)
