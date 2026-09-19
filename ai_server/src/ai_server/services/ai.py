@@ -30,6 +30,10 @@ from ..prompts import (
     scenario_review_prompt,
     source_review_prompt,
 )
+from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
+from ..skills.planning import context_for_graph
+from ..skills.renderer import SkillRenderer
+from ..skills.selector import SkillSelector
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 GEMINI_JSON_SCHEMA_KEYS = {
@@ -90,14 +94,21 @@ class CVEVerification(BaseModel):
 
 
 class AIGenerator(Protocol):
-    async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft: ...
+    async def generate_scenario(
+        self,
+        machine: MachineInformation,
+        skills: ScenarioSkillContexts | None = None,
+    ) -> ScenarioDraft: ...
 
     async def review_scenario(
         self, machine: MachineInformation, scenario: ScenarioDraft
     ) -> ScenarioReview: ...
 
     async def generate_source(
-        self, machine: MachineInformation, scenario: ScenarioDraft
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        skills: SkillContext | None = None,
     ) -> GeneratedSource: ...
 
     async def repair_source(
@@ -106,6 +117,7 @@ class AIGenerator(Protocol):
         scenario: ScenarioDraft,
         current: GeneratedSource,
         failure_report: dict,
+        skills: SkillContext | None = None,
     ) -> SourcePatch: ...
 
     async def review_source(
@@ -113,6 +125,7 @@ class AIGenerator(Protocol):
         machine: MachineInformation,
         scenario: ScenarioDraft,
         current: GeneratedSource,
+        skills: SkillContext | None = None,
     ) -> SourceReview: ...
 
 
@@ -175,10 +188,18 @@ class GeminiGenerator:
         return generated_text
 
     async def _draft_attack_graph(
-        self, machine: MachineInformation, rejected: list[str]
+        self,
+        machine: MachineInformation,
+        rejected: list[str],
+        skill_context: str = "",
     ) -> AttackGraph:
         response = await self._generate(
-            attack_graph_prompt(machine, rejected, self.settings.cve_min_year),
+            attack_graph_prompt(
+                machine,
+                rejected,
+                self.settings.cve_min_year,
+                skill_context,
+            ),
             json_output=True,
             response_schema=AttackGraph,
             max_output_tokens=self.settings.gemini_max_output_tokens,
@@ -358,17 +379,40 @@ JSONのみを返してください:
             steps=[verified_by_id.get(step.step_id, step) for step in graph.steps],
         )
 
-    async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft:
+    async def generate_scenario(
+        self,
+        machine: MachineInformation,
+        skills: ScenarioSkillContexts | None = None,
+    ) -> ScenarioDraft:
+        resolved_skills = skills or ScenarioSkillContexts()
+        for requested_id in SkillSelector.cve_ids(machine):
+            self._validate_cve_id(requested_id)
+        for skill in resolved_skills.attack_graph.skills:
+            if skill.name == "cve":
+                for reference_id in skill.selected_reference_ids:
+                    self._validate_cve_id(reference_id)
+        attack_graph_skills = SkillRenderer.render(resolved_skills.attack_graph)
         last_error: Exception | None = None
         rejected: list[str] = []
         graph: AttackGraph | None = None
         for _ in range(self.settings.scenario_generation_attempts):
             try:
                 if graph is None:
-                    candidate = await self._draft_attack_graph(machine, rejected)
+                    candidate = await self._draft_attack_graph(
+                        machine, rejected, attack_graph_skills
+                    )
+                    self._validate_skill_cves(candidate, resolved_skills, machine)
                     graph = await self._verify_attack_graph(machine, candidate)
+                scenario_skills = SkillRenderer.render(
+                    context_for_graph(resolved_skills.scenario, graph)
+                )
                 definition = await self._generate(
-                    scenario_prompt(machine, graph.model_dump_json(indent=2), rejected),
+                    scenario_prompt(
+                        machine,
+                        graph.model_dump_json(indent=2),
+                        review_feedback=rejected,
+                        skill_context=scenario_skills,
+                    ),
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
                 scenario = ScenarioDraft(
@@ -423,11 +467,30 @@ JSONのみを返してください:
                 prompt = _prompt_with_rejection(prompt, error)
         raise RuntimeError(f"Could not review scenario: {last_error}")
 
+    @staticmethod
+    def _validate_skill_cves(
+        graph: AttackGraph, skills: ScenarioSkillContexts, machine: MachineInformation
+    ) -> None:
+        required = set(SkillSelector.cve_ids(machine))
+        actual = {step.cve_id for step in graph.steps if step.cve_id}
+        if not required <= actual:
+            raise ValueError(f"Attack graph must use requested CVEs: {sorted(required - actual)}")
+        try:
+            context_for_graph(skills.attack_graph, graph)
+        except ValueError as error:
+            raise ValueError(
+                f"Attack graph must use the selected CVE references: {error}"
+            ) from error
+
     async def generate_source(
-        self, machine: MachineInformation, scenario: ScenarioDraft
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        skills: SkillContext | None = None,
     ) -> GeneratedSource:
         last_error: Exception | None = None
-        prompt = code_prompt(machine, scenario)
+        skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.SOURCE))
+        prompt = code_prompt(machine, scenario, skill_context)
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(
@@ -450,13 +513,21 @@ JSONのみを返してください:
         scenario: ScenarioDraft,
         current: GeneratedSource,
         failure_report: dict,
+        skills: SkillContext | None = None,
     ) -> SourcePatch:
         last_error: Exception | None = None
         retry_report = failure_report
+        skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.REPAIR))
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(
-                    repair_prompt(machine, scenario, current, retry_report),
+                    repair_prompt(
+                        machine,
+                        scenario,
+                        current,
+                        retry_report,
+                        skill_context,
+                    ),
                     json_output=True,
                     response_schema=SourcePatch,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
@@ -477,9 +548,11 @@ JSONのみを返してください:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         current: GeneratedSource,
+        skills: SkillContext | None = None,
     ) -> SourceReview:
         last_error: Exception | None = None
-        prompt = source_review_prompt(machine, scenario, current)
+        skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.REVIEW))
+        prompt = source_review_prompt(machine, scenario, current, skill_context)
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(

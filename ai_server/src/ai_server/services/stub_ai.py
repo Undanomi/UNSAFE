@@ -15,12 +15,17 @@ from ..models import (
     SourcePatch,
     SourceReview,
 )
+from ..skills.models import ScenarioSkillContexts, SkillContext
 
 
 class StubGenerator:
     """Deterministic generator for local integration tests without an API key."""
 
-    async def generate_scenario(self, machine: MachineInformation) -> ScenarioDraft:
+    async def generate_scenario(
+        self,
+        machine: MachineInformation,
+        skills: ScenarioSkillContexts | None = None,
+    ) -> ScenarioDraft:
         objectives = []
         initial_achievements = []
         system_achievements = []
@@ -118,7 +123,10 @@ class StubGenerator:
         )
 
     async def generate_source(
-        self, machine: MachineInformation, scenario: ScenarioDraft
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        skills: SkillContext | None = None,
     ) -> GeneratedSource:
         build = """#!/bin/bash
 set -euo pipefail
@@ -185,6 +193,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         scenario: ScenarioDraft,
         current: GeneratedSource,
         failure_report: dict,
+        skills: SkillContext | None = None,
     ) -> SourcePatch:
         return SourcePatch(
             files=[
@@ -203,6 +212,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         machine: MachineInformation,
         scenario: ScenarioDraft,
         current: GeneratedSource,
+        skills: SkillContext | None = None,
     ) -> SourceReview:
         return SourceReview(
             approved=True,

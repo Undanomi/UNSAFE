@@ -19,11 +19,15 @@ from .services.scenarios import ScenarioCoordinator
 from .services.source_archive import SourceArchive
 from .services.stub_ai import StubGenerator
 from .services.workflow import MachineWorkflow
+from .skills.planning import SemanticSkillPlanner
+from .skills.repository import SkillRepository
+from .skills.service import NoopSkillService, SkillResolver, SkillService
 
 
 def create_app(
     settings: Settings | None = None,
     repository_override: SessionRepository | None = None,
+    skill_service_override: SkillResolver | None = None,
 ) -> FastAPI:
     resolved = settings or get_settings()
     repository = repository_override or SessionRepository(
@@ -47,6 +51,28 @@ def create_app(
             if resolved.ai_provider.lower() == "stub"
             else GeminiGenerator(resolved, ai_client)
         )
+        if skill_service_override is not None:
+            skill_service = skill_service_override
+        elif resolved.skills_enabled and isinstance(repository, SessionRepository):
+            skill_service = SkillService(
+                SkillRepository(repository.session_factory),
+                max_active=resolved.skills_max_active,
+                max_per_phase=resolved.skills_max_per_phase,
+                max_context_chars=resolved.skill_context_max_chars,
+                planner=SemanticSkillPlanner(
+                    generator._generate,
+                    model=resolved.gemini_model,
+                    min_cve_year=resolved.cve_min_year,
+                    max_catalog_chars=resolved.skill_selection_max_chars,
+                    max_skills=resolved.skills_max_per_phase,
+                    max_cves=resolved.skill_selection_max_cves,
+                    retries=resolved.skill_selection_retries,
+                )
+                if isinstance(generator, GeminiGenerator)
+                else None,
+            )
+        else:
+            skill_service = NoopSkillService()
         broker = EventBroker()
         build_client = BuildClient(
             build_http_client,
@@ -54,8 +80,13 @@ def create_app(
             resolved.build_server_token.get_secret_value(),
         )
         app.state.repository = repository
+        app.state.skills = skill_service
         app.state.scenarios = ScenarioCoordinator(
-            repository, generator, broker, resolved.scenario_chunk_size
+            repository,
+            generator,
+            broker,
+            resolved.scenario_chunk_size,
+            skill_service,
         )
         app.state.workflow = MachineWorkflow(
             repository,
@@ -64,6 +95,7 @@ def create_app(
             build_client,
             resolved.source_generation_attempts,
             resolved.build_repair_max_attempts,
+            skill_service,
         )
         app.state.download_signer = DownloadSigner(
             resolved.download_signing_secret.get_secret_value(),
