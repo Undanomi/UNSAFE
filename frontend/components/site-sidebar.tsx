@@ -9,14 +9,23 @@ import {
   MessageSquare,
   Settings,
 } from "lucide-react"
+import Image from "next/image"
 import Link from "next/link"
 import { useState } from "react"
 import { logoutAction } from "@/app/actions/auth"
 import { CHAT_SESSIONS } from "@/stores/chat"
 
-export function SiteSidebar() {
+type SiteSidebarProps = {
+  user: {
+    name: string
+    avatarUrl: string
+  }
+}
+
+export function SiteSidebar({ user }: SiteSidebarProps) {
   const [isChatListOpen, setIsChatListOpen] = useState(false)
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
+  const userInitial = user.name.trim().charAt(0).toUpperCase() || "U"
 
   return (
     <aside className="fixed top-0 bottom-0 left-0 z-10 flex w-[218px] flex-col border border-[#3d3d38] bg-[#20201e] px-[14px] py-5 text-[#f8f7f2] max-lg:static max-lg:w-full">
@@ -91,10 +100,23 @@ export function SiteSidebar() {
           className="inline-flex min-w-0 flex-1 items-center gap-[9px] text-[0.86rem] font-extrabold text-[#f8f7f2]"
           href="/profile"
         >
-          <span className="grid size-8 place-items-center rounded-full border border-[#50504b] bg-[#20201e] text-sm text-white">
-            T
+          <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-[#50504b] bg-[#20201e] text-sm text-white">
+            {user.avatarUrl ? (
+              <Image
+                alt={`${user.name}のプロフィール画像`}
+                fill
+                className="size-full object-cover"
+                loading="eager"
+                referrerPolicy="no-referrer"
+                sizes="32px"
+                src={user.avatarUrl}
+                unoptimized
+              />
+            ) : (
+              userInitial
+            )}
           </span>
-          <span className="truncate">Tanaka</span>
+          <span className="truncate">{user.name}</span>
         </Link>
         <button
           aria-controls="sidebar-account-menu"

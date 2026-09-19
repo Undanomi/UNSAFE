@@ -5,7 +5,9 @@ import { redirect } from "next/navigation"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { createSessionService } from "@/lib/auth/service"
 
-export type AuthActionResult = { success: true } | { success: false; message: string }
+export type AuthActionResult =
+  | { success: true; redirectTo: "/machines" | "/profile/setup" }
+  | { success: false; message: string }
 
 const AUTHENTICATION_ERROR_MESSAGE = "Google ログインに失敗しました。もう一度お試しください。"
 
@@ -15,7 +17,7 @@ export async function createSessionAction(idToken: string): Promise<AuthActionRe
   }
 
   try {
-    const sessionCookie = await createSessionService(idToken)
+    const { profileCompleted, sessionCookie } = await createSessionService(idToken)
 
     ;(await cookies()).set(SESSION_COOKIE_NAME, sessionCookie, {
       httpOnly: true,
@@ -24,7 +26,7 @@ export async function createSessionAction(idToken: string): Promise<AuthActionRe
       secure: process.env.NODE_ENV === "production",
     })
 
-    return { success: true }
+    return { success: true, redirectTo: profileCompleted ? "/machines" : "/profile/setup" }
   } catch (error) {
     console.error("Failed to create Firebase session.", error)
     return { success: false, message: AUTHENTICATION_ERROR_MESSAGE }
