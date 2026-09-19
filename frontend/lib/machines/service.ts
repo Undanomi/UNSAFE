@@ -1,6 +1,7 @@
 import "server-only"
 
 import { createHash, timingSafeEqual } from "node:crypto"
+import { FieldValue } from "firebase-admin/firestore"
 import {
   type AiSessionResponse,
   getAiSessionService,
@@ -219,5 +220,14 @@ export async function verifyMachineFlagService(
 
   const expectedDigest = createHash("sha256").update(expected, "utf8").digest()
   const answerDigest = createHash("sha256").update(answer.trim(), "utf8").digest()
-  return timingSafeEqual(expectedDigest, answerDigest)
+  const correct = timingSafeEqual(expectedDigest, answerDigest)
+  if (correct) {
+    await getFirebaseAdminFirestore()
+      .collection("users")
+      .doc(viewerUserId)
+      .update({
+        solved_machines: FieldValue.arrayUnion(`machines/${machineId}`),
+      })
+  }
+  return correct
 }
