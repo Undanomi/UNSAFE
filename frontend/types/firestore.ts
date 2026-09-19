@@ -8,6 +8,7 @@ export type UsersDocument = {
   own_machines: string[] // machines コレクションのドキュメントパス
   solved_machines: string[] // machines コレクションのドキュメントパス
   created_at: string
+  profile_completed: boolean
 }
 
 /** machines コレクションのドキュメント定義 */

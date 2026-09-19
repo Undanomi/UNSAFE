@@ -2,7 +2,7 @@ import "server-only"
 
 import type { UsersDocument } from "@/types/firestore"
 
-type UserIdentity = {
+export type UserIdentity = {
   uid: string
   name?: unknown
   picture?: unknown
@@ -21,5 +21,6 @@ export function buildInitialUserDocument(
     own_machines: [],
     solved_machines: [],
     created_at: createdAt.toISOString(),
+    profile_completed: false,
   }
 }

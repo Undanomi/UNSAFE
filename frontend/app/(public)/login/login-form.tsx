@@ -37,7 +37,7 @@ export function LoginForm() {
         return
       }
 
-      router.replace("/machines")
+      router.replace(result.redirectTo)
       router.refresh()
     } catch {
       setError("Google ログインに失敗しました。もう一度お試しください。")
