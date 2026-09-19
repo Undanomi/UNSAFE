@@ -51,6 +51,26 @@ pnpm dev
 
 [http://localhost:3000](http://localhost:3000) で起動します。
 
+## Docker
+
+リポジトリのルートで共通の環境変数ファイルを作成し、全サービスを起動します。
+
+```bash
+cp .env.example .env
+# .env に Firebase とバックエンド用の値を設定
+docker compose up --build
+```
+
+[http://localhost:3000](http://localhost:3000) でフロントエンドを開けます。ホスト側のポートを変更する場合は、`.env` の `FRONTEND_PORT` を変更してください。
+
+フロントエンドだけをビルドする場合は、公開 Firebase 設定をビルド引数として渡します。`NEXT_PUBLIC_*` はブラウザ向けバンドルへビルド時に埋め込まれるため、値を変更した場合はイメージを再ビルドしてください。
+
+```bash
+docker compose build frontend
+```
+
+本番イメージは Next.js の standalone 出力を使い、非 root ユーザーで実行します。`FIREBASE_ADMIN_*` はイメージには含めず、コンテナ起動時にのみ渡されます。
+
 ## ビルド
 
 ```bash
