@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 
 from .admin import configure_sqladmin
 from .config import AdminSettings
@@ -33,6 +34,11 @@ def create_admin_app(settings: AdminSettings | None = None) -> FastAPI:
         openapi_url=None,
         lifespan=lifespan,
     )
+
+    @app.get("/", include_in_schema=False)
+    async def redirect_to_admin() -> RedirectResponse:
+        return RedirectResponse(url="/admin")
+
     app.state.repository = repository
     app.state.sqladmin = configure_sqladmin(app, repository.engine, resolved)
     return app
