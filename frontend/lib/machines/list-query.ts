@@ -4,7 +4,7 @@ export const MACHINE_PAGE_SIZE = 10
 export type MachineListQuery = {
   page: number
   q: string
-  level: MachinesDocument["level"][]
+  level: MachinesDocument["level"] | ""
   owned: boolean
   solved: "" | "yes" | "no"
   sort: "asc" | "desc"
@@ -35,12 +35,12 @@ export function parseMachineListQuery(
   const rawPage = value("page")
   const page = /^\d+$/.test(rawPage) ? Number(rawPage) : 1
   const rawLevels = Array.isArray(params.level) ? params.level : [params.level]
-  const levels = (["easy", "medium", "hard"] as const).filter((level) => rawLevels.includes(level))
+  const level = (["easy", "medium", "hard"] as const).find((value) => rawLevels.includes(value))
   const solved = value("solved")
   return {
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
     q: value("q").trim().slice(0, 100),
-    level: levels,
+    level: level ?? "",
     owned: value("owned") === "1",
     solved: solved === "yes" || solved === "no" ? solved : "",
     sort: value("sort") === "asc" ? "asc" : "desc",
@@ -50,7 +50,7 @@ export function parseMachineListQuery(
 export function machineListHref(query: MachineListQuery, page = query.page) {
   const params = new URLSearchParams()
   if (query.q) params.set("q", query.q)
-  for (const level of query.level) params.append("level", level)
+  if (query.level) params.set("level", query.level)
   if (query.owned) params.set("owned", "1")
   if (query.solved) params.set("solved", query.solved)
   if (query.sort === "asc") params.set("sort", "asc")
@@ -68,7 +68,7 @@ export function selectMachinePage(
       item.status !== "deleted" &&
       (item.published === true || item.isOwned) &&
       (!query.owned || item.isOwned) &&
-      (query.level.length === 0 || query.level.includes(item.level)) &&
+      (!query.level || query.level === item.level) &&
       (!query.solved || item.isSolved === (query.solved === "yes")) &&
       (!needle ||
         [item.name, ...item.tags].some((text) => text.toLocaleLowerCase("ja-JP").includes(needle))),

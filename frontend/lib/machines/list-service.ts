@@ -1,40 +1,69 @@
 import "server-only"
 
-import { Filter } from "firebase-admin/firestore"
+import { FieldPath, Filter, type Firestore } from "firebase-admin/firestore"
 import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
 import {
+  MACHINE_PAGE_SIZE,
   type MachineListItem,
   type MachineListQuery,
+  type MachineListResult,
   selectMachinePage,
 } from "@/lib/machines/list-query"
 import type { MachinesDocument, UsersDocument } from "@/types/firestore"
 
+const visibleStatuses = ["created", "building", "ready", "failed", "preparing"] satisfies Exclude<
+  MachinesDocument["status"],
+  "deleted"
+>[]
+
+async function getMachineListDocuments(
+  firestore: Firestore,
+  viewerUserId: string,
+  query: MachineListQuery,
+) {
+  const ownedFilter = Filter.or(
+    Filter.where("created_by", "==", `users/${viewerUserId}`),
+    Filter.where("created_by", "==", viewerUserId),
+  )
+  const visibilityFilter = query.owned
+    ? ownedFilter
+    : Filter.or(Filter.where("published", "==", true), ownedFilter)
+  const isFiltered = Boolean(query.q || query.level || query.solved || query.owned)
+  // Equality filters allow creation-date ordering without a status inequality sort.
+  const statusFilter = isFiltered
+    ? Filter.where("status", "!=", "deleted")
+    : Filter.where("status", "in", visibleStatuses)
+  const machines = firestore
+    .collection("machines")
+    .where(Filter.and(statusFilter, visibilityFilter))
+  const metadata = machines.select(
+    "name",
+    "summary",
+    "description",
+    "tags",
+    "level",
+    "created_at",
+    "created_by",
+    "published",
+    "status",
+  )
+  if (isFiltered) return { snapshot: await metadata.get(), pagination: null }
+
+  const ordered = metadata.orderBy("created_at", query.sort).orderBy(FieldPath.documentId(), "asc")
+  const total = (await ordered.count().get()).data().count
+  const pageCount = Math.max(1, Math.ceil(total / MACHINE_PAGE_SIZE))
+  const page = Math.min(query.page, pageCount)
+  const snapshot = await ordered
+    .offset((page - 1) * MACHINE_PAGE_SIZE)
+    .limit(MACHINE_PAGE_SIZE)
+    .get()
+  return { snapshot, pagination: { total, page, pageCount } }
+}
+
 export async function getMachineListService(viewerUserId: string, query: MachineListQuery) {
   const firestore = getFirebaseAdminFirestore()
-  // Only authorized, non-secret list metadata is read. Filtering/paging stays on the server.
-  const [snapshot, viewer] = await Promise.all([
-    firestore
-      .collection("machines")
-      .where(
-        Filter.or(
-          Filter.where("published", "==", true),
-          Filter.where("created_by", "==", `users/${viewerUserId}`),
-          // 念の為 "created_by" == viewerUserId でも取得
-          Filter.where("created_by", "==", viewerUserId),
-        ),
-      )
-      .select(
-        "name",
-        "summary",
-        "description",
-        "tags",
-        "level",
-        "created_at",
-        "created_by",
-        "published",
-        "status",
-      )
-      .get(),
+  const [{ snapshot, pagination }, viewer] = await Promise.all([
+    getMachineListDocuments(firestore, viewerUserId, query),
     firestore.collection("users").doc(viewerUserId).get(),
   ])
   const solved = new Set((viewer.data() as UsersDocument | undefined)?.solved_machines ?? [])
@@ -57,7 +86,9 @@ export async function getMachineListService(viewerUserId: string, query: Machine
       isSolved: solved.has(`machines/${doc.id}`),
     }
   })
-  const result = selectMachinePage(items, query)
+  const result: MachineListResult = pagination
+    ? { ...pagination, machines: items }
+    : selectMachinePage(items, query)
   const authorIds = [...new Set(result.machines.map((machine) => machine.authorId))]
   if (authorIds.length) {
     const authors = await firestore.getAll(
