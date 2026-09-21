@@ -3,7 +3,7 @@ import { ChatWorkspace, MissingChatSession } from "@/app/(private)/machines/chat
 import { AppShell } from "@/components/app-shell"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
-import { getChatSessionService } from "@/lib/chat/service"
+import { getChatSessionPageService } from "@/lib/chat/service"
 
 type ChatSessionPageProps = {
   params: Promise<{ sessionId: string }>
@@ -13,7 +13,7 @@ export default async function ChatSessionPage({ params }: ChatSessionPageProps) 
   const { sessionId } = await params
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const user = await verifySessionCookieService(sessionCookie)
-  const session = user ? await getChatSessionService(user.uid, sessionId) : null
+  const session = user ? await getChatSessionPageService(user.uid, sessionId) : null
 
   return (
     <AppShell contentClassName="py-9 pb-14 max-lg:py-8">

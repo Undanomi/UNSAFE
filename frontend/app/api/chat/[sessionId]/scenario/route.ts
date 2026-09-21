@@ -9,6 +9,28 @@ type ScenarioRouteContext = {
   params: Promise<{ sessionId: string }>
 }
 
+function proxyScenarioStream(upstream: ReadableStream<Uint8Array>) {
+  const reader = upstream.getReader()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          controller.close()
+          return
+        }
+        controller.enqueue(value)
+      } catch {
+        // Close cleanly so the browser can reconnect without Next.js reporting a pipe failure.
+        controller.close()
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason)
+    },
+  })
+}
+
 export async function GET(_request: Request, { params }: ScenarioRouteContext) {
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const user = await verifySessionCookieService(sessionCookie)
@@ -25,7 +47,7 @@ export async function GET(_request: Request, { params }: ScenarioRouteContext) {
       return new Response(null, { status: upstream.status || 502 })
     }
 
-    return new Response(upstream.body, {
+    return new Response(proxyScenarioStream(upstream.body), {
       status: 200,
       headers: {
         "Content-Type": "text/event-stream; charset=utf-8",

@@ -22,39 +22,47 @@ class DatabaseSettings(BaseSettings):
         return self
 
 
-class Settings(DatabaseSettings):
-    log_level: str = "INFO"
-    source_root: Path = Path("./data/scenarios")
+class RuntimeLimitSettings(DatabaseSettings):
+    """Non-secret AI server limits shared with the read-only admin dashboard."""
 
-    ai_provider: str = "gemini"
-    gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
     gemini_max_output_tokens: int = Field(default=65536, ge=1024, le=65536)
-    github_token: str | None = None
     generation_retries: int = Field(default=3, ge=1, le=10)
     cve_min_year: int = Field(default=2024, ge=1999, le=2100)
     scenario_generation_attempts: int = Field(default=5, ge=1, le=10)
     source_generation_attempts: int = Field(default=3, ge=1, le=5)
+    scenario_sync_attempts: int = Field(default=3, ge=1, le=10)
     ai_timeout_seconds: float = Field(default=600, gt=0)
 
-    build_server_url: str = "http://localhost:8080"
-    build_server_token: SecretStr = Field(min_length=32)
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
-    download_signing_secret: SecretStr = SecretStr(
-        "local-development-download-signing-secret-change-me"
-    )
     download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)
 
-    skills_enabled: bool = True
     skills_max_active: int = Field(default=32, ge=1, le=100)
     skills_max_per_phase: int = Field(default=8, ge=1, le=20)
     skill_context_max_chars: int = Field(default=50_000, ge=1_000, le=200_000)
     skill_selection_max_chars: int = Field(default=60_000, ge=1_000, le=300_000)
     skill_selection_retries: int = Field(default=2, ge=1, le=3)
     skill_selection_max_cves: int = Field(default=3, ge=1, le=10)
+
+
+class Settings(RuntimeLimitSettings):
+    log_level: str = "INFO"
+    source_root: Path = Path("./data/scenarios")
+
+    ai_provider: str = "gemini"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemini-2.5-flash"
+    github_token: str | None = None
+
+    build_server_url: str = "http://localhost:8080"
+    build_server_token: SecretStr = Field(min_length=32)
+    download_signing_secret: SecretStr = SecretStr(
+        "local-development-download-signing-secret-change-me"
+    )
+
+    skills_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_download_signing_settings(self) -> Settings:
@@ -63,7 +71,7 @@ class Settings(DatabaseSettings):
         return self
 
 
-class AdminSettings(DatabaseSettings):
+class AdminSettings(RuntimeLimitSettings):
     sqladmin_username: str
     sqladmin_password: SecretStr
     sqladmin_session_secret: SecretStr

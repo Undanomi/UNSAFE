@@ -30,11 +30,13 @@ def candidates(root):
     return as_candidates(load_skills(root, created_by="test"))
 
 
-def test_automatic_selection_matches_names_not_all_minimal_skills(tmp_path):
+def test_selector_does_not_guess_minimal_skills_from_theme_text(tmp_path):
     items = candidates(tmp_path)
     context = select_context(items, SkillPhase.SOURCE, machine())
-    assert [s.name for s in context.skills] == ["sql-injection"]
+    assert context.skills == []
     m = machine().model_copy(update={"theme": "SSTI"})
+    assert select_context(items, SkillPhase.SOURCE, m).skills == []
+    m.skill_names = ["ssti"]
     assert [s.name for s in select_context(items, SkillPhase.SOURCE, m).skills] == ["ssti"]
     m.skill_names = []
     assert select_context(items, SkillPhase.SOURCE, m).skills == []
@@ -109,9 +111,9 @@ async def test_api_passes_explicit_skill_to_scenario_generator(tmp_path):
     captured = []
 
     class RecordingGenerator(StubGenerator):
-        async def generate_scenario(self, machine, skills=None):
+        async def generate_scenario(self, machine, skills=None, on_attempt=None):
             captured.append(skills)
-            return await super().generate_scenario(machine, skills)
+            return await super().generate_scenario(machine, skills, on_attempt)
 
     app = create_app(
         Settings(ai_provider="stub"),

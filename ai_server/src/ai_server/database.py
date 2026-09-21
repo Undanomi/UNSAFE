@@ -74,6 +74,18 @@ class AISessionRecord(Base):
     scenario_version_id: Mapped[str | None] = mapped_column(String(128))
     generated_code_path: Mapped[str | None] = mapped_column(Text)
     generated_code_checksum: Mapped[str | None] = mapped_column(CHAR(64))
+    scenario_generation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scenario_generation_attempt_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    source_generation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_generation_attempt_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    scenario_sync_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scenario_sync_attempt_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     build_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

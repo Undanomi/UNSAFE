@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
 from ..models import (
@@ -18,6 +19,7 @@ from ..models import (
     SourceReview,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext
+from .ai import _record_scenario_draft
 
 
 class StubGenerator:
@@ -27,7 +29,22 @@ class StubGenerator:
         self,
         machine: MachineInformation,
         skills: ScenarioSkillContexts | None = None,
+        on_attempt: Callable[[], Awaitable[None]] | None = None,
     ) -> ScenarioDraft:
+        resumed = getattr(on_attempt, "resume_scenario", None)
+        resumed_review = getattr(on_attempt, "resume_review", None)
+        if (
+            isinstance(resumed, ScenarioDraft)
+            and isinstance(resumed_review, ScenarioReview)
+            and resumed_review.approved
+        ):
+            return resumed
+        if on_attempt is not None:
+            await on_attempt()
+        if isinstance(resumed, ScenarioDraft):
+            review = await self.review_scenario(machine, resumed)
+            await _record_scenario_draft(on_attempt, resumed, review)
+            return resumed
         objectives = []
         initial_achievements = []
         system_achievements = []
@@ -71,6 +88,30 @@ class StubGenerator:
                 implementation_steps=["隔離された教材用の設定不備を作成する"],
             ),
         ]
+        for index, cve_id in enumerate(machine.cve_ids, start=1):
+            steps.append(
+                AttackStep(
+                    step_id=f"exercise-cve-{index}",
+                    title=f"{cve_id}の再現",
+                    kind="cve",
+                    phase="initial_access",
+                    description=f"隔離環境で{cve_id}の成立条件を検証します。",
+                    requires=["enumerate-service"],
+                    cve_id=cve_id,
+                    cve_title=f"Stub record for {cve_id}",
+                    cve_description=(
+                        f"Deterministic test-only description for the published {cve_id} record."
+                    ),
+                    installation_artifact="other_prebuilt",
+                    artifact_source="bundled deterministic test fixture",
+                    software="stub-training-service",
+                    vulnerable_version="1.0",
+                    os_compatible=True,
+                    compatibility_reason="Deterministic local stub scenario.",
+                    installation_method="provisioning script",
+                    implementation_steps=["教材用の決定的な再現条件を構成する"],
+                )
+            )
         if machine.needs_system_flag:
             steps.append(
                 AttackStep(
@@ -108,7 +149,7 @@ class StubGenerator:
 ## 6. 教育的価値
 列挙、設定監査、証跡確認という基本的な調査手順を学べます。
 """
-        return ScenarioDraft(
+        scenario = ScenarioDraft(
             scenario_id=f"scenario-{uuid4().hex}",
             title=machine.name,
             scenario_description=(
@@ -119,9 +160,16 @@ class StubGenerator:
             target_os=machine.operating_system,
             attack_graph=attack_graph,
         )
+        await _record_scenario_draft(on_attempt, scenario)
+        review = await self.review_scenario(machine, scenario)
+        await _record_scenario_draft(on_attempt, scenario, review)
+        return scenario
 
     async def review_scenario(
-        self, machine: MachineInformation, scenario: ScenarioDraft
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        review_context: str = "generation",
     ) -> ScenarioReview:
         return ScenarioReview(
             approved=True,
@@ -189,7 +237,22 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                 ],
                 "services": [{"name": "ssh", "port": 22}],
                 "acceptance_tests": acceptance_tests,
-                "expected_vulnerabilities": [{"name": "local demonstration setting"}],
+                "expected_vulnerabilities": [
+                    {"name": "local demonstration setting"},
+                    *[
+                        {
+                            "cve_id": step.cve_id,
+                            "official_title": step.cve_title,
+                            "description": step.cve_description,
+                            "references": step.references,
+                            "installation_artifact": step.installation_artifact,
+                            "artifact_source": step.artifact_source,
+                            "source_build_reason": step.source_build_reason,
+                        }
+                        for step in scenario.attack_graph.steps
+                        if step.cve_id
+                    ],
+                ],
                 "health_checks": [{"command": "test -f /etc/motd.d/90-slsg-scenario"}],
                 "attack_steps": [
                     {
@@ -242,6 +305,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         machine: MachineInformation,
         scenario: ScenarioDraft,
         current: GeneratedSource,
+        review_feedback: dict | None = None,
     ) -> ScenarioRevision:
         return ScenarioRevision(
             scenario_description=(

@@ -1,11 +1,13 @@
 import "server-only"
 
 import { Timestamp } from "firebase-admin/firestore"
+import { cancelAiSessionService, getAiSessionService } from "@/lib/ai/service"
 import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
 import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
 import {
   CHAT_STEPS,
   type ChatAnswers,
+  type ChatCreationFailure,
   type ChatCreationStatus,
   type ChatSession,
   type ChatSessionSummary,
@@ -23,6 +25,7 @@ type ChatSessionDocument = {
   basic_ready: boolean
   answers: ChatAnswers
   creation_status: ChatCreationStatus
+  creation_failure?: ChatCreationFailure | null
   machine_id: string | null
   created_at: Timestamp
   updated_at: Timestamp
@@ -36,6 +39,7 @@ function toChatSession(id: string, document: ChatSessionDocument): ChatSession {
     initialStep: document.current_step ?? CHAT_STEPS.machineName,
     initialAnswers: { ...EMPTY_CHAT_ANSWERS, ...document.answers },
     creationStatus: document.creation_status ?? "input",
+    creationFailure: document.creation_failure ?? null,
     machineId: document.machine_id ?? null,
   }
 }
@@ -60,6 +64,7 @@ export async function createChatSessionService(
     basic_ready: basicReady,
     answers,
     creation_status: "input",
+    creation_failure: null,
     machine_id: null,
     created_at: now,
     updated_at: now,
@@ -79,6 +84,38 @@ export async function getChatSessionService(
   const document = snapshot.data() as ChatSessionDocument
   if (document.owner_user_id !== ownerUserId) return null
   return toChatSession(snapshot.id, document)
+}
+
+export async function getChatSessionPageService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<ChatSession | null> {
+  const session = await getChatSessionService(ownerUserId, sessionId)
+  if (
+    !session ||
+    (session.creationStatus !== "generating_scenario" && session.creationStatus !== "building")
+  ) {
+    return session
+  }
+
+  const aiSession = await getAiSessionService(ownerUserId, sessionId)
+  const runtimeMatches =
+    (session.creationStatus === "generating_scenario" &&
+      aiSession.status === "generating_scenario") ||
+    (session.creationStatus === "building" &&
+      ["generating_code", "build_queued", "building"].includes(aiSession.status))
+  if (runtimeMatches) return session
+
+  if (aiSession.status === "completed") {
+    await setChatCreationStatusService(ownerUserId, sessionId, "completed")
+    return { ...session, creationStatus: "completed", creationFailure: null }
+  }
+  if (aiSession.status !== "cancelled") {
+    await cancelAiSessionService(ownerUserId, sessionId)
+  }
+
+  await setChatCreationCancelledService(ownerUserId, sessionId)
+  return { ...session, creationStatus: "cancelled", creationFailure: null }
 }
 
 export async function listChatSessionsService(ownerUserId: string): Promise<ChatSessionSummary[]> {
@@ -145,9 +182,92 @@ export async function setChatCreationStatusService(
 
     transaction.update(reference, {
       creation_status: creationStatus,
+      creation_failure: null,
       error_message: null,
       updated_at: Timestamp.now(),
     })
+    return true
+  })
+}
+
+export async function setChatCreationFailureService(
+  ownerUserId: string,
+  sessionId: string,
+  failure: ChatCreationFailure,
+): Promise<boolean> {
+  const reference = chatReference(sessionId)
+  const firestore = getFirebaseAdminFirestore()
+
+  return firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    if (!snapshot.exists) return false
+    const document = snapshot.data() as ChatSessionDocument
+    if (document.owner_user_id !== ownerUserId) return false
+
+    transaction.update(reference, {
+      creation_status: "failed",
+      creation_failure: failure,
+      error_message: failure.summary,
+      updated_at: Timestamp.now(),
+    })
+    return true
+  })
+}
+
+export async function setChatCreationCancelledService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const reference = chatReference(sessionId)
+  const firestore = getFirebaseAdminFirestore()
+
+  return firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    if (!snapshot.exists) return false
+    const document = snapshot.data() as ChatSessionDocument
+    if (document.owner_user_id !== ownerUserId) return false
+
+    transaction.update(reference, {
+      creation_status: "cancelled",
+      creation_failure: null,
+      error_message: null,
+      updated_at: Timestamp.now(),
+    })
+    if (document.machine_id) {
+      transaction.update(firestore.collection(MACHINE_COLLECTION).doc(document.machine_id), {
+        status: "cancelled",
+        error_message: null,
+      })
+    }
+    return true
+  })
+}
+
+export async function setChatCreationReadyService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const reference = chatReference(sessionId)
+  const firestore = getFirebaseAdminFirestore()
+
+  return firestore.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(reference)
+    if (!snapshot.exists) return false
+    const document = snapshot.data() as ChatSessionDocument
+    if (document.owner_user_id !== ownerUserId) return false
+
+    transaction.update(reference, {
+      creation_status: "input",
+      creation_failure: null,
+      error_message: null,
+      updated_at: Timestamp.now(),
+    })
+    if (document.machine_id) {
+      transaction.update(firestore.collection(MACHINE_COLLECTION).doc(document.machine_id), {
+        status: "cancelled",
+        error_message: null,
+      })
+    }
     return true
   })
 }
@@ -212,6 +332,7 @@ export async function createMachineDocumentService(
     )
     transaction.update(reference, {
       creation_status: "building",
+      creation_failure: null,
       current_step: CHAT_STEPS.complete,
       machine_id: machineId,
       error_message: null,

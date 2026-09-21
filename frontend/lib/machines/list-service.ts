@@ -9,7 +9,14 @@ import {
 } from "@/lib/machines/list-query"
 import type { MachinesDocument, UsersDocument } from "@/types/firestore"
 
-const visibleStatuses = ["created", "building", "ready", "failed", "preparing"] as const
+const visibleStatuses = [
+  "created",
+  "building",
+  "ready",
+  "failed",
+  "cancelled",
+  "preparing",
+] as const
 
 export async function getMachineListService(viewerUserId: string, query: MachineListQuery) {
   const firestore = getFirebaseAdminFirestore()

@@ -21,7 +21,7 @@ export type MachinesDocument = {
   file_path: string
   level: "easy" | "medium" | "hard"
   published: boolean
-  status: "created" | "building" | "ready" | "failed" | "preparing" | "deleted"
+  status: "created" | "building" | "ready" | "failed" | "cancelled" | "preparing" | "deleted"
   system_flag: string
   user_flag: string
   tags: string[]
@@ -47,7 +47,18 @@ export type ChatSessionsDocument = {
     needsSystemFlag: boolean | null
     systemFlagDetails: string
   }
-  creation_status: "input" | "generating_scenario" | "building" | "completed" | "failed"
+  creation_status:
+    | "input"
+    | "generating_scenario"
+    | "building"
+    | "completed"
+    | "failed"
+    | "cancelled"
+  creation_failure?: {
+    kind: "settings" | "system"
+    summary: string
+    suggestions: string[]
+  } | null
   machine_id: string | null
   created_at: FirebaseFirestore.Timestamp
   updated_at: FirebaseFirestore.Timestamp

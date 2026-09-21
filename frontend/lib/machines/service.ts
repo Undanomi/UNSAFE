@@ -38,6 +38,12 @@ function toMachineBuildState(session: AiSessionResponse): MachineBuildState {
       progress: Math.max(0, Math.min(100, session.build_progress)),
     }
   }
+  if (session.status === "cancelled") {
+    return {
+      status: "cancelled",
+      progress: Math.max(0, Math.min(100, session.build_progress)),
+    }
+  }
   return {
     status: session.status === "generating_code" ? "preparing" : "building",
     progress: Math.max(0, Math.min(100, session.build_progress)),
@@ -55,7 +61,13 @@ async function saveMachineBuildState(
 ) {
   const firestore = getFirebaseAdminFirestore()
   const chatStatus =
-    state.status === "ready" ? "completed" : state.status === "failed" ? "failed" : "building"
+    state.status === "ready"
+      ? "completed"
+      : state.status === "failed"
+        ? "failed"
+        : state.status === "cancelled"
+          ? "cancelled"
+          : "building"
 
   const batch = firestore.batch()
   batch.update(firestore.collection("machines").doc(machineId), {
@@ -133,7 +145,7 @@ export async function getMachineDetailService(
   }
 }
 
-export async function synchronizeMachineBuildService(
+export async function getMachineBuildStateService(
   viewerUserId: string,
   machineId: string,
 ): Promise<MachineBuildState | null> {
@@ -163,7 +175,7 @@ export async function retryMachineBuildService(
   if (!machine?.ai_session_id || machineOwnerId(machine) !== ownerUserId) return null
 
   const current = await getAiSessionService(ownerUserId, machine.ai_session_id)
-  if (current.status !== "failed") {
+  if (current.status !== "failed" && current.status !== "cancelled") {
     const buildState = toMachineBuildState(current)
     const description =
       buildState.status === "ready"

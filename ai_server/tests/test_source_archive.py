@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,57 @@ def scenario() -> ScenarioDraft:
             ]
         ),
     )
+
+
+def cve_scenario() -> ScenarioDraft:
+    return ScenarioDraft(
+        scenario_id="scenario-cve",
+        title="CVE test",
+        definition="official CVE test",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="training-step",
+                    title="CVE-2026-1234: Official test vulnerability",
+                    kind="cve",
+                    phase="initial_access",
+                    description="Official vulnerability mechanism.",
+                    cve_id="CVE-2026-1234",
+                    cve_title="Official test vulnerability",
+                    cve_description="Official vulnerability mechanism.",
+                    cwe_ids=["CWE-79"],
+                    installation_artifact="vendor_release_binary",
+                    artifact_source="official vendor release",
+                    implementation_steps=["Provision the exact official mechanism"],
+                )
+            ]
+        ),
+    )
+
+
+def cve_generated_source(*, simulated: bool = False) -> GeneratedSource:
+    generated = web_generated_source()
+    manifest_file = next(
+        file for file in generated.files if file.path == "contents/scenario_manifest.json"
+    )
+    manifest = json.loads(manifest_file.content)
+    manifest["attack_steps"][0]["kind"] = "cve"
+    manifest["expected_vulnerabilities"] = [
+        {
+            "cve_id": "CVE-2026-1234",
+            "official_title": "Official test vulnerability",
+            "description": "Official vulnerability mechanism.",
+            "references": ["https://www.cve.org/CVERecord?id=CVE-2026-1234"],
+            "installation_artifact": "vendor_release_binary",
+            "artifact_source": "official vendor release",
+            "source_build_reason": None,
+        }
+    ]
+    manifest_file.content = json.dumps(manifest)
+    if simulated:
+        readme = next(file for file in generated.files if file.path == "contents/README.md")
+        readme.content = "CVE-2026-1234 is implemented as a simulated vulnerability."
+    return generated
 
 
 def web_generated_source(
@@ -122,6 +174,24 @@ def test_accepts_web_checks_without_directory_listing_policy(tmp_path: Path) -> 
     assert archive_path.is_file()
 
 
+def test_accepts_source_grounded_in_official_cve_facts(tmp_path: Path) -> None:
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-cve",
+        cve_scenario(),
+        cve_generated_source(),
+    )
+    assert archive_path.is_file()
+
+
+def test_static_validation_does_not_infer_cve_semantics_from_prose(tmp_path: Path) -> None:
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-cve",
+        cve_scenario(),
+        cve_generated_source(simulated=True),
+    )
+    assert archive_path.is_file()
+
+
 def test_rejects_case_mismatched_flag_in_provisioning_source(tmp_path: Path) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     mismatched = expected.upper()
@@ -184,6 +254,15 @@ def test_rejects_web_source_without_ip_root_quality_checks(tmp_path: Path) -> No
     assert "web:manifest:application_identity" in failures
     assert "web:build:ip_root_entrypoint" in failures
     assert "permissions:build:web_runtime_access" in failures
+    permission_check = next(
+        check
+        for check in captured.value.report["checks"]
+        if check["name"] == "permissions:build:web_runtime_access"
+    )
+    assert permission_check["required_commands"] == [
+        "namei -l <deployed-web-file>",
+        "runuser -u <actual-web-runtime-user> -- test -r <deployed-web-file>",
+    ]
 
 
 def test_invalid_manifest_json_reports_only_the_root_parse_error(tmp_path: Path) -> None:
@@ -539,3 +618,77 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
         "#!/bin/bash\nset -euo pipefail\necho valid\n"
     )
     assert source == archived
+
+
+def test_static_validation_does_not_guess_test_markers_from_names(tmp_path: Path) -> None:
+    generated = web_generated_source()
+    marker = "RSC_RCE_TEST_PAYLOAD_MARKER"
+    for source_file in generated.files:
+        if source_file.path == "contents/app/index.php":
+            source_file.content += (
+                f"if ($_POST['payload'] === '{marker}') {{ file_put_contents('/tmp/rce', 'ok'); }}\n"
+            )
+        if source_file.path == "contents/scenario_manifest.json":
+            manifest = json.loads(source_file.content)
+            manifest["acceptance_tests"].append(
+                {"command": f"curl -d '{marker}' http://127.0.0.1/"}
+            )
+            source_file.content = json.dumps(manifest)
+
+    archive_path, _ = SourceArchive(tmp_path).create("session", scenario(), generated)
+    assert archive_path.is_file()
+
+
+def test_rejects_acceptance_test_that_switches_identity_to_read_flag(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    for source_file in generated.files:
+        if source_file.path == "contents/scripts/provision.sh":
+            source_file.content += f"printf '%s\\n' '{expected}' > /home/rscuser/user.txt\n"
+        if source_file.path == "contents/scenario_manifest.json":
+            manifest = json.loads(source_file.content)
+            manifest["acceptance_tests"].append(
+                {
+                    "command": (
+                        "sudo -u rscuser cat /home/rscuser/user.txt | "
+                        f"grep -Fxq '{expected}'"
+                    )
+                }
+            )
+            source_file.content = json.dumps(manifest)
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", flag_scenario, generated)
+
+    failures = {
+        check["name"] for check in captured.value.report["checks"] if check["status"] == "fail"
+    }
+    assert "exploit:no_direct_identity_flag_read" in failures
+
+
+def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) -> None:
+    archive = SourceArchive(tmp_path)
+    archive_path, original_checksum = archive.create(
+        "session", scenario(), web_generated_source()
+    )
+    review_report = {
+        "kind": "source_semantic_review",
+        "status": "rejected",
+        "summary": "Exploit verification is simulated.",
+        "checks": [],
+    }
+
+    updated_checksum = archive.record_semantic_review(
+        archive_path, review_report, approved=False
+    )
+
+    report = json.loads(
+        (archive_path.parent / "source" / "repair_report.json").read_text()
+    )
+    assert report["source_semantic_review"]["status"] == "rejected"
+    assert report["source_semantic_review"]["report"] == review_report
+    with zipfile.ZipFile(archive_path) as zipped:
+        archived_report = json.loads(zipped.read("repair_report.json"))
+    assert archived_report["source_semantic_review"]["status"] == "rejected"
+    assert updated_checksum != original_checksum

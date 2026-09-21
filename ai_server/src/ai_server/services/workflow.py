@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from ..models import (
@@ -12,6 +13,7 @@ from ..models import (
     SessionState,
     SessionStatus,
     SourceReview,
+    scenario_is_valid_for_machine,
 )
 from ..repository import SessionRepository
 from ..skills.models import SkillPhase
@@ -41,6 +43,7 @@ class MachineWorkflow:
         build_client: BuildClient,
         source_generation_attempts: int,
         build_repair_max_attempts: int,
+        scenario_sync_attempts: int,
         skill_service: SkillResolver | None = None,
     ) -> None:
         self.repository = repository
@@ -49,14 +52,45 @@ class MachineWorkflow:
         self.build_client = build_client
         self.source_generation_attempts = source_generation_attempts
         self.build_repair_max_attempts = build_repair_max_attempts
+        self.scenario_sync_attempts = scenario_sync_attempts
         self.skill_service = skill_service or NoopSkillService()
         self.tasks: dict[str, asyncio.Task[None]] = {}
+        self.starting_sessions: set[str] = set()
+        self.cancel_requests: set[str] = set()
+
+    def is_running(self, session_id: str) -> bool:
+        task = self.tasks.get(session_id)
+        return session_id in self.starting_sessions or (task is not None and not task.done())
+
+    async def cancel(self, session_id: str) -> None:
+        self.cancel_requests.add(session_id)
+        self.starting_sessions.discard(session_id)
+        task = self.tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        state = await self.repository.get(session_id)
+        if state.build_id and state.build_status not in {"completed", "failed", "cancelled"}:
+            await self.build_client.cancel(state.build_id)
 
     async def start(self, session_id: str, scenario_id: str | None = None) -> SessionState:
+        self.cancel_requests.discard(session_id)
         state = await self.repository.get(session_id)
         if not state.machine_information or not state.scenario:
             raise InvalidSessionStateError(
                 "a generated scenario is required before machine creation"
+            )
+        if not scenario_is_valid_for_machine(state.machine_information, state.scenario):
+            state.scenario = None
+            state.status = SessionStatus.READY
+            state.error_message = None
+            await self.repository.save(state)
+            raise InvalidSessionStateError(
+                "scenario flag values are invalid; regenerate the scenario before machine creation"
             )
         if scenario_id and scenario_id != state.scenario.scenario_id:
             raise InvalidSessionStateError("scenario_id does not belong to this session")
@@ -65,25 +99,40 @@ class MachineWorkflow:
             if not active_task.done():
                 return state
             self.tasks.pop(session_id, None)
-        if state.build_id and state.build_status not in {"completed", "failed", "cancelled"}:
-            state = await self.synchronize(state, auto_repair=False, force=True)
         if state.build_id:
             if state.build_status not in {"failed", "cancelled"}:
                 return state
             state.build_repair_attempt_limit = (
                 state.build_repair_attempts + self.build_repair_max_attempts
             )
+            state.source_generation_attempt_limit = (
+                state.source_generation_attempts
+                + self.build_repair_max_attempts * self.source_generation_attempts
+            )
             await self.repository.save(state)
             return await self._start_build_repair(state)
         state.build_repair_attempt_limit = (
             state.build_repair_attempts + self.build_repair_max_attempts
         )
-        state.status = SessionStatus.GENERATING_CODE
-        await self.repository.save(state)
-        self._create_task(
-            session_id,
-            build_slots_remaining=self.build_repair_max_attempts + 1,
+        state.source_generation_attempt_limit = (
+            state.source_generation_attempts
+            + (self.build_repair_max_attempts + 1) * self.source_generation_attempts
         )
+        state.status = SessionStatus.GENERATING_CODE
+        self.starting_sessions.add(session_id)
+        try:
+            await self.repository.save(state)
+            if session_id in self.cancel_requests:
+                state.status = SessionStatus.CANCELLED
+                state.error_message = None
+                await self.repository.save(state)
+                return state
+            self._create_task(
+                session_id,
+                build_slots_remaining=self.build_repair_max_attempts + 1,
+            )
+        finally:
+            self.starting_sessions.discard(session_id)
         return state
 
     async def _start_build_repair(
@@ -146,6 +195,11 @@ class MachineWorkflow:
             else:
                 if build_log.strip():
                     repair_report["packer_log_tail"] = build_log
+                    failed_commands, failure_context = _extract_build_failures(build_log)
+                    if failed_commands:
+                        repair_report["failed_commands"] = failed_commands
+                    if failure_context:
+                        repair_report["failure_log_context"] = failure_context
         repair_history = (
             self.source_archive.load_repair_history_from_archive(archive_path)
             if archive_path is not None
@@ -191,6 +245,7 @@ class MachineWorkflow:
             state = await self.repository.get(session_id)
             assert state.machine_information is not None and state.scenario is not None
             working_scenario = state.scenario
+            authoritative_attack_graph = state.scenario.attack_graph
             source_skills = await self.skill_service.resolve(
                 session_id,
                 SkillPhase.SOURCE,
@@ -215,14 +270,16 @@ class MachineWorkflow:
             last_validation_error: Exception | None = None
             repair_history = list(existing_repair_history or [])
             best_validation_failures = 0 if failure_report is not None else None
-            if archive_path is None and generated is None:
-                generated = await self.generator.generate_source(
-                    state.machine_information, working_scenario, source_skills
-                )
             if archive_path is not None:
                 build_slots_remaining -= 1
             while archive_path is None and build_slots_remaining > 0:
                 for _ in range(self.source_generation_attempts):
+                    state.source_generation_attempts += 1
+                    await self.repository.save(state)
+                    if generated is None:
+                        generated = await self.generator.generate_source(
+                            state.machine_information, working_scenario, source_skills
+                        )
                     assert generated is not None
                     retry_base = generated
                     retry_scenario = working_scenario
@@ -257,34 +314,6 @@ class MachineWorkflow:
                                 "deleted_files": sorted(patch.delete_paths),
                             }
                         )
-                        revision = await self.generator.synchronize_scenario(
-                            state.machine_information,
-                            working_scenario,
-                            generated,
-                        )
-                        working_scenario = working_scenario.model_copy(
-                            update={
-                                "scenario_description": revision.scenario_description,
-                                "definition": revision.definition,
-                                "attack_graph": revision.attack_graph,
-                            }
-                        )
-                        repair_history[-1]["scenario_sync_summary"] = revision.summary
-                        scenario_review = await self.generator.review_scenario(
-                            state.machine_information,
-                            working_scenario,
-                        )
-                        if not scenario_review.approved:
-                            review_report = _scenario_review_report(scenario_review)
-                            repair_history[-1]["scenario_sync_status"] = "rejected"
-                            last_validation_error = InvalidSourceError(
-                                "synchronized scenario semantic review failed: "
-                                + scenario_review.summary,
-                                review_report,
-                            )
-                            failure_report = review_report
-                            continue
-                        repair_history[-1]["scenario_sync_status"] = "approved"
                     try:
                         archive_path, checksum = self.source_archive.create(
                             session_id,
@@ -314,13 +343,97 @@ class MachineWorkflow:
                         generated,
                         review_skills,
                     )
+                    review_report = _source_review_report(review)
+                    checksum = self.source_archive.record_semantic_review(
+                        archive_path,
+                        review_report,
+                        approved=review.approved,
+                    )
                     if review.approved:
+                        if patch_applied:
+                            scenario_feedback: dict | None = None
+                            scenario_reviews: list[dict] = []
+                            state.scenario_sync_attempt_limit = (
+                                state.scenario_sync_attempts
+                                + self.scenario_sync_attempts
+                            )
+                            await self.repository.save(state)
+                            for _ in range(self.scenario_sync_attempts):
+                                state.scenario_sync_attempts += 1
+                                await self.repository.save(state)
+                                if scenario_feedback is None:
+                                    revision = await self.generator.synchronize_scenario(
+                                        state.machine_information,
+                                        working_scenario,
+                                        generated,
+                                    )
+                                else:
+                                    revision = await self.generator.synchronize_scenario(
+                                        state.machine_information,
+                                        working_scenario,
+                                        generated,
+                                        scenario_feedback,
+                                    )
+                                working_scenario = working_scenario.model_copy(
+                                    update={
+                                        "scenario_description": revision.scenario_description,
+                                        "definition": revision.definition,
+                                        "attack_graph": authoritative_attack_graph,
+                                    }
+                                )
+                                scenario_review = await self.generator.review_scenario(
+                                    state.machine_information,
+                                    working_scenario,
+                                    review_context="source_sync",
+                                )
+                                scenario_feedback = _scenario_review_report(scenario_review)
+                                scenario_reviews.append(scenario_feedback)
+                                if scenario_review.approved:
+                                    break
+                            repair_history[-1]["scenario_sync_summary"] = revision.summary
+                            repair_history[-1]["scenario_sync_reviews"] = scenario_reviews
+                            if not scenario_review.approved:
+                                repair_history[-1]["scenario_sync_status"] = "rejected"
+                                last_validation_error = InvalidSourceError(
+                                    "synchronized scenario semantic review failed: "
+                                    + scenario_review.summary,
+                                    scenario_feedback,
+                                )
+                                if any(
+                                    finding.severity == "error"
+                                    and finding.repair_target == "source_code"
+                                    for finding in scenario_review.findings
+                                ):
+                                    repair_history[-1]["scenario_sync_routed_to"] = (
+                                        "source_repair"
+                                    )
+                                    failure_report = scenario_feedback
+                                    archive_path = None
+                                    checksum = None
+                                    working_scenario = retry_scenario
+                                    continue
+                                raise RuntimeError(
+                                    "could not synchronize an approved scenario after source "
+                                    "repair: " + scenario_review.summary
+                                )
+                            repair_history[-1]["scenario_sync_status"] = "approved"
+                            archive_path, checksum = self.source_archive.create(
+                                session_id,
+                                working_scenario,
+                                generated,
+                                repair_history,
+                                skill_snapshot,
+                            )
+                            checksum = self.source_archive.record_semantic_review(
+                                archive_path,
+                                review_report,
+                                approved=True,
+                            )
                         logger.info(
                             "source semantic review approved",
                             extra={"session_id": session_id, "summary": review.summary},
                         )
                         break
-                    review_report = _source_review_report(review)
                     last_validation_error = InvalidSourceError(
                         f"source semantic review failed: {review.summary}", review_report
                     )
@@ -439,47 +552,6 @@ class MachineWorkflow:
         archive_path = Path(state.source_path).parent / "source.zip"
         return archive_path if archive_path.is_file() else None
 
-    async def synchronize(
-        self,
-        state: SessionState,
-        *,
-        auto_repair: bool = False,
-        force: bool = False,
-    ) -> SessionState:
-        if (
-            not state.build_id
-            or state.session_id in self.tasks
-            or (
-                not force
-                and state.status == SessionStatus.FAILED
-                and (
-                    state.build_status not in {"failed", "cancelled"}
-                    or state.build_repair_attempts >= state.build_repair_attempt_limit
-                )
-            )
-        ):
-            return state
-        build = await self.build_client.get(state.build_id)
-        state.build_status = build["status"]
-        state.build_progress = build.get("progress", state.build_progress)
-        if build["status"] == "completed":
-            self._capture_machine_access(state, build)
-            artifacts = await self.build_client.artifacts(state.build_id)
-            if not artifacts:
-                raise RuntimeError("build completed without an artifact")
-            state.artifact = self._distribution_artifact(artifacts)
-            state.status = SessionStatus.COMPLETED
-        elif build["status"] in {"failed", "cancelled"}:
-            state.error_message = build.get("error_message") or f"build {build['status']}"
-            if auto_repair and (state.build_repair_attempts < state.build_repair_attempt_limit):
-                return await self._start_build_repair(state)
-            state.status = SessionStatus.FAILED
-        elif build["status"] in {"building", "uploading"}:
-            state.status = SessionStatus.BUILDING
-        else:
-            state.status = SessionStatus.BUILD_QUEUED
-        return await self.repository.save(state)
-
     @staticmethod
     def _distribution_artifact(artifacts: list[Artifact]) -> Artifact:
         artifact = next(
@@ -512,6 +584,10 @@ def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:
             packer_log = trigger.get("packer_log_tail")
             if isinstance(packer_log, str):
                 compact_trigger["packer_log_tail"] = _bounded_context(packer_log, 4_000)
+            for key in ("failed_commands", "failure_log_context"):
+                value = trigger.get(key)
+                if isinstance(value, list):
+                    compact_trigger[key] = value[:10]
             checks = trigger.get("checks")
             if isinstance(checks, list):
                 compact_trigger["failed_checks"] = [
@@ -575,9 +651,13 @@ def _source_review_report(review: SourceReview) -> dict:
     warnings = sum(check["status"] == "warn" for check in checks)
     return {
         "kind": "source_semantic_review",
-        "status": "fail",
+        "status": "pass" if review.approved else "fail",
         "error_message": review.summary,
-        "summary": {"passed": 0, "failed": failed, "warnings": warnings},
+        "summary": {
+            "passed": 1 if review.approved else 0,
+            "failed": failed,
+            "warnings": warnings,
+        },
         "checks": checks,
     }
 
@@ -595,9 +675,13 @@ def _scenario_review_report(review: ScenarioReview) -> dict:
     warnings = sum(check["status"] == "warn" for check in checks)
     return {
         "kind": "scenario_sync_review",
-        "status": "fail",
+        "status": "pass" if review.approved else "fail",
         "error_message": review.summary,
-        "summary": {"passed": 0, "failed": failed, "warnings": warnings},
+        "summary": {
+            "passed": 1 if review.approved else 0,
+            "failed": failed,
+            "warnings": warnings,
+        },
         "checks": checks,
     }
 
@@ -607,3 +691,34 @@ def _bounded_context(value: str, limit: int) -> str:
         return value
     prefix = min(500, limit // 4)
     return value[:prefix] + "\n...[truncated]...\n" + value[-(limit - prefix) :]
+
+
+def _extract_build_failures(log: str) -> tuple[list[str], list[str]]:
+    """Extract traced shell commands and bounded context near concrete build errors."""
+
+    lines = [line.rstrip() for line in log.splitlines() if line.strip()]
+    error_pattern = re.compile(
+        r"(?i)(?:\berror\b|\bfailed\b|failure|command not found|permission denied|"
+        r"no such file|non[- ]zero|exit status|returned?\s+\d+)"
+    )
+    trace_pattern = re.compile(r"^\s*\+\s+(.+\S)\s*$")
+    commands: list[str] = []
+    contexts: list[str] = []
+    for index, line in enumerate(lines):
+        if not error_pattern.search(line):
+            continue
+        start = max(0, index - 3)
+        end = min(len(lines), index + 2)
+        context = "\n".join(lines[start:end])
+        if context not in contexts:
+            contexts.append(context)
+        for candidate in reversed(lines[max(0, index - 12) : index + 1]):
+            match = trace_pattern.match(candidate)
+            if match:
+                command = match.group(1)
+                if command not in commands:
+                    commands.append(command)
+                break
+        if len(contexts) >= 10:
+            break
+    return commands[:10], contexts[:10]

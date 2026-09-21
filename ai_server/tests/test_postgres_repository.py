@@ -105,6 +105,10 @@ async def test_postgres_migration_and_session_round_trip() -> None:
 
         persisted.source_path = "/tmp/generated/source"
         persisted.source_checksum = "a" * 64
+        persisted.scenario_generation_attempts = 2
+        persisted.scenario_generation_attempt_limit = 5
+        persisted.source_generation_attempts = 4
+        persisted.source_generation_attempt_limit = 12
         persisted.build_id = "a49f148e-1f8c-4703-97bb-d0aa180682ae"
         persisted.build_status = "completed"
         persisted.build_progress = 100
@@ -123,6 +127,10 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         await repository.save(persisted)
         completed = await repository.get(state.session_id)
         assert completed.source_checksum == "a" * 64
+        assert completed.scenario_generation_attempts == 2
+        assert completed.scenario_generation_attempt_limit == 5
+        assert completed.source_generation_attempts == 4
+        assert completed.source_generation_attempt_limit == 12
         assert completed.build_repair_attempts == 2
         assert completed.build_repair_attempt_limit == 5
         assert completed.machine_access == MachineAccess(

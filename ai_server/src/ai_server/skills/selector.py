@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from ..models import MachineInformation, ScenarioDraft
 from .models import AppliedSkill, SkillPhase, StoredSkill
 
@@ -54,9 +52,7 @@ class SkillSelector:
     def cve_ids(machine: MachineInformation, scenario: ScenarioDraft | None = None) -> list[str]:
         if scenario is not None:
             return sorted({step.cve_id for step in scenario.attack_graph.steps if step.cve_id})
-        return sorted(
-            set(machine.cve_ids or re.findall(r"\bCVE-\d{4}-\d{4,7}\b", machine.theme.upper()))
-        )
+        return sorted(set(machine.cve_ids))
 
     @staticmethod
     def _match(
@@ -92,19 +88,7 @@ class SkillSelector:
                 selectors.requires_system_flag is not None,
             )
         ):
-            # A minimal SKILL.md is not a global instruction. Match its name, not description.
-            normalized = re.sub(r"[-_\s]+", " ", theme)
-            terms = [candidate.name.replace("-", " ")]
-            terms += {
-                "sql-injection": ["sqli", "sqlインジェクション"],
-                "ssti": ["テンプレートインジェクション"],
-            }.get(candidate.name, [])
-            if not any(
-                re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", normalized)
-                for term in terms
-            ):
-                return None
-            reasons.append("skill_name")
+            return None
         if selectors.operating_systems:
             matched = next(
                 (term for term in selectors.operating_systems if term in operating_system), None
