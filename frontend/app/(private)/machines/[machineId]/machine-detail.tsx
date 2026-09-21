@@ -43,14 +43,14 @@ function FlagPanel({ flag }: FlagPanelProps) {
   }
 
   return (
-    <section className="rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm max-sm:p-5">
+    <section className="surface-panel rounded-2xl p-6 max-sm:p-5">
       <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
         {flag.label}
       </h2>
       <div className="mt-5 flex gap-3 max-sm:flex-col">
         <input
           autoComplete="off"
-          className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+          className="field-control w-full rounded-lg px-[14px] py-[13px]"
           disabled={isChecking}
           maxLength={200}
           onChange={(event) => {
@@ -62,7 +62,7 @@ function FlagPanel({ flag }: FlagPanelProps) {
           value={answer}
         />
         <button
-          className="inline-flex min-h-[46px] shrink-0 items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold shadow-sm transition hover:-translate-y-px"
+          className="secondary-action inline-flex min-h-[46px] shrink-0 items-center justify-center rounded-lg px-[18px] text-[0.9rem] font-bold"
           disabled={!answer.trim() || isChecking}
           onClick={() => void handleSubmit()}
           type="button"
@@ -72,10 +72,10 @@ function FlagPanel({ flag }: FlagPanelProps) {
       </div>
       <div aria-live="polite">
         {result === "correct" ? (
-          <p className="mt-3 text-[0.86rem] font-bold text-[#28633a]">正解です。</p>
+          <p className="mt-3 text-[0.86rem] font-bold text-[var(--success)]">正解です。</p>
         ) : null}
         {result === "incorrect" ? (
-          <p className="mt-3 text-[0.86rem] font-bold text-[#9a392d]">一致しません。</p>
+          <p className="mt-3 text-[0.86rem] font-bold text-[var(--danger)]">一致しません。</p>
         ) : null}
       </div>
     </section>
@@ -147,7 +147,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   return (
     <section className="grid gap-6">
       <Link
-        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[#61605b] transition hover:text-[#20201e]"
+        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[var(--ink-soft)] transition hover:text-[var(--signal)]"
         href="/machines"
       >
         <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
@@ -155,20 +155,21 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
       </Link>
       <header className="flex items-start justify-between gap-6 max-md:flex-col">
         <div className="flex items-start gap-3">
-          <span className="mt-0.5 grid size-10 place-items-center rounded-xl border border-[#e5e5e2] bg-[#f8f8f7] text-[#20201e]">
+          <span className="mt-0.5 grid size-10 place-items-center rounded-lg border border-[var(--line)] bg-[var(--surface)] text-[var(--signal)]">
             <HardDrive aria-hidden="true" size={20} strokeWidth={2} />
           </span>
           <div>
-            <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
+            <p className="mono-label mb-2 text-[var(--ink-soft)]">Machine node / {machine.id}</p>
+            <h1 className="display-heading text-[clamp(1.75rem,3vw,2.75rem)] leading-[1.05]">
               {machine.name}
             </h1>
-            <p className="mt-2 leading-[1.65] text-[#61605b]">{machine.summary}</p>
+            <p className="mt-2 leading-[1.65] text-[var(--ink-soft)]">{machine.summary}</p>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 max-md:self-end max-sm:w-full max-sm:self-auto">
           {canDownload ? (
             <a
-              className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] max-sm:flex-1"
+              className="primary-action inline-flex min-h-[46px] items-center justify-center gap-2 rounded-lg px-[18px] text-[0.9rem] font-bold max-sm:flex-1"
               href={`/api/machines/${encodeURIComponent(machine.id)}/download`}
             >
               <Download aria-hidden="true" size={18} strokeWidth={2} />
@@ -176,7 +177,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
             </a>
           ) : (
             <button
-              className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm max-sm:flex-1"
+              className="primary-action inline-flex min-h-[46px] items-center justify-center gap-2 rounded-lg px-[18px] text-[0.9rem] font-bold max-sm:flex-1"
               disabled
               type="button"
             >
@@ -185,7 +186,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
             </button>
           )}
           <button
-            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px max-sm:flex-1"
+            className="secondary-action inline-flex min-h-[46px] items-center justify-center gap-2 rounded-lg px-[18px] text-[0.9rem] font-bold max-sm:flex-1"
             type="button"
           >
             <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
@@ -204,19 +205,19 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         />
       ) : null}
 
-      <section className="rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm max-sm:p-5">
+      <section className="surface-panel rounded-2xl p-6 max-sm:p-5">
         <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
           マシンの説明
         </h2>
-        <p className="mt-3 leading-[1.75] text-[#61605b]">{description}</p>
-        <div className="mt-5 flex flex-wrap gap-2 text-[0.82rem] text-[#61605b]">
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold text-[#20201e]">
+        <p className="mt-3 leading-[1.75] text-[var(--ink-soft)]">{description}</p>
+        <div className="mt-5 flex flex-wrap gap-2 text-[0.82rem] text-[var(--ink-soft)]">
+          <span className="rounded-md border border-[var(--signal)] bg-[var(--signal-soft)] px-2.5 py-1 font-bold text-[var(--ink)]">
             {machine.visibility}
           </span>
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold">
+          <span className="rounded-md border border-[var(--line)] bg-[var(--surface)] px-2.5 py-1 font-bold">
             {machine.difficulty}
           </span>
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold">
+          <span className="rounded-md border border-[var(--line)] bg-[var(--surface)] px-2.5 py-1 font-bold">
             {machine.theme}
           </span>
           <span className="px-2.5 py-1">作成者 {machine.author}</span>
@@ -256,7 +257,7 @@ function BuildStatusPanel({
 
   if (state.status === "ready") {
     return (
-      <section className="flex items-center gap-3 rounded-2xl border border-[#bed8c5] bg-[#f4fbf6] p-5 text-[#28633a]">
+      <section className="flex items-center gap-3 rounded-xl border border-[var(--success)]/35 bg-[var(--success-soft)] p-5 text-[var(--success)]">
         <CheckCircle2 aria-hidden="true" size={20} />
         <p className="text-[0.9rem] font-extrabold">マシンのビルドが完了しました。</p>
       </section>
@@ -265,8 +266,8 @@ function BuildStatusPanel({
 
   if (state.status === "failed") {
     return (
-      <section className="rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-5">
-        <div className="flex items-start gap-3 text-[#9a392d]">
+      <section className="rounded-xl border border-[var(--danger)]/35 bg-[var(--danger-soft)] p-5">
+        <div className="flex items-start gap-3 text-[var(--danger)]">
           <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
           <div>
             <h2 className="font-extrabold">マシンのビルドに失敗しました</h2>
@@ -274,7 +275,7 @@ function BuildStatusPanel({
         </div>
         {canRetry ? (
           <button
-            className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#20201e] px-4 text-[0.86rem] font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-55"
+            className="primary-action mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-[0.86rem] font-bold disabled:cursor-not-allowed disabled:opacity-55"
             disabled={isRetrying}
             onClick={onRetry}
             type="button"
@@ -287,23 +288,27 @@ function BuildStatusPanel({
             {isRetrying ? "再ビルドを開始中…" : "もう一度ビルドする"}
           </button>
         ) : null}
-        {error ? <p className="mt-3 text-[0.84rem] font-bold text-[#9a392d]">{error}</p> : null}
+        {error ? (
+          <p className="mt-3 text-[0.84rem] font-bold text-[var(--danger)]">{error}</p>
+        ) : null}
       </section>
     )
   }
 
   return (
-    <section className="rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-5">
+    <section className="rounded-xl border border-[var(--line)] bg-[var(--surface-muted)] p-5">
       <div className="flex items-center justify-between gap-4">
         <span className="flex items-center gap-2 text-[0.9rem] font-extrabold">
           <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
           {message}
         </span>
-        <span className="text-[0.8rem] font-bold text-[#61605b]">{state.progress}%</span>
+        <span className="font-mono text-[0.8rem] font-bold text-[var(--ink-soft)]">
+          {state.progress}%
+        </span>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#dfdfdb]">
+      <div className="mt-3 h-2 overflow-hidden bg-[var(--surface-strong)]">
         <span
-          className="block h-full rounded-full bg-[#20201e] transition-[width]"
+          className="block h-full bg-[var(--signal)] transition-[width]"
           style={{ width: `${state.progress}%` }}
         />
       </div>
@@ -313,13 +318,15 @@ function BuildStatusPanel({
 
 export function MissingMachine() {
   return (
-    <section className="grid gap-3 rounded-3xl border border-[#e5e5e2] bg-white p-8 shadow-sm">
-      <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
+    <section className="surface-panel grid gap-3 rounded-2xl p-8">
+      <h1 className="display-heading text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05]">
         このマシンは見つかりませんでした。
       </h1>
-      <p className="leading-[1.65] text-[#61605b]">一覧から別のマシンを選択してください。</p>
+      <p className="leading-[1.65] text-[var(--ink-soft)]">
+        一覧から別のマシンを選択してください。
+      </p>
       <Link
-        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[#20201e] underline underline-offset-4"
+        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[var(--signal)] underline underline-offset-4"
         href="/machines"
       >
         <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />

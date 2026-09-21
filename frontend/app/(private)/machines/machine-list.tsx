@@ -17,13 +17,13 @@ import {
 } from "@/lib/machines/list-query"
 
 const paginationClass =
-  "grid size-11 shrink-0 place-items-center rounded-lg border border-[#d6d6d2] text-sm font-bold transition-colors sm:size-12 sm:text-base"
+  "grid size-11 shrink-0 place-items-center rounded-lg border border-[var(--line)] text-sm font-bold transition-colors sm:size-12 sm:text-base"
 
 const difficultyLabels = { easy: "Easy", medium: "Medium", hard: "High" }
 const fieldClass =
-  "block h-11 w-full rounded-xl border border-[#d6d6d2] bg-white px-3 pr-12 text-sm font-normal outline-none transition-[border-color,box-shadow] placeholder:text-[#969691] focus:border-[#20201e] focus:ring-2 focus:ring-[#20201e]/10"
+  "field-control block h-11 w-full rounded-lg px-3 pr-12 text-sm font-normal placeholder:text-[var(--ink-faint)]"
 const linkClass =
-  "inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#d6d6d2] px-4 text-sm font-bold hover:bg-[#f8f8f7]"
+  "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold"
 
 function createdDate(value: string) {
   const date = new Date(value)
@@ -48,23 +48,28 @@ function machinePaginationPages(page: number, pageCount: number): (number | stri
 
 export function MachineList({ query, children }: { query: MachineListQuery; children: ReactNode }) {
   return (
-    <section className="grid gap-7">
+    <section className="grid gap-8">
       <div className="flex flex-wrap items-start justify-between gap-5">
-        <div className="flex items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#f8f8f7]">
-            <LayoutDashboard aria-hidden="true" size={22} />
-          </span>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">マシン一覧</h1>
-            <p className="mt-2 text-sm leading-relaxed text-[#61605b]">
-              公開済みの学習環境から、次の挑戦を見つけましょう。
-            </p>
+        <div>
+          <p className="mono-label mb-4 flex items-center gap-2 text-[var(--ink-soft)]">
+            <span className="size-1.5 bg-[var(--accent)]" />
+            Machine index
+          </p>
+          <div className="flex items-start gap-3">
+            <span className="mt-1 grid size-9 place-items-center rounded-lg border border-[var(--line)] bg-[var(--surface)] text-[var(--signal)]">
+              <LayoutDashboard aria-hidden="true" size={18} strokeWidth={1.8} />
+            </span>
+            <div>
+              <h1 className="display-heading text-[clamp(2rem,3.6vw,3.35rem)] leading-[1.05]">
+                マシン一覧
+              </h1>
+              <p className="mt-3 leading-[1.75] text-[var(--ink-soft)]">
+                公開済みの学習環境から、次の挑戦を見つけましょう。
+              </p>
+            </div>
           </div>
         </div>
-        <Link
-          className={`${linkClass} bg-[#20201e] text-white hover:bg-[#393934]`}
-          href="/machines/chat"
-        >
+        <Link className={`${linkClass} primary-action`} href="/machines/chat">
           <CirclePlus aria-hidden="true" size={18} />
           マシン作成
         </Link>
@@ -73,9 +78,13 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
       <Form
         action="/machines"
         key={`filters:${machineListHref(query)}`}
-        className="grid gap-4 rounded-2xl border border-[#e5e5e2] bg-[#fafaf9] p-4 sm:p-5"
+        className="surface-panel grid gap-4 rounded-2xl p-4 sm:p-5"
         aria-label="マシンの検索条件"
       >
+        <div className="flex items-center gap-2 border-b border-[var(--line)] pb-3">
+          <span className="size-1.5 bg-[var(--signal)]" />
+          <span className="mono-label text-[var(--ink-soft)]">Search protocol</span>
+        </div>
         <label className="flex min-w-0 flex-col gap-2 text-sm leading-5 font-bold">
           キーワード
           <input
@@ -90,14 +99,14 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
         <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr]">
           <fieldset className="min-w-0 sm:col-span-2 xl:col-span-1">
             <legend className="mb-2 p-0 text-sm leading-5 font-bold">難易度</legend>
-            <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[#d6d6d2] bg-white px-3">
+            <div className="flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3">
               {(["easy", "medium", "hard"] as const).map((level) => (
                 <label
                   key={level}
                   className="flex min-h-[42px] shrink-0 items-center gap-2 text-sm leading-5"
                 >
                   <input
-                    className="size-4 accent-[#20201e]"
+                    className="size-4 accent-[var(--signal)]"
                     type="checkbox"
                     name="level"
                     value={level}
@@ -151,7 +160,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
         <div className="flex flex-wrap items-center justify-between gap-4 pt-0">
           <label className="flex min-h-11 shrink-0 items-center gap-2 text-sm leading-5">
             <input
-              className="size-4 accent-[#20201e]"
+              className="size-4 accent-[var(--signal)]"
               type="checkbox"
               name="owned"
               value="1"
@@ -160,11 +169,14 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
             自分が作成したマシンのみ
           </label>
           <div className="flex items-center gap-3">
-            <Link className="p-2 text-sm underline underline-offset-4" href="/machines">
+            <Link
+              className="p-2 text-sm text-[var(--ink-soft)] underline underline-offset-4 hover:text-[var(--ink)]"
+              href="/machines"
+            >
               条件をリセット
             </Link>
             <button
-              className="min-h-11 rounded-xl bg-[#20201e] px-6 text-sm font-bold text-white transition-colors hover:bg-[#393934]"
+              className="primary-action min-h-11 rounded-lg px-6 text-sm font-bold"
               type="submit"
             >
               検索する
@@ -189,22 +201,25 @@ export function MachineListResults({
   return (
     <section aria-label="検索結果" className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-bold">
-          利用できるマシン{" "}
-          <span className="ml-2 text-sm font-normal text-[#61605b]">{total} 件</span>
-        </h2>
+        <div>
+          <p className="mono-label mb-1.5 text-[var(--signal)]">Available nodes</p>
+          <h2 className="text-lg font-bold">
+            利用できるマシン{" "}
+            <span className="ml-2 text-sm font-normal text-[var(--ink-soft)]">{total} 件</span>
+          </h2>
+        </div>
         {total > 0 && (
-          <p className="text-sm text-[#61605b]">
+          <p className="font-mono text-xs text-[var(--ink-soft)]">
             {(page - 1) * MACHINE_PAGE_SIZE + 1}–{Math.min(page * MACHINE_PAGE_SIZE, total)}{" "}
             件を表示
           </p>
         )}
       </div>
       {machines.length ? (
-        <div className="overflow-x-auto rounded-2xl border border-[#e5e5e2] bg-white">
+        <div className="surface-panel overflow-x-auto rounded-2xl">
           <table className="w-full min-w-[860px] table-fixed text-left text-sm">
             <caption className="sr-only">利用できるマシン一覧</caption>
-            <thead className="border-b border-[#d6d6d2] bg-[#f8f8f7] text-xs text-[#61605b]">
+            <thead className="border-b border-[var(--line)] bg-[var(--surface-muted)] text-xs text-[var(--ink-soft)]">
               <tr>
                 <th scope="col" className="w-[30%] px-5 py-4">
                   マシン名
@@ -226,9 +241,12 @@ export function MachineListResults({
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#e5e5e2]">
+            <tbody className="divide-y divide-[var(--line)]">
               {machines.map((machine) => (
-                <tr key={machine.id} className="align-top transition-colors hover:bg-[#fafaf9]">
+                <tr
+                  key={machine.id}
+                  className="align-top transition-colors hover:bg-[var(--signal-soft)]/30"
+                >
                   <th scope="row" className="px-5 py-5 font-normal">
                     <Link
                       className="inline-flex max-w-full items-start gap-2 font-bold hover:underline"
@@ -238,16 +256,18 @@ export function MachineListResults({
                       <span className="break-words [overflow-wrap:anywhere]">{machine.name}</span>
                       <ArrowUpRight className="mt-0.5 shrink-0" aria-hidden="true" size={16} />
                     </Link>
-                    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[#61605b] [overflow-wrap:anywhere]">
+                    <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-[var(--ink-soft)] [overflow-wrap:anywhere]">
                       {machine.description || machine.summary || "概要はまだ登録されていません。"}
                     </p>
                   </th>
                   <td className="px-3 py-5">
-                    {machine.tags.length === 0 && <span className="text-xs text-[#61605b]">—</span>}
+                    {machine.tags.length === 0 && (
+                      <span className="text-xs text-[var(--ink-soft)]">—</span>
+                    )}
                     <ul className="flex flex-wrap gap-1.5" aria-label="タグ">
                       {[...new Set(machine.tags)].map((tag) => (
                         <li
-                          className="max-w-full rounded-md bg-[#f1f1ee] px-2 py-1 text-xs text-[#61605b] [overflow-wrap:anywhere]"
+                          className="max-w-full rounded-md border border-[var(--line)] bg-[var(--surface-muted)] px-2 py-1 text-xs text-[var(--ink-soft)] [overflow-wrap:anywhere]"
                           key={tag}
                         >
                           {tag}
@@ -256,13 +276,13 @@ export function MachineListResults({
                     </ul>
                   </td>
                   <td className="px-3 py-5">
-                    <span className="inline-flex rounded-full bg-[#f1f1ee] px-2.5 py-1 text-xs font-bold">
+                    <span className="inline-flex rounded-md bg-[var(--surface-muted)] px-2.5 py-1 text-xs font-bold">
                       {difficultyLabels[machine.level]}
                     </span>
                   </td>
                   <td className="px-3 py-5">
                     <span
-                      className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ${machine.isSolved ? "bg-emerald-50 text-emerald-800" : "bg-[#f8f8f7] text-[#61605b]"}`}
+                      className={`inline-flex whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-bold ${machine.isSolved ? "bg-[var(--success-soft)] text-[var(--success)]" : "bg-[var(--surface-muted)] text-[var(--ink-soft)]"}`}
                     >
                       {machine.isSolved ? "回答済み" : "未回答"}
                     </span>
@@ -275,7 +295,7 @@ export function MachineListResults({
                     >
                       <span
                         aria-hidden="true"
-                        className="grid size-7 shrink-0 place-items-center rounded-full bg-[#20201e] text-xs text-white"
+                        className="grid size-7 shrink-0 place-items-center rounded-full border border-[var(--line-strong)] bg-[var(--surface-muted)] text-xs text-[var(--ink)]"
                       >
                         {machine.author.slice(0, 1)}
                       </span>
@@ -284,7 +304,7 @@ export function MachineListResults({
                       </span>
                     </Link>
                   </td>
-                  <td className="px-3 py-6 text-xs text-[#61605b]">
+                  <td className="px-3 py-6 font-mono text-xs text-[var(--ink-soft)]">
                     {createdDate(machine.created_at)}
                   </td>
                 </tr>
@@ -293,7 +313,7 @@ export function MachineListResults({
           </table>
         </div>
       ) : (
-        <p className="rounded-2xl bg-[#f8f8f7] px-6 py-12 text-center text-sm text-[#61605b]">
+        <p className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--surface-muted)] px-6 py-12 text-center text-sm text-[var(--ink-soft)]">
           マシンがありません。
         </p>
       )}
@@ -306,7 +326,7 @@ export function MachineListResults({
             <Link
               prefetch={false}
               aria-label="前のページ"
-              className={`${paginationClass} bg-white text-[#61605b] hover:border-[#20201e] hover:text-[#20201e]`}
+              className={`${paginationClass} bg-[var(--surface)] text-[var(--ink-soft)] hover:border-[var(--signal)] hover:text-[var(--signal)]`}
               href={machineListHref(query, page - 1)}
               rel="prev"
             >
@@ -317,7 +337,7 @@ export function MachineListResults({
               type="button"
               disabled
               aria-label="前のページ"
-              className={`${paginationClass} cursor-not-allowed bg-white text-[#61605b] opacity-40`}
+              className={`${paginationClass} cursor-not-allowed bg-[var(--surface)] text-[var(--ink-soft)] opacity-40`}
             >
               <ChevronLeft aria-hidden="true" size={22} strokeWidth={2.5} />
             </button>
@@ -326,7 +346,7 @@ export function MachineListResults({
             typeof item === "string" ? (
               <span
                 key={item}
-                className="grid h-11 w-5 shrink-0 place-items-center text-lg font-bold text-[#a3a3a3]"
+                className="grid h-11 w-5 shrink-0 place-items-center text-lg font-bold text-[var(--ink-faint)]"
                 aria-hidden="true"
               >
                 …
@@ -335,7 +355,7 @@ export function MachineListResults({
               <span
                 key={item}
                 aria-current="page"
-                className={`${paginationClass} border-[#20201e] bg-[#20201e] text-white`}
+                className={`${paginationClass} border-[var(--signal-solid)] bg-[var(--signal-solid)] text-[var(--inverse-ink)]`}
               >
                 {item}
               </span>
@@ -345,7 +365,7 @@ export function MachineListResults({
                 prefetch={false}
                 href={machineListHref(query, item)}
                 aria-label={`${item} ページ目`}
-                className={`${paginationClass} bg-white text-[#61605b] hover:border-[#20201e] hover:text-[#20201e]`}
+                className={`${paginationClass} bg-[var(--surface)] text-[var(--ink-soft)] hover:border-[var(--signal)] hover:text-[var(--signal)]`}
               >
                 {item}
               </Link>
@@ -355,7 +375,7 @@ export function MachineListResults({
             <Link
               prefetch={false}
               aria-label="次のページ"
-              className={`${paginationClass} bg-white text-[#61605b] hover:border-[#20201e] hover:text-[#20201e]`}
+              className={`${paginationClass} bg-[var(--surface)] text-[var(--ink-soft)] hover:border-[var(--signal)] hover:text-[var(--signal)]`}
               href={machineListHref(query, page + 1)}
               rel="next"
             >
@@ -366,7 +386,7 @@ export function MachineListResults({
               type="button"
               disabled
               aria-label="次のページ"
-              className={`${paginationClass} cursor-not-allowed bg-white text-[#61605b] opacity-40`}
+              className={`${paginationClass} cursor-not-allowed bg-[var(--surface)] text-[var(--ink-soft)] opacity-40`}
             >
               <ChevronRight aria-hidden="true" size={22} strokeWidth={2.5} />
             </button>
@@ -381,7 +401,7 @@ export function MachineListLoading() {
   return (
     <p
       role="status"
-      className="rounded-2xl bg-[#f8f8f7] px-6 py-12 text-center text-sm text-[#61605b]"
+      className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--surface-muted)] px-6 py-12 text-center text-sm text-[var(--ink-soft)]"
     >
       読み込んでいます
     </p>

@@ -14,6 +14,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useEffect, useState } from "react"
 import { logoutAction } from "@/app/actions/auth"
+import { ThemeToggle } from "@/components/theme-toggle"
 import type { ChatSessionSummary } from "@/stores/chat"
 
 type SiteSidebarProps = {
@@ -30,6 +31,17 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
   const [isLoadingChats, setIsLoadingChats] = useState(false)
   const pathname = usePathname()
   const userInitial = user.name.trim().charAt(0).toUpperCase() || "U"
+  const isCreateActive = pathname.startsWith("/machines/chat")
+  const isMachinesActive =
+    pathname === "/machines" || (pathname.startsWith("/machines/") && !isCreateActive)
+
+  function navItemClass(active: boolean) {
+    return `relative flex items-center gap-2.5 rounded-lg border px-3 py-3 text-[0.86rem] font-bold transition-colors ${
+      active
+        ? "border-[var(--line)] bg-[var(--surface)] text-[var(--ink)] before:absolute before:top-1/2 before:-left-[5px] before:size-2 before:-translate-y-1/2 before:bg-[var(--signal)]"
+        : "border-transparent text-[var(--ink-soft)] hover:border-[var(--line)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
+    }`
+  }
 
   useEffect(() => {
     if (pathname) setIsChatListOpen(false)
@@ -63,40 +75,43 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
   }, [isChatListOpen])
 
   return (
-    <aside className="fixed top-0 bottom-0 left-0 z-10 flex w-[218px] flex-col border border-[#3d3d38] bg-[#20201e] px-[14px] py-5 text-[#f8f7f2] max-lg:static max-lg:w-full">
+    <aside className="fixed top-0 bottom-0 left-0 z-10 flex w-[234px] flex-col border-r border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-muted)_92%,var(--surface))] px-4 py-5 text-[var(--ink)] max-lg:static max-lg:w-full max-lg:border-r-0 max-lg:border-b">
       <Link
         aria-label="マシン一覧へ"
-        className="inline-flex items-center gap-2.5 px-[7px] pt-1 pb-[18px] text-[1.2rem] font-black tracking-[-0.06em] text-white"
+        className="group mb-7 inline-flex items-start justify-between border-b border-[var(--line)] px-1 pt-1 pb-6"
         href="/machines"
       >
-        <span className="grid size-[34px] place-items-center rounded-xl bg-white text-[1rem] tracking-normal text-[#20201e]">
-          S
+        <span>
+          <span className="display-heading block text-[1.72rem] leading-none tracking-[-0.07em]">
+            SLSG
+          </span>
+          <span className="mono-label mt-2 block text-[0.58rem] text-[var(--ink-soft)]">
+            Security learning lab
+          </span>
         </span>
-        <span>SLSG</span>
+        <span aria-hidden="true" className="mt-1 grid grid-cols-2 gap-[3px]">
+          <span className="size-1.5 bg-[var(--signal)]" />
+          <span className="size-1.5 bg-[var(--accent)]" />
+          <span className="col-start-2 size-1.5 bg-[var(--signal)]" />
+        </span>
       </Link>
 
-      <nav aria-label="主要ナビゲーション" className="grid w-full gap-2">
-        <Link
-          className="flex items-center gap-2.5 rounded-[15px] border border-transparent p-3 text-[0.9rem] font-extrabold text-[#d1d0ca] transition-colors hover:border-[#55554e] hover:bg-[#2b2b28] hover:text-white"
-          href="/machines/chat"
-        >
+      <nav aria-label="主要ナビゲーション" className="grid w-full gap-1.5">
+        <Link className={navItemClass(isCreateActive)} href="/machines/chat">
           <CirclePlus aria-hidden="true" size={18} strokeWidth={2} />
           マシンを作る
         </Link>
-        <Link
-          className="flex items-center gap-2.5 rounded-[15px] border border-transparent p-3 text-[0.9rem] font-extrabold text-[#d1d0ca] transition-colors hover:border-[#55554e] hover:bg-[#2b2b28] hover:text-white"
-          href="/machines"
-        >
+        <Link className={navItemClass(isMachinesActive)} href="/machines">
           <LayoutList aria-hidden="true" size={18} strokeWidth={2} />
           マシン一覧
         </Link>
       </nav>
 
-      <div className="mt-2.5 grid w-full gap-2.5">
+      <div className="mt-3 grid w-full gap-2.5 border-t border-[var(--line)] pt-3">
         <button
           aria-controls="sidebar-chat-list"
           aria-expanded={isChatListOpen}
-          className="flex w-full items-center justify-between rounded-[13px] border border-transparent px-[11px] py-2.5 text-[0.82rem] font-extrabold text-[#d1d0ca] transition-colors hover:border-[#55554e] hover:bg-[#2b2b28] hover:text-white"
+          className="flex w-full items-center justify-between rounded-lg border border-transparent px-3 py-2.5 text-[0.8rem] font-bold text-[var(--ink-soft)] transition-colors hover:border-[var(--line)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
           onClick={() => setIsChatListOpen((open) => !open)}
           type="button"
         >
@@ -117,16 +132,18 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
             id="sidebar-chat-list"
           >
             {isLoadingChats ? (
-              <span className="px-[9px] py-2 text-[0.75rem] text-[#aaa9a3]">読み込み中…</span>
+              <span className="px-[9px] py-2 text-[0.75rem] text-[var(--ink-faint)]">
+                読み込み中…
+              </span>
             ) : null}
             {!isLoadingChats && chatSessions.length === 0 ? (
-              <span className="px-[9px] py-2 text-[0.75rem] text-[#aaa9a3]">
+              <span className="px-[9px] py-2 text-[0.75rem] text-[var(--ink-faint)]">
                 保存済みのチャットはありません
               </span>
             ) : null}
             {chatSessions.map((session) => (
               <Link
-                className="overflow-hidden rounded-[10px] px-[9px] py-2 text-[0.78rem] font-bold text-[#c5c4bd] text-ellipsis whitespace-nowrap hover:bg-[#3a3934] hover:text-white"
+                className="overflow-hidden rounded-md border-l-2 border-transparent px-[9px] py-2 text-[0.78rem] font-bold text-[var(--ink-soft)] text-ellipsis whitespace-nowrap hover:border-[var(--signal)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
                 href={`/machines/chat/${session.id}`}
                 key={session.id}
               >
@@ -137,13 +154,18 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
         ) : null}
       </div>
 
-      <div className="relative mt-auto flex w-full items-center gap-1 border-t border-[#44443f] px-[5px] pt-3 pb-0.5">
+      <div className="mt-auto flex items-center justify-between border-t border-[var(--line)] px-1 pt-4">
+        <span className="mono-label text-[0.58rem] text-[var(--ink-faint)]">Interface</span>
+        <ThemeToggle showLabel />
+      </div>
+
+      <div className="relative mt-3 flex w-full items-center gap-1 border-t border-[var(--line)] px-1 pt-4 pb-0.5">
         <Link
           aria-label="プロフィールを開く"
-          className="inline-flex min-w-0 flex-1 items-center gap-[9px] text-[0.86rem] font-extrabold text-[#f8f7f2]"
+          className="inline-flex min-w-0 flex-1 items-center gap-[9px] text-[0.84rem] font-bold text-[var(--ink)]"
           href="/profile"
         >
-          <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-[#50504b] bg-[#20201e] text-sm text-white">
+          <span className="relative grid size-8 shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--line-strong)] bg-[var(--inverse-surface)] text-sm text-[var(--inverse-ink)]">
             {user.avatarUrl ? (
               <Image
                 alt={`${user.name}のプロフィール画像`}
@@ -165,7 +187,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
           aria-controls="sidebar-account-menu"
           aria-expanded={isAccountMenuOpen}
           aria-label="アカウント設定を開く"
-          className="grid size-8 shrink-0 place-items-center rounded-lg border border-transparent text-[#c5c4bd] transition-colors hover:border-[#55554e] hover:bg-[#2b2b28] hover:text-white"
+          className="grid size-8 shrink-0 place-items-center rounded-lg border border-transparent text-[var(--ink-soft)] transition-colors hover:border-[var(--line)] hover:bg-[var(--surface)] hover:text-[var(--ink)]"
           onClick={() => setIsAccountMenuOpen((open) => !open)}
           type="button"
         >
@@ -173,13 +195,13 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
         </button>
         {isAccountMenuOpen ? (
           <div
-            className="absolute right-[5px] bottom-[calc(100%+8px)] left-[5px] rounded-xl border border-[#55554e] bg-[#292926] p-1 shadow-lg"
+            className="surface-panel absolute right-[5px] bottom-[calc(100%+8px)] left-[5px] rounded-xl p-1"
             id="sidebar-account-menu"
             role="menu"
           >
             <form action={logoutAction}>
               <button
-                className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-[0.82rem] font-extrabold text-[#f4f3ee] transition-colors hover:bg-[#3a3934]"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-[0.82rem] font-bold text-[var(--ink)] transition-colors hover:bg-[var(--surface-muted)]"
                 role="menuitem"
                 type="submit"
               >

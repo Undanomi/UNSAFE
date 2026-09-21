@@ -3,7 +3,7 @@ export function PageLoading() {
     <section
       aria-busy="true"
       aria-live="polite"
-      className="grid min-h-48 place-items-center rounded-3xl border border-[#e5e5e2] bg-white p-8 text-[#61605b] shadow-sm"
+      className="surface-panel mono-label grid min-h-48 place-items-center rounded-2xl p-8 text-[var(--ink-soft)]"
       role="status"
     >
       読み込んでいます…

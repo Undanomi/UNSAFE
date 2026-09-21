@@ -22,10 +22,10 @@ export async function AppShell({ children, contentClassName = "" }: AppShellProp
   }
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="app-canvas">
       <SiteSidebar user={sidebarUser} />
       <main
-        className={`mx-auto w-[min(1180px,calc(100%-368px))] py-12 pb-[72px] lg:mr-12 max-lg:w-full max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
+        className={`mx-auto w-[min(1220px,calc(100%-360px))] py-11 pb-[72px] lg:mr-12 max-lg:w-full max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
       >
         {children}
       </main>

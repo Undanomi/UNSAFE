@@ -1,6 +1,7 @@
 import { ArrowLeft, ShieldCheck } from "lucide-react"
 import Link from "next/link"
 import type { ReactNode } from "react"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 type PrivacySection = {
   title: string
@@ -270,37 +271,39 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </p>
       </>
     ),
-
   },
 ]
 
 export function PrivacyPolicy() {
   return (
-    <main className="min-h-screen bg-[#151513] px-5 py-8 text-[#e7e5df] sm:px-8 sm:py-12">
+    <main className="app-canvas min-h-screen px-5 py-8 text-[var(--ink)] sm:px-8 sm:py-12">
       <div className="mx-auto max-w-3xl">
-        <Link
-          className="inline-flex items-center gap-2 text-[0.86rem] font-bold text-[#bdbbb3] transition hover:text-white"
-          href="/login"
-        >
-          <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          ログインへ戻る
-        </Link>
+        <div className="flex items-center justify-between gap-4">
+          <Link
+            className="secondary-action inline-flex items-center gap-2 px-3 py-2 text-[0.82rem]"
+            href="/login"
+          >
+            <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
+            ログインへ戻る
+          </Link>
+          <ThemeToggle showLabel />
+        </div>
 
-        <article className="mt-14">
-          <div className="flex items-start gap-4 border-b border-[#3a3934] pb-9">
-            <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-[#4b4a43] bg-[#20201e] text-[#e7e5df]">
+        <article className="surface-panel signal-corner mt-10 rounded-2xl p-6 sm:p-10">
+          <div className="flex items-start gap-4 border-b border-[var(--line)] pb-9">
+            <span className="grid size-12 shrink-0 place-items-center rounded-xl border border-[var(--line-strong)] bg-[var(--surface-muted)] text-[var(--signal)]">
               <ShieldCheck aria-hidden="true" size={23} strokeWidth={1.8} />
             </span>
             <div>
-              <p className="text-[0.78rem] font-bold tracking-[0.08em] text-[#aaa89f]">SLSG</p>
-              <h1 className="mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02] font-semibold tracking-[-0.05em]">
+              <p className="mono-label text-[var(--signal)]">SLSG / Legal archive</p>
+              <h1 className="display-heading mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02]">
                 プライバシーポリシー
               </h1>
-              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月10日</p>
+              <p className="mt-4 text-[0.9rem] text-[var(--ink-soft)]">最終更新日：2026年9月10日</p>
             </div>
           </div>
 
-          <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[#d3d1ca]">
+          <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[var(--ink-soft)]">
             <p>
               Security Learning Synario
               Generator（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
@@ -308,7 +311,7 @@ export function PrivacyPolicy() {
 
             {PRIVACY_SECTIONS.map((section) => (
               <section key={section.title}>
-                <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
+                <h2 className="display-heading text-[1.3rem] leading-7 text-[var(--ink)]">
                   {section.title}
                 </h2>
                 <div className="mt-3 space-y-5 [&_a]:underline [&_a]:underline-offset-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
@@ -318,11 +321,10 @@ export function PrivacyPolicy() {
             ))}
 
             <section>
-              <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
+              <h2 className="display-heading text-[1.3rem] leading-7 text-[var(--ink)]">
                 変更履歴
               </h2>
               <p className="mt-3">2026年9月5日：［変更内容］</p>
-
             </section>
           </div>
         </article>
