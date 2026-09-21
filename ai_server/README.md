@@ -112,6 +112,10 @@ docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build
 
 build_server を含むバックエンドサービスをリポジトリルートから起動する場合:
 
+ルート Compose は Docker Compose v5.5.1 で検証しています。`include` 済みサービスへの
+設定追加を扱えない Compose v2 系では `conflicts with imported resource` が発生するため、
+Docker Desktop を更新してから実行してください。
+
 ```sh
 cp .env.example .env
 docker compose up --build

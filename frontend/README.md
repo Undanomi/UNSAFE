@@ -85,6 +85,15 @@ docker compose --profile dev up --build
 
 ブラウザで [http://localhost:3000](http://localhost:3000) を開き、`app/` などのソースを保存すると Fast Refresh が反映されます。
 
+停止時も同じ profile を指定します。次のコマンドは PostgreSQL のデータを保持します。
+
+```bash
+docker compose --profile dev down
+```
+
+`-v` を付けると PostgreSQL のデータに加え、開発用の `node_modules`、pnpm store、Next.js
+キャッシュの Docker volume も削除されます。
+
 ### Production イメージの確認
 
 production 用の standalone frontend、PostgreSQL、migration を起動するには `frontend` profile を指定します。
