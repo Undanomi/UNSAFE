@@ -29,6 +29,21 @@ services:
       - frontend-database
     restart: "no"
 
+  frontend-seed:
+    build:
+      context: .
+      target: migration
+    profiles: ["seed"]
+    command: ["pnpm", "db:seed"]
+    environment:
+      DATABASE_URL: postgresql://frontend_service:${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}@frontend-postgres:5432/frontend_service
+    depends_on:
+      frontend-migrate:
+        condition: service_completed_successfully
+    networks:
+      - frontend-database
+    restart: "no"
+
   frontend:
     build:
       context: .

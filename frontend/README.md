@@ -79,6 +79,14 @@ cp .env.example .env
 docker compose up --build
 ```
 
+画面開発用の公開サンプルデータが必要な場合は、別のターミナルからシードサービスを明示的に実行します。
+
+```bash
+docker compose run --rm frontend-seed
+```
+
+このコマンドは架空ユーザーと公開マシンを追加します。同じ固定IDのシードデータは再実行時に更新されますが、それ以外のデータは削除しません。通常の `docker compose up` ではシードデータは投入されません。
+
 AIサーバーを別途起動していない場合、フロントエンド自体は起動しますが、AI機能は利用できません。AIサーバーの公開ポートを変更した場合は、`.env` の `AI_SERVER_URL` を変更してください。
 
 [http://localhost:3000](http://localhost:3000) でフロントエンドを開けます。ホスト側のポートを変更する場合は、`.env` の `FRONTEND_PORT` を変更してください。
