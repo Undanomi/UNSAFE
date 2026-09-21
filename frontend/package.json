@@ -11,6 +11,7 @@
     "dev": "next dev",
     "build": "next build",
     "db:migrate": "tsx db/migrate.ts",
+    "db:seed": "tsx db/seed.ts",
     "start": "next start",
     "lint": "biome check && biome format && tsc --noEmit",
     "format": "biome check --write && biome format --write"

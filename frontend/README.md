@@ -70,23 +70,54 @@ AI_SERVER_URL=http://host.docker.internal:8000
 
 ## 起動方法
 
-フロントエンド、PostgreSQL、マイグレーションはまとめてComposeで起動します。PostgreSQLはDocker内部ネットワークに閉じ、ホストには公開しません。マイグレーションは起動時に自動適用されます。
+PostgreSQL は Docker 内部ネットワークに閉じ、マイグレーションは起動時に自動適用されます。起動する構成は profile で選択します。
+
+### Docker で画面開発
+
+ソースコードをコンテナへ bind mount し、`pnpm dev --webpack` と PostgreSQL を起動します。Docker Desktop 上での変更検知を確実にするため、開発コンテナでは `WATCHPACK_POLLING=true` を設定しています。Next.js 16 の通常の `pnpm dev` は Turbopack のままです。
 
 ```bash
 cd frontend
 cp .env.example .env
 # .env にFirebase設定とFRONTEND_POSTGRES_PASSWORDを設定
-docker compose up --build
+docker compose --profile dev up --build
 ```
+
+ブラウザで [http://localhost:3000](http://localhost:3000) を開き、`app/` などのソースを保存すると Fast Refresh が反映されます。
+
+停止時も同じ profile を指定します。次のコマンドは PostgreSQL のデータを保持します。
+
+```bash
+docker compose --profile dev down
+```
+
+`-v` を付けると PostgreSQL のデータに加え、開発用の `node_modules`、pnpm store、Next.js
+キャッシュの Docker volume も削除されます。
+
+### Production イメージの確認
+
+production 用の standalone frontend、PostgreSQL、migration を起動するには `frontend` profile を指定します。
+
+```bash
+docker compose --profile frontend up --build
+```
+
+画面開発用の公開サンプルデータが必要な場合は、別のターミナルからシードサービスを明示的に実行します。
+
+```bash
+docker compose --profile seed run --rm frontend-seed
+```
+
+このコマンドは架空ユーザーと公開マシンを追加します。同じ固定IDのシードデータは再実行時に更新されますが、それ以外のデータは削除しません。通常の profile ではシードデータは投入されません。
 
 AIサーバーを別途起動していない場合、フロントエンド自体は起動しますが、AI機能は利用できません。AIサーバーの公開ポートを変更した場合は、`.env` の `AI_SERVER_URL` を変更してください。
 
-[http://localhost:3000](http://localhost:3000) でフロントエンドを開けます。ホスト側のポートを変更する場合は、`.env` の `FRONTEND_PORT` を変更してください。
+ホスト側のポートを変更する場合は、`.env` の `FRONTEND_PORT` を変更してください。
 
 フロントエンドだけをビルドする場合は、公開 Firebase 設定をビルド引数として渡します。`NEXT_PUBLIC_*` はブラウザ向けバンドルへビルド時に埋め込まれるため、値を変更した場合はイメージを再ビルドしてください。
 
 ```bash
-docker compose build frontend
+docker compose --profile frontend build frontend
 ```
 
 ## ビルド
