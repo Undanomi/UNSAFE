@@ -55,9 +55,9 @@
 ## 実装時の責務
 
 - 初期表示でマシンの表示情報とフラグ回答状態を取得する。
-- 生成・ビルド中は BFF の Route Handler を通じて AI サーバーのセッション状態を定期取得し、Firestore の `machines` と `chat_sessions` に同期する。
-- ビルド成功時に AI サーバーの `scenario_description` を Firestore のマシン説明へ同期する。旧プレースホルダーが残るビルド済みマシンは、詳細表示時に一度だけ補正する。
+- 生成・ビルド中は BFF の Route Handler を通じて AI サーバーのセッション状態を定期取得し、PostgreSQL の `machines` と `chat_sessions` に同期する。
+- ビルド成功時に AI サーバーの `scenario_description` をPostgreSQLのマシン説明へ同期する。旧プレースホルダーが残るビルド済みマシンは、詳細表示時に一度だけ補正する。
 - 再ビルドは所有者だけが Server Action から要求できるようにし、AI サーバーの `POST /v1/sessions/{session_id}/machines` をシナリオ ID なしで再実行する。
-- Firestore に正解値が保存されているフラグだけを表示し、回答は Server Action からサーバー側で判定する。クライアントへ正解値を渡さない。
+- PostgreSQLに正解値が保存されているフラグだけを表示し、回答は Server Action からサーバー側で判定する。クライアントへ正解値を渡さない。
 - フラグ送信ごとに、該当する入力欄の送信中と正解・不正解だけを独立して扱う。内部エラーの詳細は表示せず、入力欄で Enter を押しただけでは送信しない。
 - フラグの正解値、ダウンロード URL、誘導問題の生成方式は画面に持たせない。

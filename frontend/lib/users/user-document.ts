@@ -1,6 +1,6 @@
 import "server-only"
 
-import type { UsersDocument } from "@/types/firestore"
+import type { UserRecord } from "@/types/postgres"
 
 export type UserIdentity = {
   uid: string
@@ -11,16 +11,15 @@ export type UserIdentity = {
 export function buildInitialUserDocument(
   identity: UserIdentity,
   createdAt = new Date(),
-): UsersDocument {
+): UserRecord {
   return {
     id: identity.uid,
     name: typeof identity.name === "string" && identity.name.trim() ? identity.name : "ユーザー",
     bio: "",
     icon_url: typeof identity.picture === "string" ? identity.picture : "",
     theme: "light",
-    own_machines: [],
-    solved_machines: [],
-    created_at: createdAt.toISOString(),
+    created_at: createdAt,
+    updated_at: createdAt,
     profile_completed: false,
   }
 }
