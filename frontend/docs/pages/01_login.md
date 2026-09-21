@@ -48,4 +48,4 @@ Firebase AuthenticationによるGoogle SSOだけを提供する。ブラウザ�
 - ログイン状態の確認は画面表示時に行う。
 - Google認証の操作状態、認証エラー、送信中の状態はClient Componentで扱う。
 - ID tokenの検証、ユーザー初期作成、Session Cookieの発行はServer Actionを経由してBFFで行う。
-- 認証必須ルートの早期判定はProxyで行い、Server Action、Route Handler、Firestoreアクセス時もBFFでSession Cookieを検証する。
+- 認証必須ルートの早期判定はProxyで行い、Server Action、Route Handler、PostgreSQLアクセス時もBFFでSession Cookieを検証する。

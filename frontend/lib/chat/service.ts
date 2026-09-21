@@ -1,8 +1,8 @@
 import "server-only"
 
-import { Timestamp } from "firebase-admin/firestore"
+import type { PoolClient } from "pg"
 import { cancelAiSessionService, getAiSessionService } from "@/lib/ai/service"
-import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
+import { queryDatabase, withDatabaseTransaction } from "@/lib/database/client"
 import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
 import {
   CHAT_STEPS,
@@ -14,10 +14,7 @@ import {
   EMPTY_CHAT_ANSWERS,
 } from "@/stores/chat"
 
-const CHAT_COLLECTION = "chat_sessions"
-const MACHINE_COLLECTION = "machines"
-
-type ChatSessionDocument = {
+type ChatSessionRow = {
   ai_session_id: string
   owner_user_id: string
   name: string
@@ -27,25 +24,22 @@ type ChatSessionDocument = {
   creation_status: ChatCreationStatus
   creation_failure?: ChatCreationFailure | null
   machine_id: string | null
-  created_at: Timestamp
-  updated_at: Timestamp
+  error_message: string | null
+  created_at: Date
+  updated_at: Date
 }
 
-function toChatSession(id: string, document: ChatSessionDocument): ChatSession {
+function toChatSession(row: ChatSessionRow): ChatSession {
   return {
-    id,
-    name: document.name,
-    status: document.basic_ready ? "基本設定完了" : "入力中",
-    initialStep: document.current_step ?? CHAT_STEPS.machineName,
-    initialAnswers: { ...EMPTY_CHAT_ANSWERS, ...document.answers },
-    creationStatus: document.creation_status ?? "input",
-    creationFailure: document.creation_failure ?? null,
-    machineId: document.machine_id ?? null,
+    id: row.ai_session_id,
+    name: row.name,
+    status: row.basic_ready ? "基本設定完了" : "入力中",
+    initialStep: row.current_step ?? CHAT_STEPS.machineName,
+    initialAnswers: { ...EMPTY_CHAT_ANSWERS, ...row.answers },
+    creationStatus: row.creation_status ?? "input",
+    creationFailure: row.creation_failure ?? null,
+    machineId: row.machine_id ?? null,
   }
-}
-
-function chatReference(sessionId: string) {
-  return getFirebaseAdminFirestore().collection(CHAT_COLLECTION).doc(sessionId)
 }
 
 export async function createChatSessionService(
@@ -55,35 +49,25 @@ export async function createChatSessionService(
   currentStep: number,
   basicReady: boolean,
 ): Promise<ChatSession> {
-  const now = Timestamp.now()
-  const document: ChatSessionDocument = {
-    ai_session_id: aiSessionId,
-    owner_user_id: ownerUserId,
-    name: answers.name.trim(),
-    current_step: currentStep,
-    basic_ready: basicReady,
-    answers,
-    creation_status: "input",
-    creation_failure: null,
-    machine_id: null,
-    created_at: now,
-    updated_at: now,
-  }
-
-  await chatReference(aiSessionId).create(document)
-  return toChatSession(aiSessionId, document)
+  const result = await queryDatabase<ChatSessionRow>(
+    `INSERT INTO chat_sessions
+      (ai_session_id, owner_user_id, name, current_step, basic_ready, answers)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [aiSessionId, ownerUserId, answers.name.trim(), currentStep, basicReady, answers],
+  )
+  return toChatSession(result.rows[0])
 }
 
 export async function getChatSessionService(
   ownerUserId: string,
   sessionId: string,
 ): Promise<ChatSession | null> {
-  const snapshot = await chatReference(sessionId).get()
-  if (!snapshot.exists) return null
-
-  const document = snapshot.data() as ChatSessionDocument
-  if (document.owner_user_id !== ownerUserId) return null
-  return toChatSession(snapshot.id, document)
+  const result = await queryDatabase<ChatSessionRow>(
+    "SELECT * FROM chat_sessions WHERE ai_session_id = $1 AND owner_user_id = $2",
+    [sessionId, ownerUserId],
+  )
+  return result.rows[0] ? toChatSession(result.rows[0]) : null
 }
 
 export async function getChatSessionPageService(
@@ -119,21 +103,16 @@ export async function getChatSessionPageService(
 }
 
 export async function listChatSessionsService(ownerUserId: string): Promise<ChatSessionSummary[]> {
-  const snapshot = await getFirebaseAdminFirestore()
-    .collection(CHAT_COLLECTION)
-    .where("owner_user_id", "==", ownerUserId)
-    .get()
-
-  return snapshot.docs
-    .map((documentSnapshot) => {
-      const document = documentSnapshot.data() as ChatSessionDocument
-      return {
-        session: toChatSession(documentSnapshot.id, document),
-        updatedAt: document.updated_at?.toMillis() ?? 0,
-      }
-    })
-    .sort((left, right) => right.updatedAt - left.updatedAt)
-    .map(({ session }) => ({ id: session.id, name: session.name, status: session.status }))
+  const result = await queryDatabase<ChatSessionRow>(
+    `SELECT * FROM chat_sessions
+     WHERE owner_user_id = $1
+     ORDER BY updated_at DESC, ai_session_id ASC`,
+    [ownerUserId],
+  )
+  return result.rows.map((row) => {
+    const session = toChatSession(row)
+    return { id: session.id, name: session.name, status: session.status }
+  })
 }
 
 export async function saveChatProgressService(
@@ -143,27 +122,14 @@ export async function saveChatProgressService(
   currentStep: number,
   basicReady: boolean,
 ): Promise<ChatSession | null> {
-  const reference = chatReference(sessionId)
-  const firestore = getFirebaseAdminFirestore()
-
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return null
-
-    const document = snapshot.data() as ChatSessionDocument
-    if (document.owner_user_id !== ownerUserId) return null
-
-    const updated: ChatSessionDocument = {
-      ...document,
-      name: answers.name.trim(),
-      current_step: currentStep,
-      basic_ready: basicReady,
-      answers,
-      updated_at: Timestamp.now(),
-    }
-    transaction.set(reference, updated)
-    return toChatSession(sessionId, updated)
-  })
+  const result = await queryDatabase<ChatSessionRow>(
+    `UPDATE chat_sessions SET
+       name = $3, current_step = $4, basic_ready = $5, answers = $6, updated_at = now()
+     WHERE ai_session_id = $1 AND owner_user_id = $2
+     RETURNING *`,
+    [sessionId, ownerUserId, answers.name.trim(), currentStep, basicReady, answers],
+  )
+  return result.rows[0] ? toChatSession(result.rows[0]) : null
 }
 
 export async function setChatCreationStatusService(
@@ -171,23 +137,14 @@ export async function setChatCreationStatusService(
   sessionId: string,
   creationStatus: ChatCreationStatus,
 ): Promise<boolean> {
-  const reference = chatReference(sessionId)
-  const firestore = getFirebaseAdminFirestore()
-
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return false
-    const document = snapshot.data() as ChatSessionDocument
-    if (document.owner_user_id !== ownerUserId) return false
-
-    transaction.update(reference, {
-      creation_status: creationStatus,
-      creation_failure: null,
-      error_message: null,
-      updated_at: Timestamp.now(),
-    })
-    return true
-  })
+  const result = await queryDatabase(
+    `UPDATE chat_sessions SET
+       creation_status = $3, creation_failure = NULL, error_message = NULL,
+       updated_at = now()
+     WHERE ai_session_id = $1 AND owner_user_id = $2`,
+    [sessionId, ownerUserId, creationStatus],
+  )
+  return result.rowCount === 1
 }
 
 export async function setChatCreationFailureService(
@@ -195,49 +152,37 @@ export async function setChatCreationFailureService(
   sessionId: string,
   failure: ChatCreationFailure,
 ): Promise<boolean> {
-  const reference = chatReference(sessionId)
-  const firestore = getFirebaseAdminFirestore()
-
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return false
-    const document = snapshot.data() as ChatSessionDocument
-    if (document.owner_user_id !== ownerUserId) return false
-
-    transaction.update(reference, {
-      creation_status: "failed",
-      creation_failure: failure,
-      error_message: failure.summary,
-      updated_at: Timestamp.now(),
-    })
-    return true
-  })
+  const result = await queryDatabase(
+    `UPDATE chat_sessions SET
+       creation_status = 'failed', creation_failure = $3::jsonb,
+       error_message = $4, updated_at = now()
+     WHERE ai_session_id = $1 AND owner_user_id = $2`,
+    [sessionId, ownerUserId, failure, failure.summary],
+  )
+  return result.rowCount === 1
 }
 
 export async function setChatCreationCancelledService(
   ownerUserId: string,
   sessionId: string,
 ): Promise<boolean> {
-  const reference = chatReference(sessionId)
-  const firestore = getFirebaseAdminFirestore()
+  return withDatabaseTransaction(async (client) => {
+    const chat = await lockOwnedChat(client, ownerUserId, sessionId)
+    if (!chat) return false
 
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return false
-    const document = snapshot.data() as ChatSessionDocument
-    if (document.owner_user_id !== ownerUserId) return false
-
-    transaction.update(reference, {
-      creation_status: "cancelled",
-      creation_failure: null,
-      error_message: null,
-      updated_at: Timestamp.now(),
-    })
-    if (document.machine_id) {
-      transaction.update(firestore.collection(MACHINE_COLLECTION).doc(document.machine_id), {
-        status: "cancelled",
-        error_message: null,
-      })
+    await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = 'cancelled', creation_failure = NULL,
+         error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1 AND owner_user_id = $2`,
+      [sessionId, ownerUserId],
+    )
+    if (chat.machine_id) {
+      await client.query(
+        `UPDATE machines SET status = 'cancelled', error_message = NULL, updated_at = now()
+         WHERE id = $1 AND created_by = $2`,
+        [chat.machine_id, ownerUserId],
+      )
     }
     return true
   })
@@ -247,26 +192,23 @@ export async function setChatCreationReadyService(
   ownerUserId: string,
   sessionId: string,
 ): Promise<boolean> {
-  const reference = chatReference(sessionId)
-  const firestore = getFirebaseAdminFirestore()
+  return withDatabaseTransaction(async (client) => {
+    const chat = await lockOwnedChat(client, ownerUserId, sessionId)
+    if (!chat) return false
 
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return false
-    const document = snapshot.data() as ChatSessionDocument
-    if (document.owner_user_id !== ownerUserId) return false
-
-    transaction.update(reference, {
-      creation_status: "input",
-      creation_failure: null,
-      error_message: null,
-      updated_at: Timestamp.now(),
-    })
-    if (document.machine_id) {
-      transaction.update(firestore.collection(MACHINE_COLLECTION).doc(document.machine_id), {
-        status: "cancelled",
-        error_message: null,
-      })
+    await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = 'input', creation_failure = NULL,
+         error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1 AND owner_user_id = $2`,
+      [sessionId, ownerUserId],
+    )
+    if (chat.machine_id) {
+      await client.query(
+        `UPDATE machines SET status = 'cancelled', error_message = NULL, updated_at = now()
+         WHERE id = $1 AND created_by = $2`,
+        [chat.machine_id, ownerUserId],
+      )
     }
     return true
   })
@@ -278,19 +220,24 @@ function difficultyToLevel(difficulty: ChatAnswers["difficulty"]) {
   return "easy"
 }
 
+async function lockOwnedChat(client: PoolClient, ownerUserId: string, sessionId: string) {
+  const result = await client.query<ChatSessionRow>(
+    `SELECT * FROM chat_sessions
+     WHERE ai_session_id = $1 AND owner_user_id = $2
+     FOR UPDATE`,
+    [sessionId, ownerUserId],
+  )
+  return result.rows[0] ?? null
+}
+
 export async function createMachineDocumentService(
   ownerUserId: string,
   sessionId: string,
   flags: { userFlag: string | null; systemFlag: string | null },
 ): Promise<string | null> {
-  const firestore = getFirebaseAdminFirestore()
-  const reference = chatReference(sessionId)
-
-  return firestore.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(reference)
-    if (!snapshot.exists) return null
-    const chat = snapshot.data() as ChatSessionDocument
-    if (chat.owner_user_id !== ownerUserId) return null
+  return withDatabaseTransaction(async (client) => {
+    const chat = await lockOwnedChat(client, ownerUserId, sessionId)
+    if (!chat) return null
 
     const userFlag = chat.answers.needsUserFlag ? flags.userFlag?.trim() : ""
     const systemFlag = chat.answers.needsSystemFlag ? flags.systemFlag?.trim() : ""
@@ -305,39 +252,51 @@ export async function createMachineDocumentService(
     }
 
     const machineId = chat.machine_id ?? sessionId
-    const machineReference = firestore.collection(MACHINE_COLLECTION).doc(machineId)
-    const now = new Date().toISOString()
-
-    transaction.set(
-      machineReference,
-      {
-        id: machineId,
-        ai_session_id: chat.ai_session_id,
-        created_by: `users/${ownerUserId}`,
-        name: chat.answers.name,
-        summary: `${chat.answers.theme}を学ぶためのマシンです。`,
-        description: BUILDING_MACHINE_DESCRIPTION,
-        file_path: "",
-        level: difficultyToLevel(chat.answers.difficulty),
-        published: chat.answers.visibility === "公開",
-        status: "building",
-        build_progress: 0,
-        error_message: null,
-        system_flag: systemFlag ?? "",
-        user_flag: userFlag ?? "",
-        tags: [chat.answers.theme],
-        created_at: now,
-      },
-      { merge: true },
+    const machineResult = await client.query(
+      `INSERT INTO machines
+        (id, ai_session_id, created_by, name, summary, description, file_path, level,
+         published, status, build_progress, system_flag, user_flag, tags)
+       VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8, 'building', 0, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET
+         ai_session_id = EXCLUDED.ai_session_id,
+         name = EXCLUDED.name,
+         summary = EXCLUDED.summary,
+         level = EXCLUDED.level,
+         published = EXCLUDED.published,
+         status = 'building',
+         build_progress = 0,
+         description = EXCLUDED.description,
+         error_message = NULL,
+         system_flag = EXCLUDED.system_flag,
+         user_flag = EXCLUDED.user_flag,
+         tags = EXCLUDED.tags,
+         updated_at = now()
+       WHERE machines.created_by = EXCLUDED.created_by`,
+      [
+        machineId,
+        chat.ai_session_id,
+        ownerUserId,
+        chat.answers.name,
+        `${chat.answers.theme}を学ぶためのマシンです。`,
+        BUILDING_MACHINE_DESCRIPTION,
+        difficultyToLevel(chat.answers.difficulty),
+        chat.answers.visibility === "公開",
+        systemFlag ?? "",
+        userFlag ?? "",
+        [chat.answers.theme],
+      ],
     )
-    transaction.update(reference, {
-      creation_status: "building",
-      creation_failure: null,
-      current_step: CHAT_STEPS.complete,
-      machine_id: machineId,
-      error_message: null,
-      updated_at: Timestamp.now(),
-    })
+    if (machineResult.rowCount !== 1) {
+      throw new Error("Machine belongs to a different user.")
+    }
+    const chatResult = await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = 'building', current_step = $3, machine_id = $4,
+         creation_failure = NULL, error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1 AND owner_user_id = $2`,
+      [sessionId, ownerUserId, CHAT_STEPS.complete, machineId],
+    )
+    if (chatResult.rowCount !== 1) throw new Error("Chat session could not be updated.")
     return machineId
   })
 }

@@ -1,91 +1,113 @@
 import "server-only"
 
-import { Filter } from "firebase-admin/firestore"
-import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
+import { queryDatabase } from "@/lib/database/client"
 import {
+  MACHINE_PAGE_SIZE,
   type MachineListItem,
   type MachineListQuery,
-  selectMachinePage,
+  type MachineListResult,
 } from "@/lib/machines/list-query"
-import type { MachinesDocument, UsersDocument } from "@/types/firestore"
+import type { MachineRecord } from "@/types/postgres"
 
-const visibleStatuses = [
-  "created",
-  "building",
-  "ready",
-  "failed",
-  "cancelled",
-  "preparing",
-] as const
+type MachineListRow = Pick<
+  MachineRecord,
+  | "created_at"
+  | "description"
+  | "id"
+  | "level"
+  | "name"
+  | "published"
+  | "status"
+  | "summary"
+  | "tags"
+> & {
+  author_id: string
+  author: string
+  is_owned: boolean
+  is_solved: boolean
+}
 
-export async function getMachineListService(viewerUserId: string, query: MachineListQuery) {
-  const firestore = getFirebaseAdminFirestore()
-  // Only authorized, non-secret list metadata is read. Filtering/paging stays on the server.
-  const [snapshot, viewer] = await Promise.all([
-    firestore
-      .collection("machines")
-      .where(
-        Filter.and(
-          Filter.where("status", "in", visibleStatuses),
-          query.owned
-            ? Filter.or(
-                Filter.where("created_by", "==", `users/${viewerUserId}`),
-                Filter.where("created_by", "==", viewerUserId),
-              )
-            : Filter.or(
-                Filter.where("published", "==", true),
-                Filter.where("created_by", "==", `users/${viewerUserId}`),
-                Filter.where("created_by", "==", viewerUserId),
-              ),
-        ),
-      )
-      .select(
-        "name",
-        "summary",
-        "description",
-        "tags",
-        "level",
-        "created_at",
-        "created_by",
-        "published",
-        "status",
-      )
-      .get(),
-    firestore.collection("users").doc(viewerUserId).get(),
-  ])
-  const solved = new Set((viewer.data() as UsersDocument | undefined)?.solved_machines ?? [])
-  const items: MachineListItem[] = snapshot.docs.map((doc) => {
-    const machine = doc.data() as MachinesDocument
-    const authorId = machine.created_by.replace(/^users\//, "")
-    return {
-      id: doc.id,
-      name: machine.name,
-      summary: machine.summary,
-      description: machine.description,
-      tags: machine.tags ?? [],
-      level: machine.level,
-      created_at: machine.created_at,
-      published: machine.published,
-      status: machine.status,
-      authorId,
-      author: "ユーザー",
-      isOwned: authorId === viewerUserId,
-      isSolved: solved.has(`machines/${doc.id}`),
-    }
-  })
-  const result = selectMachinePage(items, query)
-  const authorIds = [...new Set(result.machines.map((machine) => machine.authorId))]
-  if (authorIds.length) {
-    const authors = await firestore.getAll(
-      ...authorIds.map((id) => firestore.collection("users").doc(id)),
-    )
-    const names = new Map(
-      authors.map((author) => [author.id, author.data()?.name as string | undefined]),
-    )
-    result.machines = result.machines.map((machine) => ({
-      ...machine,
-      author: names.get(machine.authorId) || "ユーザー",
-    }))
+function escapeLike(value: string) {
+  return value.replace(/[\\%_]/g, "\\$&")
+}
+
+function buildFilters(viewerUserId: string, query: MachineListQuery) {
+  const values: unknown[] = [viewerUserId]
+  const conditions = [
+    "m.status IN ('created', 'building', 'ready', 'failed', 'cancelled', 'preparing')",
+    query.owned ? "m.created_by = $1" : "(m.published = true OR m.created_by = $1)",
+  ]
+
+  if (query.level.length) {
+    values.push(query.level)
+    conditions.push(`m.level = ANY($${values.length}::text[])`)
   }
-  return result
+  if (query.q) {
+    values.push(`%${escapeLike(query.q)}%`)
+    conditions.push(`(
+      m.name ILIKE $${values.length} ESCAPE '\\'
+      OR EXISTS (
+        SELECT 1 FROM unnest(m.tags) AS tag
+        WHERE tag ILIKE $${values.length} ESCAPE '\\'
+      )
+    )`)
+  }
+  if (query.solved) {
+    conditions.push(`${query.solved === "no" ? "NOT " : ""}EXISTS (
+      SELECT 1 FROM machine_solutions s
+      WHERE s.user_id = $1 AND s.machine_id = m.id
+    )`)
+  }
+  return { values, where: conditions.join(" AND ") }
+}
+
+export async function getMachineListService(
+  viewerUserId: string,
+  query: MachineListQuery,
+): Promise<MachineListResult> {
+  const filters = buildFilters(viewerUserId, query)
+  const countResult = await queryDatabase<{ total: string }>(
+    `SELECT count(*)::text AS total FROM machines m WHERE ${filters.where}`,
+    filters.values,
+  )
+  const total = Number(countResult.rows[0]?.total ?? 0)
+  const pageCount = Math.max(1, Math.ceil(total / MACHINE_PAGE_SIZE))
+  const page = Math.min(query.page, pageCount)
+  const values = [...filters.values, MACHINE_PAGE_SIZE, (page - 1) * MACHINE_PAGE_SIZE]
+  const limitParameter = values.length - 1
+  const offsetParameter = values.length
+  const direction = query.sort === "asc" ? "ASC" : "DESC"
+
+  const result = await queryDatabase<MachineListRow>(
+    `SELECT
+       m.id, m.name, m.summary, m.description, m.tags, m.level, m.created_at,
+       m.published, m.status, m.created_by AS author_id, u.name AS author,
+       (m.created_by = $1) AS is_owned,
+       EXISTS (
+         SELECT 1 FROM machine_solutions s
+         WHERE s.user_id = $1 AND s.machine_id = m.id
+       ) AS is_solved
+     FROM machines m
+     JOIN users u ON u.id = m.created_by
+     WHERE ${filters.where}
+     ORDER BY m.created_at ${direction}, m.id ASC
+     LIMIT $${limitParameter} OFFSET $${offsetParameter}`,
+    values,
+  )
+  const machines: MachineListItem[] = result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    summary: row.summary,
+    description: row.description,
+    tags: row.tags,
+    level: row.level,
+    created_at: row.created_at.toISOString(),
+    published: row.published,
+    status: row.status,
+    authorId: row.author_id,
+    author: row.author || "ユーザー",
+    isOwned: row.is_owned,
+    isSolved: row.is_solved,
+  }))
+  return { machines, total, page, pageCount }
 }

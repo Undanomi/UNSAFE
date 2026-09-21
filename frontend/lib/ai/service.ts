@@ -35,7 +35,10 @@ type DownloadURLResponse = {
 }
 
 function getAiServerUrl(): string {
-  const configuredUrl = process.env.AI_SERVER_URL?.trim() || "http://localhost:8000"
+  const configuredUrl = process.env.AI_SERVER_URL?.trim()
+  if (!configuredUrl) {
+    throw new Error("AI_SERVER_URL is not configured.")
+  }
   try {
     return new URL(configuredUrl).toString().replace(/\/$/, "")
   } catch {

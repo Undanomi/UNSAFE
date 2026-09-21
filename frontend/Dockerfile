@@ -36,6 +36,23 @@ ENV NEXT_PUBLIC_FIREBASE_APP_ID=$NEXT_PUBLIC_FIREBASE_APP_ID
 
 RUN pnpm build
 
+FROM dependencies AS migration
+
+WORKDIR /app
+
+COPY db ./db
+COPY tsconfig.json ./tsconfig.json
+
+CMD ["pnpm", "db:migrate"]
+
+FROM base AS development
+
+WORKDIR /app
+
+ENV NODE_ENV=development
+
+EXPOSE 3000
+
 FROM node:24-alpine AS runner
 
 WORKDIR /app

@@ -113,11 +113,21 @@ cp ai_server/.env.example ai_server/.env
 docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build
 ```
 
-build_server を含む全サービスをリポジトリルートから起動する場合:
+build_server を含むバックエンドサービスをリポジトリルートから起動する場合:
+
+ルート Compose は Docker Compose v5.5.1 で検証しています。`include` 済みサービスへの
+設定追加を扱えない Compose v2 系では `conflicts with imported resource` が発生するため、
+Docker Desktop を更新してから実行してください。
 
 ```sh
 cp .env.example .env
 docker compose up --build
+```
+
+frontend も production イメージで起動する場合は `frontend` profile を追加します。
+
+```sh
+docker compose --profile frontend up --build
 ```
 
 本番では `.env` を配布せず、デプロイ基盤のSecret Managerから
@@ -126,7 +136,7 @@ docker compose up --build
 `POSTGRES_PASSWORD` の変更だけではDB内のパスワードは更新されません。先に対象ロールの
 パスワードを変更してから接続側の環境変数を切り替える必要があります。
 
-全サービス起動では build worker が `/dev/kvm` とベースイメージを必要とします。
+ルート Compose 起動では build worker が `/dev/kvm` とベースイメージを必要とします。
 詳細は `build_server/README.md` を参照してください。
 
 Compose内のai_serverは既定で `http://server:8080` へ接続します。build_serverの8080番ポートは

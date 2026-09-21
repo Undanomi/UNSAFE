@@ -105,8 +105,8 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </ul>
         <p>本サービスは、個人情報の販売や、第三者による行動追跡を目的とした提供を行いません。</p>
         <p>
-          委託先に提供する場合も、本サービスの提供に必要な最小限の情報に限定し、委託先の取り扱いについて必要かつ適切な監督を行います。認証およびデータ保存にはGoogleのFirebase
-          AuthenticationおよびCloud Firestoreを利用します。Firebase
+          委託先に提供する場合も、本サービスの提供に必要な最小限の情報に限定し、委託先の取り扱いについて必要かつ適切な監督を行います。認証にはGoogleのFirebase
+          Authenticationを利用し、プロフィール、マシン、チャットおよび回答履歴は本サービスが管理するデータベースに保存します。Firebase
           Authenticationでは、認証に伴う情報が米国で処理されます。取り扱いの詳細は
           <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">
             Firebaseのプライバシーとセキュリティに関する説明
@@ -270,7 +270,6 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </p>
       </>
     ),
-
   },
 ]
 
@@ -296,13 +295,13 @@ export function PrivacyPolicy() {
               <h1 className="mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02] font-semibold tracking-[-0.05em]">
                 プライバシーポリシー
               </h1>
-              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月10日</p>
+              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月21日</p>
             </div>
           </div>
 
           <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[#d3d1ca]">
             <p>
-              Security Learning Synario
+              Security Learning Scenario
               Generator（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
             </p>
 
@@ -316,14 +315,6 @@ export function PrivacyPolicy() {
                 </div>
               </section>
             ))}
-
-            <section>
-              <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
-                変更履歴
-              </h2>
-              <p className="mt-3">2026年9月5日：［変更内容］</p>
-
-            </section>
           </div>
         </article>
       </div>

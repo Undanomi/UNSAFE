@@ -1,28 +1,30 @@
 import "server-only"
 
 import { createHash, timingSafeEqual } from "node:crypto"
-import { FieldValue } from "firebase-admin/firestore"
 import {
   type AiSessionResponse,
   getAiSessionService,
   openAiMachineDownloadService,
   startMachineBuildService,
 } from "@/lib/ai/service"
-import { getFirebaseAdminFirestore } from "@/lib/firebase/admin"
+import { queryDatabase, withDatabaseTransaction } from "@/lib/database/client"
 import {
   BUILDING_MACHINE_DESCRIPTION,
   completedMachineDescription,
 } from "@/lib/machines/description"
 import type { MachineBuildState, MachineDetail } from "@/stores/machine-detail"
-import type { MachinesDocument } from "@/types/firestore"
+import type { MachineRecord } from "@/types/postgres"
 
-function formatCreatedAt(value: string) {
+function formatCreatedAt(value: Date | string) {
   const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium" }).format(date)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return new Intl.DateTimeFormat("ja-JP", {
+    dateStyle: "medium",
+    timeZone: "Asia/Tokyo",
+  }).format(date)
 }
 
-function toDifficulty(level: MachinesDocument["level"]): MachineDetail["difficulty"] {
+function toDifficulty(level: MachineRecord["level"]): MachineDetail["difficulty"] {
   if (level === "hard") return "High"
   if (level === "medium") return "Medium"
   return "Easy"
@@ -50,16 +52,11 @@ function toMachineBuildState(session: AiSessionResponse): MachineBuildState {
   }
 }
 
-function machineOwnerId(machine: MachinesDocument) {
-  return machine.created_by.replace(/^users\//, "")
-}
-
 async function saveMachineBuildState(
   machineId: string,
   aiSessionId: string,
   state: MachineBuildState,
 ) {
-  const firestore = getFirebaseAdminFirestore()
   const chatStatus =
     state.status === "ready"
       ? "completed"
@@ -69,40 +66,51 @@ async function saveMachineBuildState(
           ? "cancelled"
           : "building"
 
-  const batch = firestore.batch()
-  batch.update(firestore.collection("machines").doc(machineId), {
-    status: state.status,
-    build_progress: state.progress,
-    error_message: null,
-    ...(state.description ? { description: state.description } : {}),
+  await withDatabaseTransaction(async (client) => {
+    const machineUpdate = await client.query(
+      `UPDATE machines SET
+         status = $2, build_progress = $3, error_message = NULL,
+         description = COALESCE($4, description), updated_at = now()
+       WHERE id = $1`,
+      [machineId, state.status, state.progress, state.description ?? null],
+    )
+    const chatUpdate = await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = $2, error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1`,
+      [aiSessionId, chatStatus],
+    )
+    if (machineUpdate.rowCount !== 1 || chatUpdate.rowCount !== 1) {
+      throw new Error("Machine build state could not be persisted.")
+    }
   })
-  batch.update(firestore.collection("chat_sessions").doc(aiSessionId), {
-    creation_status: chatStatus,
-    error_message: null,
-  })
-  await batch.commit()
 }
 
 async function getMachineDocument(machineId: string) {
-  const snapshot = await getFirebaseAdminFirestore().collection("machines").doc(machineId).get()
-  return snapshot.exists ? (snapshot.data() as MachinesDocument) : null
+  const result = await queryDatabase<MachineRecord>("SELECT * FROM machines WHERE id = $1", [
+    machineId,
+  ])
+  return result.rows[0] ?? null
 }
 
 export async function getMachineDetailService(
   viewerUserId: string,
   machineId: string,
 ): Promise<MachineDetail | null> {
-  const firestore = getFirebaseAdminFirestore()
-  const snapshot = await firestore.collection("machines").doc(machineId).get()
-  if (!snapshot.exists) return null
+  const result = await queryDatabase<MachineRecord & { owner_name: string }>(
+    `SELECT machines.*, users.name AS owner_name
+     FROM machines
+     JOIN users ON users.id = machines.created_by
+     WHERE machines.id = $1`,
+    [machineId],
+  )
+  const machine = result.rows[0]
+  if (!machine) return null
 
-  const machine = snapshot.data() as MachinesDocument
-  const ownerUserId = machineOwnerId(machine)
+  const ownerUserId = machine.created_by
   const isOwner = ownerUserId === viewerUserId
   if (!machine.published && !isOwner) return null
 
-  const ownerSnapshot = await firestore.collection("users").doc(ownerUserId).get()
-  const owner = ownerSnapshot.data() as { name?: string } | undefined
   let description = machine.description
   if (
     machine.status === "ready" &&
@@ -116,7 +124,10 @@ export async function getMachineDetailService(
           machine.name,
           aiSession.scenario?.scenario_description,
         )
-        await snapshot.ref.update({ description })
+        await queryDatabase(
+          "UPDATE machines SET description = $2, updated_at = now() WHERE id = $1",
+          [machineId, description],
+        )
       }
     } catch (error) {
       console.error("Failed to refresh the completed machine description.", error)
@@ -124,9 +135,9 @@ export async function getMachineDetailService(
   }
 
   return {
-    id: snapshot.id,
+    id: machine.id,
     name: machine.name,
-    author: owner?.name || "ユーザー",
+    author: machine.owner_name || "ユーザー",
     createdAt: formatCreatedAt(machine.created_at),
     visibility: machine.published ? "公開" : "非公開",
     theme: machine.tags[0] ?? "セキュリティ",
@@ -137,10 +148,10 @@ export async function getMachineDetailService(
     canRetry: isOwner,
     status: machine.status,
     userFlag: machine.user_flag
-      ? { kind: "user", label: "ユーザーフラグ", machineId: snapshot.id }
+      ? { kind: "user", label: "ユーザーフラグ", machineId: machine.id }
       : null,
     systemFlag: machine.system_flag
-      ? { kind: "system", label: "システムフラグ", machineId: snapshot.id }
+      ? { kind: "system", label: "システムフラグ", machineId: machine.id }
       : null,
   }
 }
@@ -152,7 +163,7 @@ export async function getMachineBuildStateService(
   const machine = await getMachineDocument(machineId)
   if (!machine?.ai_session_id) return null
 
-  const ownerUserId = machineOwnerId(machine)
+  const ownerUserId = machine.created_by
   const isOwner = ownerUserId === viewerUserId
   if (!machine.published && !isOwner) return null
 
@@ -172,7 +183,7 @@ export async function retryMachineBuildService(
   machineId: string,
 ): Promise<MachineBuildState | null> {
   const machine = await getMachineDocument(machineId)
-  if (!machine?.ai_session_id || machineOwnerId(machine) !== ownerUserId) return null
+  if (!machine?.ai_session_id || machine.created_by !== ownerUserId) return null
 
   const current = await getAiSessionService(ownerUserId, machine.ai_session_id)
   if (current.status !== "failed" && current.status !== "cancelled") {
@@ -206,7 +217,7 @@ export async function openMachineDownloadService(
   const machine = await getMachineDocument(machineId)
   if (!machine?.ai_session_id) return null
 
-  const ownerUserId = machineOwnerId(machine)
+  const ownerUserId = machine.created_by
   if (!machine.published && ownerUserId !== viewerUserId) return null
   return openAiMachineDownloadService(
     ownerUserId,
@@ -225,7 +236,7 @@ export async function verifyMachineFlagService(
   const machine = await getMachineDocument(machineId)
   if (!machine) return null
 
-  const ownerUserId = machineOwnerId(machine)
+  const ownerUserId = machine.created_by
   if (!machine.published && ownerUserId !== viewerUserId) return null
   const expected = kind === "user" ? machine.user_flag : machine.system_flag
   if (!expected) return null
@@ -234,12 +245,12 @@ export async function verifyMachineFlagService(
   const answerDigest = createHash("sha256").update(answer.trim(), "utf8").digest()
   const correct = timingSafeEqual(expectedDigest, answerDigest)
   if (correct) {
-    await getFirebaseAdminFirestore()
-      .collection("users")
-      .doc(viewerUserId)
-      .update({
-        solved_machines: FieldValue.arrayUnion(`machines/${machineId}`),
-      })
+    await queryDatabase(
+      `INSERT INTO machine_solutions (user_id, machine_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, machine_id) DO NOTHING`,
+      [viewerUserId, machineId],
+    )
   }
   return correct
 }

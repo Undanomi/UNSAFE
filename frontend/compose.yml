@@ -1,4 +1,51 @@
 services:
+  frontend-postgres:
+    image: postgres:17-alpine
+    profiles: ["frontend", "dev", "seed"]
+    environment:
+      POSTGRES_DB: frontend_service
+      POSTGRES_USER: frontend_service
+      POSTGRES_PASSWORD: ${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U frontend_service -d frontend_service"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - frontend-postgres-data:/var/lib/postgresql/data
+    networks:
+      - frontend-database
+    restart: unless-stopped
+
+  frontend-migrate:
+    build:
+      context: .
+      target: migration
+    profiles: ["frontend", "dev", "seed"]
+    environment:
+      DATABASE_URL: postgresql://frontend_service:${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}@frontend-postgres:5432/frontend_service
+    depends_on:
+      frontend-postgres:
+        condition: service_healthy
+    networks:
+      - frontend-database
+    restart: "no"
+
+  frontend-seed:
+    build:
+      context: .
+      target: migration
+    profiles: ["seed"]
+    command: ["pnpm", "db:seed"]
+    environment:
+      DATABASE_URL: postgresql://frontend_service:${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}@frontend-postgres:5432/frontend_service
+    depends_on:
+      frontend-migrate:
+        condition: service_completed_successfully
+    networks:
+      - frontend-database
+    restart: "no"
+
   frontend:
     build:
       context: .
@@ -7,11 +54,16 @@ services:
         NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
         NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
         NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
+    profiles: ["frontend"]
     environment:
       FIREBASE_ADMIN_PROJECT_ID: ${FIREBASE_ADMIN_PROJECT_ID:-${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}}
       FIREBASE_ADMIN_CLIENT_EMAIL: ${FIREBASE_ADMIN_CLIENT_EMAIL:-}
       FIREBASE_ADMIN_PRIVATE_KEY: ${FIREBASE_ADMIN_PRIVATE_KEY:-}
-      AI_SERVER_URL: ${FRONTEND_AI_SERVER_URL:-http://ai-server:8000}
+      AI_SERVER_URL: ${AI_SERVER_URL:-http://ai-server:8000}
+      DATABASE_URL: postgresql://frontend_service:${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}@frontend-postgres:5432/frontend_service
+    depends_on:
+      frontend-migrate:
+        condition: service_completed_successfully
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     healthcheck:
@@ -19,11 +71,65 @@ services:
         - CMD
         - node
         - -e
-        - fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)throw Error(r.status)}).catch(e=>{console.error(e);process.exit(1)})
+        - fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)throw Error(r.status)}).catch(e=>{console.error(e);process.exit(1)})
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    networks:
+      - default
+      - frontend-database
     restart: unless-stopped
+
+  frontend-dev:
+    build:
+      context: .
+      target: development
+    profiles: ["dev"]
+    command:
+      - /bin/sh
+      - -c
+      - pnpm install --frozen-lockfile && pnpm dev --webpack
+    environment:
+      WATCHPACK_POLLING: "true"
+      FIREBASE_ADMIN_PROJECT_ID: ${FIREBASE_ADMIN_PROJECT_ID:-${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}}
+      FIREBASE_ADMIN_CLIENT_EMAIL: ${FIREBASE_ADMIN_CLIENT_EMAIL:-}
+      FIREBASE_ADMIN_PRIVATE_KEY: ${FIREBASE_ADMIN_PRIVATE_KEY:-}
+      AI_SERVER_URL: ${AI_SERVER_URL:-http://ai-server:8000}
+      DATABASE_URL: postgresql://frontend_service:${FRONTEND_POSTGRES_PASSWORD:?FRONTEND_POSTGRES_PASSWORD must be set}@frontend-postgres:5432/frontend_service
+    depends_on:
+      frontend-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)throw Error(r.status)}).catch(e=>{console.error(e);process.exit(1)})
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - .:/app
+      - frontend-node-modules:/app/node_modules
+      - frontend-pnpm-store:/pnpm/store
+      - frontend-next-cache:/app/.next
+    networks:
+      - default
+      - frontend-database
+    restart: unless-stopped
+
+networks:
+  frontend-database:
+    internal: true
+
+volumes:
+  frontend-postgres-data:
+  frontend-node-modules:
+  frontend-pnpm-store:
+  frontend-next-cache:
