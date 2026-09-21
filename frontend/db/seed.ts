@@ -3,17 +3,17 @@ import { Pool } from "pg"
 
 const LOCAL_DATABASE_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"])
 
-function developmentDatabaseUrl(): string {
+function seedDatabaseUrl(): string {
   if (process.env.NODE_ENV === "production") {
     throw new Error("Seed data cannot be applied in production.")
   }
 
-  const value = process.env.DEV_DATABASE_URL
-  if (!value) throw new Error("DEV_DATABASE_URL is not configured.")
+  const value = process.env.SEED_DATABASE_URL
+  if (!value) throw new Error("SEED_DATABASE_URL is not configured.")
 
   const url = new URL(value)
   if (!LOCAL_DATABASE_HOSTS.has(url.hostname)) {
-    throw new Error("Seed data can only be applied to a local DEV_DATABASE_URL.")
+    throw new Error("Seed data can only be applied to a local database.")
   }
   return value
 }
@@ -131,7 +131,7 @@ const chats = [
 ] as const
 
 async function main() {
-  const pool = new Pool({ connectionString: developmentDatabaseUrl(), max: 1 })
+  const pool = new Pool({ connectionString: seedDatabaseUrl(), max: 1 })
   const client = await pool.connect()
 
   try {
