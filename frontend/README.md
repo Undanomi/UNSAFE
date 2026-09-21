@@ -45,8 +45,8 @@ cp .env.example .env.local
 | `FIREBASE_ADMIN_PROJECT_ID` | No | Admin SDK用プロジェクトID。未設定時は `NEXT_PUBLIC_FIREBASE_PROJECT_ID` を使用する |
 | `FIREBASE_ADMIN_CLIENT_EMAIL` | Yes | Firebase Admin SDKのサービスアカウント |
 | `FIREBASE_ADMIN_PRIVATE_KEY` | Yes | Firebase Admin SDKの秘密鍵。改行は `\\n` で記述する |
-| `DATABASE_URL` | Yes | フロントエンド用PostgreSQLの接続文字列。サーバーからのみ使用する |
-| `AI_SERVER_URL` | No | AIサーバーの接続先。既定値は `http://localhost:8000` |
+| `DEV_DATABASE_URL` | `pnpm run dev` のみ | ホストで実行するNext.js用のPostgreSQL接続文字列。サーバーからのみ使用する |
+| `DEV_AI_SERVER_URL` | `pnpm run dev` のみ | ホストで実行するNext.js用のAIサーバー接続先 |
 
 設定例:
 
@@ -60,53 +60,54 @@ FIREBASE_ADMIN_PROJECT_ID=<PROJECT_ID>
 FIREBASE_ADMIN_CLIENT_EMAIL=...
 FIREBASE_ADMIN_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 
-# フロントエンド用PostgreSQL
-DATABASE_URL=postgresql://frontend_service:change-me@localhost:5432/frontend_service
+# pnpm run dev 用PostgreSQL
+DEV_FRONTEND_POSTGRES_PASSWORD=change-me
+DEV_FRONTEND_POSTGRES_PORT=5432
+DEV_DATABASE_URL=postgresql://frontend_service:change-me@localhost:5432/frontend_service
 
-# AIサーバー（Next.js のBFFからのみ参照）
-AI_SERVER_URL=http://localhost:8000
+# pnpm run dev 用AIサーバー（Next.jsのBFFからのみ参照）
+DEV_AI_SERVER_URL=http://localhost:8000
 ```
 
-`NEXT_PUBLIC_*` はブラウザへ公開されます。`FIREBASE_ADMIN_*` と `DATABASE_URL` には秘密情報が含まれるため、`NEXT_PUBLIC_` を付けず、リポジトリへコミットしないでください。
+`NEXT_PUBLIC_*` はブラウザへ公開されます。`FIREBASE_ADMIN_*`、`DEV_DATABASE_URL`、`*_POSTGRES_PASSWORD` には秘密情報が含まれるため、リポジトリへコミットしないでください。
 
-## PostgreSQLマイグレーション
+## 起動方法
 
-ローカル開発では、`DATABASE_URL` から接続できるPostgreSQL 17を用意し、初回起動前とマイグレーション追加後に次を実行します。マイグレーションコマンドは `.env.local` を自動では読み込まないため、`DATABASE_URL` をシェル環境へ渡します。
+### 1. DBだけDocker、フロントエンドは `pnpm run dev`
+
+日常の画面開発向けです。Next.jsのホットリロードをそのまま利用できます。初回は `.env.example` を `.env.local` にコピーし、`DEV_FRONTEND_POSTGRES_PASSWORD` と `DEV_DATABASE_URL` のパスワードを同じ値に設定します。
 
 ```bash
-DATABASE_URL=postgresql://frontend_service:change-me@localhost:5432/frontend_service pnpm db:migrate
+pnpm dev:db
+pnpm db:seed
+pnpm dev
 ```
 
-SQLは `db/migrations/`、ランナーは `db/migrate.ts` に配置します。ランナーはadvisory lock、`schema_migrations` の適用履歴、マイグレーション単位のトランザクションを使用します。適用済みSQLが同一であれば再実行しても変更は発生しません。通常のアプリケーション起動処理からDDLは実行しません。
-
-## 開発サーバー起動
-
-ローカル開発では、`DATABASE_URL` から接続できる PostgreSQL 17 を別途用意してください。`.env.local` の `DATABASE_URL` に設定した接続先へ、マイグレーションを適用してから開発サーバーを起動します。
+`pnpm dev:db` はPostgreSQLを `127.0.0.1` に限定して起動し、未適用のマイグレーションも適用します。`pnpm db:seed` はサンプルユーザー、公開・非公開マシン、チャット履歴、回答済み状態を追加します。`DEV_DATABASE_URL` がローカルホストを指す場合だけ実行でき、何度実行しても同じシードデータを更新します。ポート競合時は `DEV_FRONTEND_POSTGRES_PORT` と `DEV_DATABASE_URL` のポートを同じ値へ変更してください。停止時は次を実行します。
 
 ```bash
-DATABASE_URL=postgresql://frontend_service:change-me@localhost:5432/frontend_service pnpm db:migrate
-pnpm run dev
+pnpm dev:db:stop
 ```
 
-[http://localhost:3000](http://localhost:3000) で起動します。
+### 2. フロントエンドとDBをDockerで起動
 
-## Docker
+Dockerに近い状態を確認したいときはこちらを使います。PostgreSQLはDocker内部ネットワークに閉じ、ホストには公開しません。
 
-### フロントエンド単独
+#### フロントエンド単独
 
 `frontend/` だけを起動する場合は、`frontend/` ディレクトリで環境変数ファイルを作成します。フロントエンド用 PostgreSQL は Compose 内で起動し、AIサーバーはホストの `localhost:8000` で動作しているものへ接続します。
 
 ```bash
 cd frontend
 cp .env.example .env
-# .env に Firebase 設定と FRONTEND_POSTGRES_PASSWORD を設定
+# .env にFirebase設定と FRONTEND_POSTGRES_PASSWORD を設定
 # .env の AI_SERVER_URL を http://host.docker.internal:8000 に変更
 docker compose up --build
 ```
 
 AIサーバーを別途起動していない場合、フロントエンド自体は起動しますが、AI機能は利用できません。AIサーバーの公開ポートを変更した場合は、`.env` の `AI_SERVER_URL` を変更してください。
 
-### 全サービス
+#### 全サービス
 
 リポジトリのルートで共通の環境変数ファイルを作成し、全サービスを起動します。
 
