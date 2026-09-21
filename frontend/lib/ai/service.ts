@@ -34,11 +34,14 @@ type DownloadURLResponse = {
 }
 
 function getAiServerUrl(): string {
-  const configuredUrl = process.env.AI_SERVER_URL?.trim() || "http://localhost:8000"
+  const configuredUrl =
+    process.env.AI_SERVER_URL?.trim() ||
+    process.env.DEV_AI_SERVER_URL?.trim() ||
+    "http://localhost:8000"
   try {
     return new URL(configuredUrl).toString().replace(/\/$/, "")
   } catch {
-    throw new Error("AI_SERVER_URL is not a valid URL.")
+    throw new Error("AI_SERVER_URL or DEV_AI_SERVER_URL is not a valid URL.")
   }
 }
 

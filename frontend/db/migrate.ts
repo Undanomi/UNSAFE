@@ -7,8 +7,8 @@ import { Pool } from "pg"
 const MIGRATION_LOCK_ID = "694636019042026"
 
 async function main() {
-  const databaseUrl = process.env.DATABASE_URL
-  if (!databaseUrl) throw new Error("DATABASE_URL is not configured.")
+  const databaseUrl = process.env.DATABASE_URL ?? process.env.DEV_DATABASE_URL
+  if (!databaseUrl) throw new Error("DATABASE_URL or DEV_DATABASE_URL is not configured.")
 
   const directory = path.join(process.cwd(), "db", "migrations")
   const names = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort()
