@@ -81,23 +81,10 @@ SQLは `db/migrations/`、ランナーは `db/migrate.ts` に配置します。�
 
 ## 開発サーバー起動
 
-開発時は、開発用 Compose override で PostgreSQL だけを起動します。`.env.local` の `DATABASE_URL` に設定したパスワードと、`.env` の `FRONTEND_POSTGRES_PASSWORD` は同じ値にしてください。
+ローカル開発では、`DATABASE_URL` から接続できる PostgreSQL 17 を別途用意してください。`.env.local` の `DATABASE_URL` に設定した接続先へ、マイグレーションを適用してから開発サーバーを起動します。
 
 ```bash
-docker compose -f compose.yml -f compose.dev.yml up -d frontend-postgres
-DATABASE_URL=postgresql://frontend_service:<FRONTEND_POSTGRES_PASSWORD>@localhost:5432/frontend_service pnpm db:migrate
-pnpm run dev
-```
-
-PostgreSQL を停止する場合:
-
-```bash
-docker compose -f compose.yml -f compose.dev.yml down
-```
-
-通常の開発サーバーだけを起動する場合は、次のコマンドを使用します。
-
-```bash
+DATABASE_URL=postgresql://frontend_service:change-me@localhost:5432/frontend_service pnpm db:migrate
 pnpm run dev
 ```
 
