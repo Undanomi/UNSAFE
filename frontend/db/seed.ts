@@ -61,7 +61,7 @@ const machines = [
     summary: "ビルド中の非公開マシンです。",
     description: "マシンを準備しています。しばらくお待ちください。",
     level: "medium",
-    published: false,
+    published: true,
     status: "building",
     progress: 65,
     systemFlag: "",

@@ -11,7 +11,7 @@
     "dev": "next dev",
     "dev:db": "docker compose --env-file .env.local -f compose.yml -f compose.dev.yml up -d --wait --force-recreate frontend-postgres && tsx --env-file=.env.local db/migrate.ts",
     "dev:db:stop": "docker compose --env-file .env.local -f compose.yml -f compose.dev.yml stop frontend-postgres",
-    "db:seed": "tsx --env-file=.env.local db/seed.ts",
+    "dev:seed": "tsx --env-file=.env.local db/seed.ts",
     "build": "next build",
     "db:migrate": "tsx db/migrate.ts",
     "start": "next start",

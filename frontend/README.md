@@ -79,11 +79,11 @@ DEV_AI_SERVER_URL=http://localhost:8000
 
 ```bash
 pnpm dev:db
-pnpm db:seed
+pnpm dev:seed
 pnpm dev
 ```
 
-`pnpm dev:db` はPostgreSQLを `127.0.0.1` に限定して起動し、未適用のマイグレーションも適用します。`pnpm db:seed` はサンプルユーザー、公開・非公開マシン、チャット履歴、回答済み状態を追加します。`DEV_DATABASE_URL` がローカルホストを指す場合だけ実行でき、何度実行しても同じシードデータを更新します。ポート競合時は `DEV_FRONTEND_POSTGRES_PORT` と `DEV_DATABASE_URL` のポートを同じ値へ変更してください。停止時は次を実行します。
+`pnpm dev:db` はPostgreSQLを `127.0.0.1` に限定して起動し、未適用のマイグレーションも適用します。`pnpm dev:seed` はサンプルユーザー、公開マシン、チャット履歴、回答済み状態を追加します。`DEV_DATABASE_URL` がローカルホストを指す場合だけ実行でき、何度実行しても同じシードデータを更新します。ポート競合時は `DEV_FRONTEND_POSTGRES_PORT` と `DEV_DATABASE_URL` のポートを同じ値へ変更してください。停止時は次を実行します。
 
 ```bash
 pnpm dev:db:stop
@@ -101,7 +101,8 @@ Dockerに近い状態を確認したいときはこちらを使います。Postg
 cd frontend
 cp .env.example .env
 # .env にFirebase設定と FRONTEND_POSTGRES_PASSWORD を設定
-# .env の AI_SERVER_URL を http://host.docker.internal:8000 に変更
+# ホスト上のAIサーバーの公開ポートが8000以外の場合は
+# AI_SERVER_URL を変更
 docker compose up --build
 ```
 
