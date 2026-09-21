@@ -105,8 +105,8 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </ul>
         <p>本サービスは、個人情報の販売や、第三者による行動追跡を目的とした提供を行いません。</p>
         <p>
-          委託先に提供する場合も、本サービスの提供に必要な最小限の情報に限定し、委託先の取り扱いについて必要かつ適切な監督を行います。認証およびデータ保存にはGoogleのFirebase
-          AuthenticationおよびCloud Firestoreを利用します。Firebase
+          委託先に提供する場合も、本サービスの提供に必要な最小限の情報に限定し、委託先の取り扱いについて必要かつ適切な監督を行います。認証にはGoogleのFirebase
+          Authenticationを利用し、プロフィール、マシン、チャットおよび回答履歴は本サービスが管理するPostgreSQLに保存します。Firebase
           Authenticationでは、認証に伴う情報が米国で処理されます。取り扱いの詳細は
           <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">
             Firebaseのプライバシーとセキュリティに関する説明
@@ -270,7 +270,6 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
         </p>
       </>
     ),
-
   },
 ]
 
@@ -321,8 +320,7 @@ export function PrivacyPolicy() {
               <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
                 変更履歴
               </h2>
-              <p className="mt-3">2026年9月5日：［変更内容］</p>
-
+              <p className="mt-3">2026年9月21日：業務データの保存先をPostgreSQLへ変更</p>
             </section>
           </div>
         </article>

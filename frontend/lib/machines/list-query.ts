@@ -1,26 +1,24 @@
-import type { MachinesDocument } from "@/types/firestore"
+import type { MachineRecord } from "@/types/postgres"
 
 export const MACHINE_PAGE_SIZE = 10
 export type MachineListQuery = {
   page: number
   q: string
-  level: MachinesDocument["level"][]
+  level: MachineRecord["level"][]
   owned: boolean
   solved: "" | "yes" | "no"
   sort: "asc" | "desc"
 }
 export type MachineListItem = Pick<
-  MachinesDocument,
-  | "id"
-  | "name"
-  | "summary"
-  | "description"
-  | "tags"
-  | "level"
-  | "created_at"
-  | "published"
-  | "status"
-> & { authorId: string; author: string; isOwned: boolean; isSolved: boolean }
+  MachineRecord,
+  "description" | "id" | "level" | "name" | "published" | "status" | "summary" | "tags"
+> & {
+  created_at: string
+  authorId: string
+  author: string
+  isOwned: boolean
+  isSolved: boolean
+}
 export type MachineListResult = {
   machines: MachineListItem[]
   total: number

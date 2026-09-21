@@ -84,7 +84,7 @@ X-Authenticated-User-ID: user-123
 ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報として扱ってください。
 
 `user_flag` と `system_flag` は、対応するフラグが必要なシナリオを生成した後だけ設定されます。
-これらは正解値を保存するBFF向けの秘密情報です。ブラウザへ転送せず、Firestoreへの保存と
+これらは正解値を保存するBFF向けの秘密情報です。ブラウザへ転送せず、フロントエンド用PostgreSQLへの保存と
 サーバー側での回答判定にだけ使用してください。正解値は `scenario` およびSSEイベントには
 含まれません。自動生成値は `flag{user_<32桁hex>}` または `flag{system_<32桁hex>}` 形式です。
 VMソースのプロビジョニング処理とacceptance testには、PostgreSQLへ保存した値が大文字小文字を

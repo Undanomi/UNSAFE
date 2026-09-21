@@ -5,7 +5,7 @@
 - 本ドキュメントは、SLSG のフロントエンドアプリケーションの設計及び責務の方針を示し、以降の実装を進める際の指針とすることを目的とする
 - 対象：フロントエンドの構成・フロントエンドの責務・フロントエンドに持たせる機能
 - 対象外：実装の詳細・認証認可・フロントエンドDB定義。認証認可の方針は[認証方針](./auth-spec.md)を正本とする
-- システム全体の基本方針は [システム仕様書](./spec.md) に従う
+- システム全体の基本方針は [システム仕様書](../../docs/spec.md) に従う
 
 ## 2. 構成
 
@@ -24,7 +24,7 @@ flowchart LR
 
   AI["AIサーバー"]
   Build["ビルドサーバー"]
-  DB["DB"]
+  DB["フロントエンド用PostgreSQL"]
 
   CC -->|"更新操作"| SA
   CC -->|"ポーリング・ダウンロード等"| RH
@@ -37,7 +37,7 @@ flowchart LR
   SC -->|"HTML / RSC Payload"| CC
 ```
 
-ブラウザでは Client Component が動作する。Next.js アプリサーバーは Server Component の提供、BFF としての Server Action・Route Handler・Service の提供を行う。接続先外部システムとして、AI サーバー・ビルドサーバー・DB が存在する。
+ブラウザでは Client Component が動作する。Next.js アプリサーバーは Server Component の提供、BFF としての Server Action・Route Handler・Service の提供を行う。接続先外部システムとして、AI サーバー・ビルドサーバー・フロントエンド用PostgreSQLが存在する。
 
 ユーザーによる操作は Client Component から Server Action に渡し、ポーリングやダウンロードなどの HTTP を介した操作は Route Handler に渡す。
 
@@ -45,7 +45,7 @@ Server Action と Route Handler はそれぞれ Service を経由して業務処
 
 画面の初期表示や画面遷移時は、Server Component が Service から表示用データを取得し、SSR の結果をブラウザへ返す。
 
-Service はブラウザから直接呼び出さない BFF 内部の業務処理であり、AI サーバー・ビルドサーバー・DBとの通信を担う。
+Service はブラウザから直接呼び出さない BFF 内部の業務処理であり、AI サーバー・ビルドサーバー・フロントエンド用PostgreSQLとの通信を担う。
 
 ## 3. 各構成要素の役割
 
@@ -101,13 +101,13 @@ Route Handler 自身も、下流サービスの呼び出しは Service に委譲
 
 ### 3.5 Service
 
-Service は、Next.js サーバーの内部に置くサーバー専用の処理である。Server Component、Server Action、Route Handler から呼び出され、AI サーバー、ビルドサーバー、DBとの通信を集約する。ブラウザから直接呼び出さない。
+Service は、Next.js サーバーの内部に置くサーバー専用の処理である。Server Component、Server Action、Route Handler から呼び出され、AI サーバー、ビルドサーバー、フロントエンド用PostgreSQLとの通信を集約する。ブラウザから直接呼び出さない。
 
 Service を定義するモジュールには必ず `import "server-only"` を記述し、Client Component から誤って import した場合にビルド時に検出できるようにする。
 
 Service の責務は次のとおりである。
 
-- AI サーバー、ビルドサーバー、DB との通信を一箇所にまとめる
+- AI サーバー、ビルドサーバー、フロントエンド用PostgreSQLとの通信を一箇所にまとめる
 - 下流サービスごとのデータ形式を、画面で利用する形式へ変換する
 - 複数の下流サービスから得た情報を必要に応じてまとめる
 

@@ -18,16 +18,16 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 | 領域 | コンポーネント | 役割 |
 | --- | --- | --- |
 | ブラウザ | Next.js クライアント | ユーザー操作 |
-| Cloudflare | Workers（Next.js + BFF） | フロントエンド機能 |
+| オンプレ環境 | Next.js + BFF | フロントエンド機能 |
 | Cloudflare | AI Job Queue | AI 生成ジョブを AI サーバーへ非同期配する |
 | Firebase | Firebase Authentication | 認証基盤 |
-| Firebase | Cloud Firestore | 業務データを保存する |
+| オンプレ環境 | フロントエンド用PostgreSQL | ユーザー、マシン、チャット、回答履歴を保存する |
 | オンプレ環境 | AI サーバー | AI Job Queue からジョブを取得し、シナリオやコードを生成する |
 | オンプレ環境 | ビルドサーバー | 隔離環境で Packer を実行して成果物を生成する |
 
 ### 2.1 フロントエンド／BFF
 
-- 既存のNext.js 16アプリケーションをCloudflare Workersへ配置する
+- 既存のNext.js 16アプリケーションをオンプレ環境のコンテナへ配置する
 - フロントエンドとBFFは、同じNext.jsアプリケーションとして動作させる
 - フロントエンドとBFFの既存の責務は維持する
 - BFFは、ブラウザ、AIサーバーおよびDBの間に置く境界とする
@@ -47,9 +47,12 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 
 ### 2.3 データストア
 
-- Firestoreへの読み書きは、BFFのサービス権限で行う
+- フロントエンド用PostgreSQLへの読み書きは、フロントエンド専用DBユーザーで行う
 - 利用者単位の認可はBFFで実施する
-- ブラウザ、AIサーバーおよびビルドサーバーには、Firestoreの資格情報を配布しない
+- ブラウザ、AIサーバーおよびビルドサーバーには、フロントエンド用PostgreSQLの資格情報を配布しない
+- フロントエンド用PostgreSQLは既存のFirestoreデータを引き継がず、空の状態から開始する
+- Firebase Authenticationの既存利用者は、次回ログイン時にFirebase UIDを主キーとしてフロントエンド用PostgreSQLへ自動登録する
+- スキーマは `frontend/db/migrations/` のSQLをデプロイ時に適用し、通常のアプリケーション起動処理からDDLを実行しない
 
 ### 2.4 ジョブキューとオンプレ環境
 
@@ -70,8 +73,8 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 | 通信元 | 通信先 | 認証 |
 | --- | --- | --- |
 | ブラウザ | Firebase Authentication | Firebase Authentication |
-| ブラウザ | Workers / BFF | Firebase Session Cookie |
-| Workers / BFF | Firestore | BFF のサービス資格情報 |
-| Workers / BFF | Cloudflare Queues | Workers binding |
+| ブラウザ | Next.js / BFF | Firebase Session Cookie |
+| Next.js / BFF | フロントエンド用PostgreSQL | フロントエンド専用DBユーザー |
+| Next.js / BFF | Cloudflare Queues | API token |
 | AI・ビルドサーバー | Cloudflare Queues | Queue 操作用 Cloudflare API token |
 | AI・ビルドサーバー | BFF 内部 API | サーバー別 Bearer token |

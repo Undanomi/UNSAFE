@@ -1,5 +1,5 @@
 import { MACHINE_LIST, type MachineSummary } from "@/stores/machine-list"
-import type { MachinesDocument } from "@/types/firestore"
+import type { MachineRecord } from "@/types/postgres"
 
 export type FlagDefinition = {
   kind: "user" | "system"
@@ -8,7 +8,7 @@ export type FlagDefinition = {
 }
 
 export type MachineBuildState = {
-  status: MachinesDocument["status"]
+  status: MachineRecord["status"]
   progress: number
   description?: string
 }
@@ -27,7 +27,7 @@ export type MachineDetail = Pick<
 > & {
   buildProgress?: number
   canRetry?: boolean
-  status?: MachinesDocument["status"]
+  status?: MachineRecord["status"]
   userFlag: FlagDefinition | null
   systemFlag: FlagDefinition | null
 }
