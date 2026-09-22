@@ -119,13 +119,16 @@ class AttackStep(BaseModel):
     cve_title: str | None = Field(default=None, max_length=500)
     cve_description: str | None = Field(default=None, max_length=4000)
     cwe_ids: list[str] = Field(default_factory=list, max_length=30)
-    installation_artifact: Literal[
-        "os_repository_package",
-        "vendor_repository_package",
-        "vendor_release_binary",
-        "other_prebuilt",
-        "source_build",
-    ] | None = None
+    installation_artifact: (
+        Literal[
+            "os_repository_package",
+            "vendor_repository_package",
+            "vendor_release_binary",
+            "other_prebuilt",
+            "source_build",
+        ]
+        | None
+    ) = None
     artifact_source: str | None = Field(default=None, max_length=1000)
     source_build_reason: str | None = Field(default=None, max_length=2000)
     software: str | None = Field(default=None, max_length=200)
@@ -247,9 +250,7 @@ class ScenarioDraft(BaseModel):
         return self
 
 
-def scenario_is_valid_for_machine(
-    machine: MachineInformation, scenario: ScenarioDraft
-) -> bool:
+def scenario_is_valid_for_machine(machine: MachineInformation, scenario: ScenarioDraft) -> bool:
     """Return whether a persisted scenario still matches normalized machine requirements."""
 
     expected = (
@@ -261,9 +262,7 @@ def scenario_is_valid_for_machine(
         for required, value, pattern in expected
     )
     scenario_cves = {
-        step.cve_id: step
-        for step in scenario.attack_graph.steps
-        if step.cve_id is not None
+        step.cve_id: step for step in scenario.attack_graph.steps if step.cve_id is not None
     }
     requested_cves_are_grounded = all(
         cve_id in scenario_cves
@@ -291,9 +290,11 @@ class ScenarioReviewFinding(BaseModel):
     repair_target: Literal[
         "scenario_text",
         "attack_graph",
+        "attack_graph_regeneration",
         "source_code",
         "user_input",
     ] = "scenario_text"
+    repair_fields: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 
@@ -342,6 +343,10 @@ class ScenarioCorrection(BaseModel):
 class SourceReviewFinding(BaseModel):
     step_id: str | None = Field(default=None, max_length=128)
     severity: Literal["error", "warning"]
+    repair_target: Literal[
+        "source_code",
+        "scenario_text",
+    ] = "source_code"
     category: Literal[
         "wrong_technique",
         "unintended_shortcut",
@@ -418,6 +423,7 @@ class SessionState(BaseModel):
         description="Cumulative number of submitted build repair attempts",
     )
     build_repair_attempt_limit: int = Field(default=0, ge=0, exclude=True)
+    repair_failure_report: dict | None = Field(default=None, exclude=True)
     machine_access: MachineAccess | None = None
     artifact: Artifact | None = None
     error_message: str | None = None

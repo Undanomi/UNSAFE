@@ -33,3 +33,28 @@ def test_rejects_patch_outside_contents() -> None:
 
     with pytest.raises(InvalidSourceError, match="unsafe repair path"):
         apply_source_patch(current, patch)
+
+
+def test_rejects_patch_that_rewrites_a_file_with_identical_content() -> None:
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/README.md", content="unchanged")]
+    )
+    patch = SourcePatch(
+        files=[SourceFile(path="contents/README.md", content="unchanged")]
+    )
+
+    with pytest.raises(InvalidSourceError, match="did not make any effective changes"):
+        apply_source_patch(current, patch)
+
+
+def test_rejects_deletion_of_a_missing_file() -> None:
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/README.md", content="unchanged")]
+    )
+    patch = SourcePatch(
+        files=[SourceFile(path="contents/README.md", content="changed")],
+        delete_paths=["contents/missing.txt"],
+    )
+
+    with pytest.raises(InvalidSourceError, match="delete path does not exist"):
+        apply_source_patch(current, patch)

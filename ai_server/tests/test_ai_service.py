@@ -226,6 +226,8 @@ async def test_vm_source_generation_retries_duplicate_embedded_paths() -> None:
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "duplicate generated path: contents/build.sh" in second_prompt
+    assert "受理されなかった前回出力" in second_prompt
+    assert '"path": "contents/build.sh"' in second_prompt
 
 
 @pytest.mark.asyncio
@@ -271,7 +273,9 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "model_output_validation_error" in second_prompt
+    assert "rejected_model_output" in second_prompt
     assert "scenario_manifest.json is not valid JSON" in second_prompt
+    assert "find /tmp -exec test" in second_prompt
 
 
 @pytest.mark.asyncio
@@ -332,6 +336,112 @@ async def test_vm_source_review_uses_independent_structured_verdict() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vm_source_review_reconsiders_failed_repair_validation() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The prior remediation conflicted with source validation.",
+                "findings": [],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/app/index.php", content="<?php echo 'test';")]
+    )
+    reconsideration = {
+        "kind": "source_repair_validation_failure",
+        "previous_review": {"status": "fail"},
+        "validation_failure": {
+            "kind": "source_patch_validation",
+            "error_message": "repair patch did not make any effective changes",
+        },
+        "attempted_patch": '{"files":[]}',
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            machine,
+            scenario,
+            current,
+            reconsideration=reconsideration,
+        )
+
+    assert review.approved is True
+    prompt = requests[0]["contents"][0]["parts"][0]["text"]
+    assert "前回レビューの再検討資料" in prompt
+    assert "source_repair_validation_failure" in prompt
+    assert "did not make any effective changes" in prompt
+    assert "元の指摘が" in prompt
+
+
+@pytest.mark.asyncio
+async def test_vm_source_review_regenerates_invalid_attack_graph_repair_target() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return gemini_response(
+                {
+                    "approved": False,
+                    "summary": "The attack graph allegedly needs to change.",
+                    "findings": [
+                        {
+                            "step_id": "enumerate-web",
+                            "severity": "error",
+                            "repair_target": "attack_graph",
+                            "category": "implementation_mismatch",
+                            "evidence": "The implementation and graph use different labels.",
+                            "remediation": "Change the attack graph.",
+                        }
+                    ],
+                }
+            )
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The graph is immutable and the implementation is consistent.",
+                "findings": [],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/app/index.php", content="<?php echo 'test';")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        ).review_source(machine, scenario, current)
+
+    assert review.approved is True
+    assert len(requests) == 2
+    retry_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    assert "前回の出力は次の理由で受理できませんでした" in retry_prompt
+    assert "repair_target" in retry_prompt
+    assert "attack_graph" in retry_prompt
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    repair_target_schema = schema["$defs"]["SourceReviewFinding"]["properties"]["repair_target"]
+    assert set(repair_target_schema["enum"]) == {"source_code", "scenario_text"}
+
+
+@pytest.mark.asyncio
 async def test_scenario_review_uses_independent_permission_focused_verdict() -> None:
     requests: list[dict] = []
 
@@ -386,6 +496,187 @@ async def test_scenario_review_uses_independent_permission_focused_verdict() -> 
     assert "permission_blocker" in request_prompt
     schema = requests[0]["generationConfig"]["responseJsonSchema"]
     assert "permission_shortcut" in json.dumps(schema)
+
+
+@pytest.mark.asyncio
+async def test_invalid_non_cve_cwe_revision_is_returned_to_reviewer() -> None:
+    requests: list[dict] = []
+    scenario = ScenarioDraft(
+        scenario_id="scenario-sqli",
+        title="SQL injection",
+        definition="# SQL injection scenario",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="exploit-sqli-credentials",
+                    title="Extract credentials with SQL injection",
+                    kind="web_vulnerability",
+                    phase="initial_access",
+                    description="Use SQL injection to recover a training credential.",
+                    implementation_steps=["Provision the vulnerable query."],
+                    references=["https://cwe.mitre.org/data/definitions/89.html"],
+                )
+            ]
+        ),
+    )
+    rejected = ScenarioReview(
+        approved=False,
+        summary="The SQL injection step omits CWE-89.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="exploit-sqli-credentials",
+                severity="error",
+                category="semantic_mismatch",
+                repair_target="attack_graph",
+                repair_fields=["cwe_ids"],
+                evidence=(
+                    "The non-CVE step has cwe_ids=[] while references contains "
+                    "https://cwe.mitre.org/data/definitions/89.html (CWE-89)."
+                ),
+                remediation="Add CWE-89 to cwe_ids.",
+            )
+        ],
+    )
+    invalid_revision = scenario.attack_graph.model_dump(mode="json")
+    invalid_revision["steps"][0]["cwe_ids"] = ["CWE-89"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return gemini_response(invalid_revision)
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The previous CWE finding conflicted with the graph model.",
+                "findings": [],
+            }
+        )
+
+    class Observer:
+        resume_scenario = scenario
+        resume_review = rejected
+
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def __call__(self) -> None:
+            self.attempts += 1
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    observer = Observer()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await GeminiGenerator(
+            Settings(
+                gemini_api_key="test-key",
+                generation_retries=2,
+                scenario_generation_attempts=2,
+            ),
+            client,
+        ).generate_scenario(
+            MachineInformation(
+                name="SQL injection",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            ),
+            on_attempt=observer,
+        )
+
+    assert result == scenario
+    assert observer.attempts == 1
+    assert len(requests) == 2
+    second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    assert "前回レビューの再検討資料" in second_prompt
+    assert "The SQL injection step omits CWE-89" in second_prompt
+    assert "official CVE facts are only valid when kind is cve" in second_prompt
+    assert '"attempted_output"' in second_prompt
+    assert '\\"cwe_ids\\": [' in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_text_patch_is_returned_to_reviewer() -> None:
+    requests: list[dict] = []
+    scenario = ScenarioDraft(
+        scenario_id="scenario-text-patch",
+        title="Text patch",
+        scenario_description="Inspect the machine and recover the flag.",
+        definition="# Scenario\n\nThe existing sentence remains here.",
+        attack_graph=graph_without_objectives(),
+    )
+    rejected = ScenarioReview(
+        approved=False,
+        summary="The negative control is missing.",
+        findings=[
+            ScenarioReviewFinding(
+                severity="error",
+                category="acceptance_test_gap",
+                repair_target="scenario_text",
+                evidence="No negative control is documented.",
+                remediation="Add a negative control to the validation plan.",
+            )
+        ],
+    )
+    invalid_correction = {
+        "scenario_description": None,
+        "definition_replacements": [
+            {
+                "old": "This sentence does not exist in the document.",
+                "new": "This sentence includes a negative control.",
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) <= 2:
+            return gemini_response(invalid_correction)
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The prior text finding cannot be applied as requested.",
+                "findings": [],
+            }
+        )
+
+    class Observer:
+        resume_scenario = scenario
+        resume_review = rejected
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await GeminiGenerator(
+            Settings(
+                gemini_api_key="test-key",
+                generation_retries=2,
+                scenario_generation_attempts=2,
+            ),
+            client,
+        ).generate_scenario(
+            MachineInformation(
+                name="Text patch",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            ),
+            on_attempt=Observer(),
+        )
+
+    assert result == scenario
+    assert len(requests) == 3
+    retry_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    reconsideration_prompt = requests[2]["contents"][0]["parts"][0]["text"]
+    assert 'rejected old="This sentence does not exist' in retry_prompt
+    assert "受理されなかった前回出力" in retry_prompt
+    assert "scenario_correction_validation_failure" in reconsideration_prompt
+    assert "This sentence does not exist" in reconsideration_prompt
+    assert "found 0 occurrences" in reconsideration_prompt
 
 
 @pytest.mark.asyncio
@@ -595,12 +886,11 @@ async def test_attack_graph_revision_repairs_instructions_but_preserves_verified
                 severity="error",
                 category="semantic_mismatch",
                 repair_target="attack_graph",
+                repair_fields=["description", "implementation_steps"],
                 evidence=(
                     "The attack graph implementation_steps says 1.20.1 and return 200 '$var'."
                 ),
-                remediation=(
-                    "Use 1.26.3-3 and the same return 200 configuration as the scenario."
-                ),
+                remediation=("Use 1.26.3-3 and the same return 200 configuration as the scenario."),
             )
         ],
     )
@@ -628,6 +918,168 @@ async def test_attack_graph_revision_repairs_instructions_but_preserves_verified
     assert revised.steps[0].vulnerable_version == original.steps[0].vulnerable_version
     assert revised.steps[0].cve_description == original.steps[0].cve_description
     assert "公式検証済み情報なので変更しない" in prompts[0]
+    assert "モデル制約または上記の変更禁止フィールドと衝突" in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_attack_graph_revision_surfaces_semantic_validation_without_retrying(
+    monkeypatch,
+) -> None:
+    graph = graph_without_objectives()
+    review = ScenarioReview(
+        approved=False,
+        summary="An immutable field must change.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate-web",
+                severity="error",
+                category="semantic_mismatch",
+                repair_target="attack_graph",
+                repair_fields=["cwe_ids"],
+                evidence="The immutable cwe_ids field is allegedly wrong.",
+                remediation="Change cwe_ids.",
+            )
+        ],
+    )
+    invalid_revision = graph.model_dump(mode="json")
+    invalid_revision["steps"][0]["cwe_ids"] = ["CWE-89"]
+    calls = 0
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(Settings(gemini_api_key="test-key"), client)
+
+        async def generate(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            return json.dumps(invalid_revision)
+
+        monkeypatch.setattr(generator, "_generate", generate)
+        with pytest.raises(ValueError, match="revision validation failed"):
+            await generator._revise_attack_graph(
+                MachineInformation(
+                    name="Test",
+                    visibility="private",
+                    theme="Web",
+                    difficulty="Easy",
+                ),
+                graph,
+                review,
+            )
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_attack_graph_revision_retries_output_shape_errors(monkeypatch) -> None:
+    graph = graph_without_objectives()
+    review = ScenarioReview(
+        approved=False,
+        summary="Clarify the step description.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate-web",
+                severity="error",
+                category="semantic_mismatch",
+                repair_target="attack_graph",
+                repair_fields=["description"],
+                evidence="The current description is ambiguous.",
+                remediation="Clarify the description.",
+            )
+        ],
+    )
+    malformed = graph.model_dump(mode="json")
+    del malformed["steps"][0]["title"]
+    corrected = graph.model_dump(mode="json")
+    corrected["steps"][0]["description"] = "Inspect the exposed training service."
+    responses = [malformed, corrected]
+    prompts: list[str] = []
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        )
+
+        async def generate(prompt, **_kwargs):
+            prompts.append(prompt)
+            return json.dumps(responses.pop(0))
+
+        monkeypatch.setattr(generator, "_generate", generate)
+        revised = await generator._revise_attack_graph(
+            MachineInformation(
+                name="Test",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            ),
+            graph,
+            review,
+        )
+
+    assert revised.steps[0].description == "Inspect the exposed training service."
+    assert len(prompts) == 2
+    assert "Field required" in prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_repeated_revision_validation_failure_stops_reconsideration_cycle() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-cycle",
+        title="Cycle test",
+        definition="# Cycle test",
+        attack_graph=graph_without_objectives(),
+    )
+    rejected = ScenarioReview(
+        approved=False,
+        summary="The phase must change.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate-web",
+                severity="error",
+                category="semantic_mismatch",
+                repair_target="attack_graph",
+                repair_fields=["phase"],
+                evidence="The phase is allegedly incorrect.",
+                remediation="Change the immutable phase field.",
+            )
+        ],
+    )
+    invalid_revision = scenario.attack_graph.model_dump(mode="json")
+    invalid_revision["steps"][0]["phase"] = "initial_access"
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) in {1, 3}:
+            return gemini_response(invalid_revision)
+        return gemini_response(rejected.model_dump(mode="json"))
+
+    class Observer:
+        resume_scenario = scenario
+        resume_review = rejected
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+        async def record_failure(self, *_args, **_kwargs) -> None:
+            return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=3), client
+        )
+        with pytest.raises(RuntimeError, match="could not pass attack-graph validation"):
+            await generator.generate_scenario(
+                MachineInformation(
+                    name="Cycle test",
+                    visibility="private",
+                    theme="Web",
+                    difficulty="Easy",
+                ),
+                on_attempt=Observer(),
+            )
+
+    assert len(requests) == 3
 
 
 @pytest.mark.asyncio
@@ -649,6 +1101,7 @@ async def test_resumed_graph_review_revises_graph_before_scenario_text(monkeypat
                 severity="error",
                 category="semantic_mismatch",
                 repair_target="attack_graph",
+                repair_fields=["implementation_steps"],
                 evidence="The attack graph implementation_steps still says Nginx 1.20.1.",
                 remediation="Change that setup instruction to Nginx 1.26.3-3.",
             )
@@ -757,6 +1210,7 @@ def test_graph_revision_routing_uses_repair_target_not_finding_text() -> None:
                 severity="error",
                 category="semantic_mismatch",
                 repair_target="attack_graph",
+                repair_fields=["implementation_steps"],
                 evidence="The recorded setup instruction is stale.",
                 remediation="Correct the structured setup instruction.",
             )
@@ -765,6 +1219,26 @@ def test_graph_revision_routing_uses_repair_target_not_finding_text() -> None:
 
     assert GeminiGenerator._review_requires_graph_revision(prose_only) is False
     assert GeminiGenerator._review_requires_graph_revision(structured_graph_repair) is True
+
+
+def test_structural_graph_review_routes_to_regeneration() -> None:
+    review = ScenarioReview(
+        approved=False,
+        summary="The dependency graph must be rebuilt.",
+        findings=[
+            ScenarioReviewFinding(
+                severity="error",
+                category="semantic_mismatch",
+                repair_target="attack_graph_regeneration",
+                repair_fields=["kind", "requires"],
+                evidence="The current step kind cannot represent the required dependency.",
+                remediation="Regenerate the graph with a valid dependency structure.",
+            )
+        ],
+    )
+
+    assert GeminiGenerator._review_requires_graph_regeneration(review) is True
+    assert GeminiGenerator._review_requires_graph_revision(review) is False
 
 
 @pytest.mark.asyncio
@@ -812,7 +1286,8 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
                             "step_id": "credential-step",
                             "severity": "error",
                             "category": "broken_chain",
-                            "repair_target": "attack_graph",
+                            "repair_target": "attack_graph_regeneration",
+                            "repair_fields": ["requires"],
                             "evidence": "The credential is available without the prerequisite.",
                             "remediation": "Make the prerequisite output necessary.",
                         }
@@ -898,7 +1373,7 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         generator = GeminiGenerator(
-            Settings(gemini_api_key="test-key", scenario_generation_attempts=1),
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=3),
             client,
         )
         with pytest.raises(ScenarioInputRevisionRequiredError) as captured:
@@ -913,6 +1388,7 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
 
     assert captured.value.code == "scenario_input_revision_required"
     assert captured.value.findings[0]["category"] == "unsupported_assumption"
+    assert responses == []
 
 
 @pytest.mark.asyncio
@@ -1198,16 +1674,12 @@ async def test_only_cve_steps_are_enriched_with_external_evidence() -> None:
                     "containers": {
                         "cna": {
                             "title": "Example application vulnerability",
-                            "descriptions": [
-                                {"lang": "en", "value": "Example application issue"}
-                            ],
-                            "problemTypes": [
-                                {"descriptions": [{"cweId": "CWE-79"}]}
-                            ],
+                            "descriptions": [{"lang": "en", "value": "Example application issue"}],
+                            "problemTypes": [{"descriptions": [{"cweId": "CWE-79"}]}],
                             "affected": [{"product": "Example service"}],
                             "references": [],
                         }
-                    }
+                    },
                 },
             )
         if request.url.host == "api.osv.dev":
@@ -1246,9 +1718,7 @@ async def test_only_cve_steps_are_enriched_with_external_evidence() -> None:
 
     assert verified.steps[0].software == "Example service"
     assert verified.steps[0].implementation_steps[0] == "download 1.2.3"
-    assert verified.steps[0].title == (
-        "CVE-2026-1234: Example application vulnerability"
-    )
+    assert verified.steps[0].title == ("CVE-2026-1234: Example application vulnerability")
     assert verified.steps[0].description == "Example application issue"
     assert verified.steps[0].cve_title == "Example application vulnerability"
     assert verified.steps[0].cve_description == "Example application issue"

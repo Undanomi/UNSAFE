@@ -118,8 +118,8 @@ class FakeBuildClient:
         return [
             Artifact(
                 artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
-                artifact_type="tar.zst",
-                file_name="slsg-machine.tar.zst",
+                artifact_type="zip",
+                file_name="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
                 file_size=7,
                 checksum="test-checksum",
             )
@@ -137,7 +137,7 @@ class FakeBuildClient:
         self.download_headers.append((range_header, if_range))
         request = httpx.Request("GET", "http://build.test/artifact")
         headers = {
-            "Content-Type": "application/zstd",
+            "Content-Type": "application/zip",
             "Accept-Ranges": "bytes",
         }
         if range_header == "bytes=2-" and if_range is None:
@@ -164,7 +164,7 @@ def test_distribution_artifact_does_not_fallback_to_qcow2() -> None:
         file_size=4,
         checksum="test-checksum",
     )
-    with pytest.raises(RuntimeError, match=r"without a tar\.zst"):
+    with pytest.raises(RuntimeError, match="without a zip"):
         MachineWorkflow._distribution_artifact([old_artifact])
 
 
@@ -260,7 +260,24 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     completed_state = await app.state.repository.get(session_id)
     assert completed_state.source_generation_attempts == 1
     assert completed_state.source_generation_attempt_limit == 12
-    download_url = completed.json()["download_url"]
+    completed_state.artifact = Artifact(
+        artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
+        artifact_type="tar.zst",
+        file_name="slsg-machine.tar.zst",
+        file_size=9,
+        checksum="legacy-checksum",
+    )
+    await app.state.repository.save(completed_state)
+    refreshed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["artifact"] == {
+        "artifact_id": "3a3c16bd-6d41-49e1-98c3-927138f8a271",
+        "artifact_type": "zip",
+        "file_name": "3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
+        "file_size": 7,
+        "checksum": "test-checksum",
+    }
+    download_url = refreshed.json()["download_url"]
     assert f"/v1/sessions/{session_id}/download?" in download_url
     assert "expires=" in download_url
     assert "signature=" in download_url
@@ -275,9 +292,9 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     download = await http.get(download_url)
     assert download.status_code == 200
     assert download.content == b"archive"
-    assert download.headers["content-type"] == "application/zstd"
+    assert download.headers["content-type"] == "application/zip"
     assert download.headers["content-disposition"] == (
-        'attachment; filename="slsg-machine.tar.zst"'
+        'attachment; filename="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"'
     )
     assert download.headers["content-length"] == "7"
     assert fake_build.download_requests == [
@@ -593,9 +610,7 @@ async def test_repeated_machine_information_starts_a_fresh_generation_cycle(clie
         "needs_user_flag": False,
         "needs_system_flag": False,
     }
-    await http.put(
-        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
-    )
+    await http.put(f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers)
     state = await app.state.repository.get(session_id)
     state.status = SessionStatus.FAILED
     state.scenario_generation_attempts = 5
@@ -632,9 +647,7 @@ async def test_machine_information_change_requires_stale_generation_to_cancel_fi
         "needs_system_flag": False,
         "system_flag_details": "",
     }
-    await http.put(
-        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
-    )
+    await http.put(f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers)
     state = await app.state.repository.get(session_id)
     state.status = SessionStatus.GENERATING_SCENARIO
     state.scenario_generation_attempts = 4
@@ -830,13 +843,12 @@ async def test_scenario_review_feedback_revises_scenario_without_another_code_pa
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
-    repair_calls = 0
+    repair_reports: list[dict] = []
     sync_feedback: list[dict | None] = []
     review_calls = 0
 
-    async def repair(_machine, _scenario, current, _failure_report, _skills=None) -> SourcePatch:
-        nonlocal repair_calls
-        repair_calls += 1
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_reports.append(failure_report)
         readme = next(file for file in current.files if file.path == "contents/README.md")
         return SourcePatch(
             files=[
@@ -848,9 +860,7 @@ async def test_scenario_review_feedback_revises_scenario_without_another_code_pa
             ]
         )
 
-    async def synchronize(
-        _machine, scenario, _current, review_feedback=None
-    ) -> ScenarioRevision:
+    async def synchronize(_machine, scenario, _current, review_feedback=None) -> ScenarioRevision:
         sync_feedback.append(review_feedback)
         return ScenarioRevision(
             scenario_description="Reviewed scenario introduction.",
@@ -893,7 +903,7 @@ async def test_scenario_review_feedback_revises_scenario_without_another_code_pa
         await asyncio.sleep(0.01)
 
     assert fake_build.submitted_request is not None
-    assert repair_calls == 1
+    assert len(repair_reports) == 1
     assert sync_feedback[0] is None
     assert sync_feedback[1]["kind"] == "scenario_sync_review"
     submitted = await app.state.repository.get(state.session_id)
@@ -906,20 +916,17 @@ async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
-    repair_calls = 0
+    repair_reports: list[dict] = []
     feedback_seen: list[dict | None] = []
 
-    async def repair(_machine, _scenario, current, _failure_report, _skills=None) -> SourcePatch:
-        nonlocal repair_calls
-        repair_calls += 1
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_reports.append(failure_report)
         readme = next(file for file in current.files if file.path == "contents/README.md")
         return SourcePatch(
             files=[SourceFile(path=readme.path, content=readme.content + "\nrepair\n")]
         )
 
-    async def synchronize(
-        _machine, scenario, _current, review_feedback=None
-    ) -> ScenarioRevision:
+    async def synchronize(_machine, scenario, _current, review_feedback=None) -> ScenarioRevision:
         feedback_seen.append(review_feedback)
         return ScenarioRevision(
             scenario_description="Still rejected.",
@@ -960,11 +967,24 @@ async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(
         await asyncio.sleep(0.01)
 
     assert current.status == SessionStatus.FAILED
-    assert repair_calls == 1
+    assert len(repair_reports) == 1
     assert len(feedback_seen) == app.state.workflow.source_generation_attempts
     assert feedback_seen[0] is None
     assert all(feedback is not None for feedback in feedback_seen[1:])
     assert fake_build.submitted_request is None
+
+    # Keep the actual failed phase when a user retries. A stale failed build_id must
+    # not relabel a scenario-sync failure as a Packer failure.
+    restarted = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert restarted.status_code == 202
+    for _ in range(100):
+        current = await app.state.repository.get(state.session_id)
+        if len(repair_reports) >= 2 and current.status == SessionStatus.FAILED:
+            break
+        await asyncio.sleep(0.01)
+    assert repair_reports[1]["kind"] == "scenario_sync_review"
 
 
 @pytest.mark.asyncio
@@ -988,9 +1008,7 @@ async def test_cve_scenario_sync_rejection_returns_to_source_repair(client) -> N
             ]
         )
 
-    async def synchronize(
-        _machine, scenario, _current, review_feedback=None
-    ) -> ScenarioRevision:
+    async def synchronize(_machine, scenario, _current, review_feedback=None) -> ScenarioRevision:
         return ScenarioRevision(
             scenario_description=scenario.scenario_description or "Training scenario.",
             definition="Synchronized scenario.",
@@ -1061,9 +1079,7 @@ async def test_invalid_persisted_flag_regenerates_scenario(client) -> None:
         "user_flag_details": "/home/student/user.txt after exploitation",
         "needs_system_flag": False,
     }
-    await http.put(
-        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
-    )
+    await http.put(f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers)
     state = await app.state.repository.get(session_id)
     invalid_id = "scenario-invalid-flag"
     state.scenario = ScenarioDraft(
@@ -1190,17 +1206,13 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
     assert failed.build_repair_attempt_limit == 0
     assert failed.source_generation_attempts == repair_calls
     assert failed.source_generation_attempt_limit == repair_calls
-    assert repair_calls == (
-        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
-    )
+    assert repair_calls == 2
 
     assert fake_build.submitted_requests == []
     status_response = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
     assert status_response.status_code == 200
     await asyncio.sleep(0)
-    assert repair_calls == (
-        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
-    )
+    assert repair_calls == 2
 
 
 @pytest.mark.asyncio
@@ -1220,7 +1232,10 @@ async def test_validation_continues_into_next_build_slot(client) -> None:
                 files=[
                     SourceFile(
                         path="contents/scripts/provision.sh",
-                        content="#!/bin/bash\nset -euo pipefail\necho invalid mode\n",
+                        content=(
+                            "#!/bin/bash\nset -euo pipefail\n"
+                            f"echo invalid mode attempt {repair_calls}\n"
+                        ),
                         mode="0644",
                     )
                 ]
@@ -1254,8 +1269,7 @@ async def test_validation_continues_into_next_build_slot(client) -> None:
     assert submitted.build_repair_attempts == 1
     assert submitted.source_generation_attempts == repair_calls
     assert submitted.source_generation_attempt_limit == (
-        app.state.workflow.build_repair_max_attempts
-        * app.state.workflow.source_generation_attempts
+        app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
     )
 
 
@@ -1310,6 +1324,8 @@ async def test_unsafe_absolute_repair_path_is_retried(client) -> None:
         repair_contexts[1]["error_message"]
         == "unsafe repair path: /var/www/html/sqli_app/index.php"
     )
+    assert repair_contexts[1]["original_trigger"]["kind"] == "packer_build"
+    assert "/var/www/html/sqli_app/index.php" in repair_contexts[1]["rejected_patch"]
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.build_repair_attempts == 1
     assert submitted.build_repair_attempt_limit == 3
@@ -1382,6 +1398,413 @@ async def test_failed_semantic_review_is_repaired_before_build_submission(client
 
 
 @pytest.mark.asyncio
+async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        if len(repair_contexts) == 1:
+            return SourcePatch(
+                files=[
+                    SourceFile(
+                        path=readme.path,
+                        content=readme.content + "\nInitial build repair.\n",
+                        mode=readme.mode,
+                    )
+                ]
+            )
+        if len(repair_contexts) == 2:
+            return SourcePatch(
+                files=[
+                    SourceFile(
+                        path="contents/app/index.php",
+                        content="<?php while ($row = $result->fetch_assoc()) { echo '<td>';",
+                    )
+                ]
+            )
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path="contents/app/index.php",
+                    content=(
+                        "<?php while ($row = $result->fetch_assoc()) { "
+                        "echo '<td>' . htmlspecialchars($row['username']) . '</td>'; } ?>"
+                    ),
+                )
+            ]
+        )
+
+    async def review(*_args, **_kwargs) -> SourceReview:
+        nonlocal review_calls
+        review_calls += 1
+        if review_calls == 1:
+            return SourceReview(
+                approved=False,
+                summary="The SQL injection acceptance test bypasses the web application.",
+                findings=[
+                    SourceReviewFinding(
+                        step_id="web-entry",
+                        severity="error",
+                        category="acceptance_test_gap",
+                        evidence="The test queries the database directly instead of using SQLi.",
+                        remediation="Exercise the vulnerable web route and assert leaked data.",
+                    )
+                ],
+            )
+        if review_calls == 2:
+            return SourceReview(
+                approved=False,
+                summary="The repair left the PHP application incomplete.",
+                findings=[
+                    SourceReviewFinding(
+                        step_id="web-entry",
+                        severity="error",
+                        category="implementation_mismatch",
+                        evidence="contents/app/index.php ends in the middle of result rendering.",
+                        remediation="Complete the PHP result loop and response markup.",
+                    )
+                ],
+            )
+        return SourceReview(approved=True, summary="The repaired application is complete.")
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert review_calls == 3
+    assert repair_contexts[1]["checks"][0]["name"] == ("semantic:acceptance_test_gap:web-entry")
+    assert repair_contexts[2]["checks"][0]["name"] == ("semantic:implementation_mismatch:web-entry")
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        index = archive.read("contents/app/index.php").decode()
+    assert "htmlspecialchars" in index
+
+
+@pytest.mark.asyncio
+async def test_semantic_review_nonprogress_is_returned_to_source_reviewer(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    reconsiderations: list[dict] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + f"\nRepair {len(repair_contexts)}.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def review(
+        _machine,
+        _scenario,
+        _current,
+        _skills=None,
+        reconsideration=None,
+    ) -> SourceReview:
+        nonlocal review_calls
+        review_calls += 1
+        if reconsideration is not None:
+            reconsiderations.append(reconsideration)
+            return SourceReview(
+                approved=True,
+                summary="The persistent finding was based on the wrong installation premise.",
+            )
+        return SourceReview(
+            approved=False,
+            summary="The same installation mismatch remains.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    repair_target="source_code",
+                    category="implementation_mismatch",
+                    evidence="The reviewer still claims the package source is inconsistent.",
+                    remediation="Rewrite the package installation again.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert review_calls == 3
+    assert len(repair_contexts) == 2
+    assert len(reconsiderations) == 1
+    assert reconsiderations[0]["kind"] == "source_semantic_review_nonprogress"
+    assert (
+        reconsiderations[0]["review_before_repair"]["checks"][0]["repair_target"] == "source_code"
+    )
+    assert reconsiderations[0]["source_before_repair"] != reconsiderations[0]["source_after_repair"]
+
+
+@pytest.mark.asyncio
+async def test_persisted_attack_graph_source_review_is_revalidated_not_patched(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    reconsiderations: list[dict] = []
+    state.repair_failure_report = {
+        "kind": "source_semantic_review",
+        "status": "fail",
+        "error_message": "The graph allegedly needs different installation metadata.",
+        "checks": [
+            {
+                "status": "fail",
+                "name": "semantic:implementation_mismatch:web-entry",
+                "repair_target": "attack_graph",
+                "evidence": "The implementation uses Apache from the OS repository.",
+                "remediation": "Change the attack graph installation metadata.",
+            }
+        ],
+    }
+    await app.state.repository.save(state)
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + "\nInitial build repair.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def review(
+        _machine,
+        _scenario,
+        _current,
+        _skills=None,
+        reconsideration=None,
+    ) -> SourceReview:
+        assert reconsideration is not None
+        reconsiderations.append(reconsideration)
+        return SourceReview(
+            approved=True,
+            summary="The requested graph field is not required by the model.",
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert repair_contexts == []
+    assert len(reconsiderations) == 1
+    assert reconsiderations[0]["kind"] == "source_review_revalidation"
+    assert reconsiderations[0]["previous_review"]["checks"][0]["repair_target"] == ("attack_graph")
+
+
+@pytest.mark.asyncio
+async def test_scenario_text_source_review_finding_routes_to_scenario_sync(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    sync_feedback: list[dict | None] = []
+    reconsiderations: list[dict] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + "\nInitial build repair.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def review(*_args, **_kwargs) -> SourceReview:
+        nonlocal review_calls
+        review_calls += 1
+        reconsideration = _kwargs.get("reconsideration")
+        if reconsideration is not None:
+            reconsiderations.append(reconsideration)
+            return SourceReview(
+                approved=True,
+                summary="The synchronized prose already uses MariaDB.",
+            )
+        return SourceReview(
+            approved=False,
+            summary="The prose still names the old service.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    repair_target="scenario_text",
+                    category="implementation_mismatch",
+                    evidence="The implementation uses MariaDB but the prose says MySQL.",
+                    remediation="Update only the scenario prose to MariaDB.",
+                )
+            ],
+        )
+
+    async def synchronize(_machine, scenario, _current, review_feedback=None) -> ScenarioRevision:
+        sync_feedback.append(review_feedback)
+        return ScenarioRevision(
+            scenario_description=scenario.scenario_description or "Training scenario.",
+            definition="The target uses MariaDB.",
+            attack_graph=scenario.attack_graph,
+            summary="Updated only the stale service name in the prose.",
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+    app.state.workflow.generator.synchronize_scenario = synchronize
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert len(repair_contexts) == 1
+    assert review_calls == 3
+    assert sync_feedback[0]["kind"] == "source_semantic_review"
+    assert sync_feedback[0]["checks"][0]["repair_target"] == "scenario_text"
+    assert reconsiderations[0]["kind"] == "source_semantic_review_nonprogress"
+    assert reconsiderations[0]["attempted_change"] == {"kind": "scenario_sync"}
+    submitted = await app.state.repository.get(state.session_id)
+    assert submitted.scenario is not None
+    assert submitted.scenario.definition == "The target uses MariaDB."
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_source_repair_is_returned_to_source_reviewer(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    reconsiderations: list[dict] = []
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        if len(repair_contexts) == 1:
+            return SourcePatch(
+                files=[
+                    SourceFile(
+                        path=readme.path,
+                        content=readme.content + "\nInitial build repair.\n",
+                        mode=readme.mode,
+                    )
+                ]
+            )
+        return SourcePatch(
+            files=[SourceFile(path=readme.path, content=readme.content, mode=readme.mode)]
+        )
+
+    async def review(
+        _machine,
+        _scenario,
+        _current,
+        _skills=None,
+        reconsideration=None,
+    ) -> SourceReview:
+        if reconsideration is not None:
+            reconsiderations.append(reconsideration)
+            return SourceReview(
+                approved=True,
+                summary="The previous remediation cannot produce a valid source change.",
+            )
+        return SourceReview(
+            approved=False,
+            summary="The acceptance test allegedly needs a source change.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    category="acceptance_test_gap",
+                    evidence="The current acceptance test is allegedly insufficient.",
+                    remediation="Rewrite the source without changing its behavior.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert len(repair_contexts) == 3
+    assert repair_contexts[1]["kind"] == "source_semantic_review"
+    assert repair_contexts[2]["kind"] == "source_patch_validation"
+    assert repair_contexts[2]["original_trigger"]["kind"] == "source_semantic_review"
+    assert "did not make any effective changes" in repair_contexts[2]["error_message"]
+    assert len(reconsiderations) == 1
+    assert reconsiderations[0]["previous_review"]["kind"] == "source_semantic_review"
+    assert reconsiderations[0]["validation_failure"]["kind"] == ("source_patch_validation")
+    assert "contents/README.md" in reconsiderations[0]["attempted_patch"]
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        report = json.loads(archive.read("repair_report.json"))
+    failed_attempts = [
+        attempt
+        for attempt in report["attempts"]
+        if attempt.get("validation_status_after") == "fail"
+    ]
+    assert len(failed_attempts) == 2
+    assert report["source_semantic_review"]["status"] == "approved"
+
+
+@pytest.mark.asyncio
 async def test_final_semantic_rejection_is_persisted_when_attempts_are_exhausted(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
@@ -1432,6 +1855,8 @@ async def test_explicit_reaccess_preserves_and_increments_build_repair_count(cli
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
     state.build_repair_attempts = 2
+    state.scenario_sync_attempts = 4
+    state.scenario_sync_attempt_limit = 4
     await app.state.repository.save(state)
 
     restarted = await http.post(
@@ -1440,6 +1865,11 @@ async def test_explicit_reaccess_preserves_and_increments_build_repair_count(cli
     assert restarted.status_code == 202
     assert restarted.json()["status"] == "generating_code"
     assert restarted.json()["build_repair_attempts"] == 2
+    restarted_state = await app.state.repository.get(state.session_id)
+    assert restarted_state.scenario_sync_attempts == 4
+    assert restarted_state.scenario_sync_attempt_limit == (
+        4 + app.state.workflow.scenario_sync_attempts
+    )
 
     for _ in range(100):
         if fake_build.submitted_request is not None:

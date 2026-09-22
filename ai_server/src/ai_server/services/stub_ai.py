@@ -170,6 +170,7 @@ class StubGenerator:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview:
         return ScenarioReview(
             approved=True,
@@ -323,6 +324,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         scenario: ScenarioDraft,
         current: GeneratedSource,
         skills: SkillContext | None = None,
+        reconsideration: dict | None = None,
     ) -> SourceReview:
         return SourceReview(
             approved=True,

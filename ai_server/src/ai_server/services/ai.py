@@ -47,6 +47,8 @@ from .errors import ScenarioInputRevisionRequiredError
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 SCENARIO_DEFINITION_TARGET_CHARS = 10_500
+ATTACK_GRAPH_REVISION_FIELDS = frozenset({"title", "description", "implementation_steps"})
+MAX_REVIEW_RECONSIDERATIONS = 2
 GEMINI_JSON_SCHEMA_KEYS = {
     "$anchor",
     "$defs",
@@ -69,6 +71,24 @@ GEMINI_JSON_SCHEMA_KEYS = {
     "title",
     "type",
 }
+
+
+class _GeneratedArtifactValidationFailure(ValueError):
+    """A generated artifact repeatedly failed deterministic validation."""
+
+    def __init__(self, artifact_kind: str, error: Exception, attempted_output) -> None:
+        self.artifact_kind = artifact_kind
+        self.validation_error = str(error)
+        try:
+            serialized = json.dumps(attempted_output, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            serialized = repr(attempted_output)
+        self.attempted_output = serialized[:12_000]
+        super().__init__(f"{artifact_kind} validation failed: {error}")
+
+
+class _ReviewReconsiderationExhausted(RuntimeError):
+    """The reviewer repeated a repair request that cannot pass validation."""
 
 
 def _gemini_json_schema(value):
@@ -169,6 +189,7 @@ class AIGenerator(Protocol):
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview: ...
 
     async def generate_source(
@@ -201,6 +222,7 @@ class AIGenerator(Protocol):
         scenario: ScenarioDraft,
         current: GeneratedSource,
         skills: SkillContext | None = None,
+        reconsideration: dict | None = None,
     ) -> SourceReview: ...
 
 
@@ -279,14 +301,19 @@ class GeminiGenerator:
             response_schema=AttackGraph,
             max_output_tokens=self.settings.gemini_max_output_tokens,
         )
-        value = json.loads(response)
-        raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
-        raw_graph = self._normalize_attack_graph_payload(raw_graph)
-        graph = AttackGraph.model_validate(raw_graph)
-        self._validate_objectives(machine, graph)
-        for step in graph.steps:
-            if step.kind == "cve":
-                self._validate_cve_id(step.cve_id or "")
+        try:
+            value = json.loads(response)
+            raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
+            raw_graph = self._normalize_attack_graph_payload(raw_graph)
+            graph = AttackGraph.model_validate(raw_graph)
+            self._validate_objectives(machine, graph)
+            for step in graph.steps:
+                if step.kind == "cve":
+                    self._validate_cve_id(step.cve_id or "")
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, ValidationError) as error:
+            raise _GeneratedArtifactValidationFailure(
+                "attack_graph_draft", error, response
+            ) from error
         return AttackGraph(objectives=self._expected_objectives(machine), steps=graph.steps)
 
     @staticmethod
@@ -319,12 +346,14 @@ class GeminiGenerator:
         review: ScenarioReview,
     ) -> AttackGraph:
         last_error: Exception | None = None
+        last_attempted_revision = None
         prompt = attack_graph_revision_prompt(
             machine,
             graph,
             _compact_scenario_review(review),
         )
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -334,10 +363,27 @@ class GeminiGenerator:
                 )
                 value = json.loads(response)
                 raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
-                revised = AttackGraph.model_validate(raw_graph)
-                self._validate_attack_graph_revision(graph, revised)
-                self._validate_objectives(machine, revised)
+                last_attempted_revision = raw_graph
+                try:
+                    revised = AttackGraph.model_validate(raw_graph)
+                except ValidationError as error:
+                    if any(item["type"] == "value_error" for item in error.errors()):
+                        raise _GeneratedArtifactValidationFailure(
+                            "attack_graph_revision", error, raw_graph
+                        ) from error
+                    raise
+                try:
+                    self._validate_attack_graph_revision(graph, revised)
+                    if revised == graph:
+                        raise ValueError("attack graph revision made no change")
+                    self._validate_objectives(machine, revised)
+                except ValueError as error:
+                    raise _GeneratedArtifactValidationFailure(
+                        "attack_graph_revision", error, raw_graph
+                    ) from error
                 return revised
+            except _GeneratedArtifactValidationFailure:
+                raise
             except (
                 httpx.HTTPError,
                 RuntimeError,
@@ -348,7 +394,11 @@ class GeminiGenerator:
                 ValidationError,
             ) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
+        if isinstance(last_error, ValidationError):
+            raise _GeneratedArtifactValidationFailure(
+                "attack_graph_revision", last_error, last_attempted_revision
+            ) from last_error
         raise RuntimeError(f"Could not revise attack graph safely: {last_error}")
 
     async def _parse_or_compact_scenario_generation(
@@ -371,6 +421,7 @@ class GeminiGenerator:
         last_error: Exception | None = None
         prompt = scenario_compaction_prompt(machine, scenario_description, definition)
         for _ in range(self.settings.generation_retries):
+            compacted_response: str | None = None
             try:
                 compacted_response = await self._generate(
                     prompt,
@@ -394,7 +445,11 @@ class GeminiGenerator:
                 ValidationError,
             ) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, compacted_response)
+        if isinstance(last_error, (TypeError, ValueError, ValidationError)):
+            raise _GeneratedArtifactValidationFailure(
+                "scenario_compaction", last_error, compacted_response
+            ) from last_error
         raise ValueError(f"Could not compact scenario definition: {last_error}")
 
     async def _correct_scenario(
@@ -406,6 +461,7 @@ class GeminiGenerator:
         skill_context: str,
     ) -> ScenarioDraft:
         last_error: Exception | None = None
+        last_attempted_correction: str | None = None
         prompt = scenario_correction_prompt(
             machine,
             graph,
@@ -414,6 +470,7 @@ class GeminiGenerator:
             skill_context,
         )
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -421,6 +478,7 @@ class GeminiGenerator:
                     response_schema=ScenarioCorrection,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
+                last_attempted_correction = response
                 correction = ScenarioCorrection.model_validate_json(response)
                 definition = previous.definition
                 for replacement in correction.definition_replacements:
@@ -428,7 +486,8 @@ class GeminiGenerator:
                     if occurrences != 1:
                         raise ValueError(
                             "scenario correction old text must occur exactly once: "
-                            f"found {occurrences} occurrences"
+                            f"found {occurrences} occurrences; rejected old="
+                            + json.dumps(replacement.old[:1_000], ensure_ascii=False)
                         )
                     if replacement.old == definition:
                         raise ValueError("scenario correction must not replace the whole document")
@@ -468,7 +527,11 @@ class GeminiGenerator:
                 ValidationError,
             ) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
+        if isinstance(last_error, (KeyError, TypeError, ValueError, ValidationError)):
+            raise _GeneratedArtifactValidationFailure(
+                "scenario_correction", last_error, last_attempted_correction
+            ) from last_error
         raise ValueError(f"Could not apply scenario review as a minimal patch: {last_error}")
 
     @staticmethod
@@ -481,14 +544,13 @@ class GeminiGenerator:
         if len(revised.steps) != len(original.steps):
             raise ValueError("attack graph revision must not add or remove steps")
 
-        mutable_fields = {"title", "description", "implementation_steps"}
         for original_step, revised_step in zip(original.steps, revised.steps, strict=True):
             original_data = original_step.model_dump(mode="json")
             revised_data = revised_step.model_dump(mode="json")
             changed_immutable = [
                 field_name
                 for field_name, original_value in original_data.items()
-                if field_name not in mutable_fields
+                if field_name not in ATTACK_GRAPH_REVISION_FIELDS
                 and revised_data.get(field_name) != original_value
             ]
             if changed_immutable:
@@ -503,6 +565,64 @@ class GeminiGenerator:
             finding.severity == "error" and finding.repair_target == "attack_graph"
             for finding in review.findings
         )
+
+    @staticmethod
+    def _review_requires_graph_regeneration(review: ScenarioReview) -> bool:
+        return any(
+            finding.severity == "error"
+            and (
+                finding.category == "broken_chain"
+                or finding.repair_target == "attack_graph_regeneration"
+            )
+            for finding in review.findings
+        )
+
+    @staticmethod
+    def _raise_for_user_input(review: ScenarioReview) -> None:
+        findings = [
+            finding.model_dump(mode="json")
+            for finding in review.findings
+            if finding.severity == "error" and finding.repair_target == "user_input"
+        ]
+        if findings:
+            raise ScenarioInputRevisionRequiredError(review.summary, findings)
+
+    async def _reconsider_scenario_review(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        previous_review: ScenarioReview,
+        failure: _GeneratedArtifactValidationFailure,
+        signatures: set[str],
+        on_attempt: Callable[[], Awaitable[None]] | None,
+    ) -> ScenarioReview:
+        signature = json.dumps(
+            {
+                "artifact_kind": failure.artifact_kind,
+                "review": _compact_scenario_review(previous_review),
+                "validation_error": failure.validation_error,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if signature in signatures or len(signatures) >= MAX_REVIEW_RECONSIDERATIONS:
+            raise _ReviewReconsiderationExhausted(
+                "review reconsideration repeated the same invalid repair"
+            ) from failure
+        signatures.add(signature)
+        reconsidered = await self.review_scenario(
+            machine,
+            scenario,
+            reconsideration={
+                "kind": f"{failure.artifact_kind}_validation_failure",
+                "previous_review": _compact_scenario_review(previous_review),
+                "validation_error": failure.validation_error[:4_000],
+                "attempted_output": failure.attempted_output,
+            },
+        )
+        await _record_scenario_draft(on_attempt, scenario, reconsidered)
+        self._raise_for_user_input(reconsidered)
+        return reconsidered
 
     @staticmethod
     def _expected_objectives(machine: MachineInformation) -> list[AttackObjective]:
@@ -781,7 +901,8 @@ JSONのみを返してください:
             previous_scenario.attack_graph if previous_scenario is not None else None
         )
         pending_graph_review: ScenarioReview | None = None
-        terminal_review: ScenarioReview | None = None
+        pending_scenario_review: ScenarioReview | None = None
+        reconsideration_signatures: set[str] = set()
         if graph is not None:
             try:
                 self._validate_objectives(machine, graph)
@@ -795,6 +916,7 @@ JSONのみを返してください:
             previous_review = await self.review_scenario(machine, previous_scenario)
             await _record_scenario_draft(on_attempt, previous_scenario, previous_review)
         if previous_scenario is not None and previous_review is not None:
+            self._raise_for_user_input(previous_review)
             if previous_review.approved:
                 return previous_scenario
             review_report = _compact_scenario_review(previous_review)
@@ -804,11 +926,8 @@ JSONのみを返してください:
             last_error = ValueError(
                 f"scenario semantic review failed: {previous_review.summary}"
             )
-            terminal_review = previous_review
-            if any(
-                finding.severity == "error" and finding.category == "broken_chain"
-                for finding in previous_review.findings
-            ):
+            pending_scenario_review = previous_review
+            if self._review_requires_graph_regeneration(previous_review):
                 graph = None
             elif graph is not None and self._review_requires_graph_revision(previous_review):
                 pending_graph_review = previous_review
@@ -816,7 +935,6 @@ JSONのみを返してください:
             if on_attempt is not None:
                 await on_attempt()
             attempt_phase = "attack_graph_generation"
-            terminal_review = None
             try:
                 if graph is None:
                     candidate = await self._draft_attack_graph(
@@ -826,11 +944,40 @@ JSONのみを返してください:
                     graph = await self._verify_attack_graph(machine, candidate)
                     pending_graph_review = None
                 elif pending_graph_review is not None:
-                    graph = await self._revise_attack_graph(
-                        machine,
-                        graph,
-                        pending_graph_review,
-                    )
+                    try:
+                        graph = await self._revise_attack_graph(
+                            machine,
+                            graph,
+                            pending_graph_review,
+                        )
+                    except _GeneratedArtifactValidationFailure as error:
+                        if previous_scenario is None:
+                            raise
+                        reconsidered = await self._reconsider_scenario_review(
+                            machine,
+                            previous_scenario,
+                            pending_graph_review,
+                            error,
+                            reconsideration_signatures,
+                            on_attempt,
+                        )
+                        if reconsidered.approved:
+                            return previous_scenario
+                        review_report = _compact_scenario_review(reconsidered)
+                        rejected.append(
+                            "scenario_review_reconsideration: "
+                            + json.dumps(review_report, ensure_ascii=False)
+                        )
+                        last_error = error
+                        pending_scenario_review = reconsidered
+                        if self._review_requires_graph_regeneration(reconsidered):
+                            graph = None
+                            pending_graph_review = None
+                        elif self._review_requires_graph_revision(reconsidered):
+                            pending_graph_review = reconsidered
+                        else:
+                            pending_graph_review = None
+                        continue
                     self._validate_skill_cves(graph, resolved_skills, machine)
                     if previous_scenario is not None:
                         previous_scenario = previous_scenario.model_copy(
@@ -855,10 +1002,23 @@ JSONのみを返してください:
                         response_schema=ScenarioGeneration,
                         max_output_tokens=self.settings.gemini_max_output_tokens,
                     )
-                    generated = await self._parse_or_compact_scenario_generation(
-                        machine,
-                        response,
-                    )
+                    try:
+                        generated = await self._parse_or_compact_scenario_generation(
+                            machine,
+                            response,
+                        )
+                    except _GeneratedArtifactValidationFailure:
+                        raise
+                    except (
+                        KeyError,
+                        TypeError,
+                        ValueError,
+                        json.JSONDecodeError,
+                        ValidationError,
+                    ) as error:
+                        raise _GeneratedArtifactValidationFailure(
+                            "scenario_generation", error, response
+                        ) from error
                     scenario = ScenarioDraft(
                         scenario_id=f"scenario-{uuid4().hex}",
                         title=machine.name,
@@ -868,34 +1028,67 @@ JSONのみを返してください:
                         attack_graph=graph,
                     )
                 else:
-                    scenario = await self._correct_scenario(
-                        machine,
-                        graph,
-                        previous_scenario,
-                        rejected,
-                        scenario_skill_context,
-                    )
+                    try:
+                        scenario = await self._correct_scenario(
+                            machine,
+                            graph,
+                            previous_scenario,
+                            rejected,
+                            scenario_skill_context,
+                        )
+                    except _GeneratedArtifactValidationFailure as error:
+                        if pending_scenario_review is None:
+                            raise
+                        reconsidered = await self._reconsider_scenario_review(
+                            machine,
+                            previous_scenario,
+                            pending_scenario_review,
+                            error,
+                            reconsideration_signatures,
+                            on_attempt,
+                        )
+                        if reconsidered.approved:
+                            return previous_scenario
+                        review_report = _compact_scenario_review(reconsidered)
+                        rejected.append(
+                            "scenario_review_reconsideration: "
+                            + json.dumps(review_report, ensure_ascii=False)
+                        )
+                        last_error = error
+                        pending_scenario_review = reconsidered
+                        if self._review_requires_graph_regeneration(reconsidered):
+                            graph = None
+                            pending_graph_review = None
+                        elif self._review_requires_graph_revision(reconsidered):
+                            pending_graph_review = reconsidered
+                        continue
                 previous_scenario = scenario
                 await _record_scenario_draft(on_attempt, scenario)
                 attempt_phase = "scenario_review"
                 review = await self.review_scenario(machine, scenario)
                 await _record_scenario_draft(on_attempt, scenario, review)
+                self._raise_for_user_input(review)
                 if review.approved:
                     return scenario
                 review_report = _compact_scenario_review(review)
                 last_error = ValueError(f"scenario semantic review failed: {review.summary}")
-                terminal_review = review
+                pending_scenario_review = review
                 rejected.append(
                     "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
                 )
-                if any(
-                    finding.severity == "error" and finding.category == "broken_chain"
-                    for finding in review.findings
-                ):
+                if self._review_requires_graph_regeneration(review):
                     graph = None
                     pending_graph_review = None
                 elif self._review_requires_graph_revision(review):
                     pending_graph_review = review
+            except ScenarioInputRevisionRequiredError:
+                raise
+            except _ReviewReconsiderationExhausted as error:
+                await _record_scenario_failure(on_attempt, attempt_phase, error)
+                raise RuntimeError(
+                    "Scenario review repeated a repair that could not pass "
+                    "attack-graph validation"
+                ) from error
             except (
                 httpx.HTTPError,
                 RuntimeError,
@@ -906,21 +1099,8 @@ JSONのみを返してください:
                 ValidationError,
             ) as error:
                 last_error = error
-                terminal_review = None
-                rejected.append(str(error))
+                rejected.append(_generated_artifact_failure_feedback(error))
                 await _record_scenario_failure(on_attempt, attempt_phase, error)
-        if terminal_review is not None and any(
-            finding.severity == "error" and finding.repair_target == "user_input"
-            for finding in terminal_review.findings
-        ):
-            raise ScenarioInputRevisionRequiredError(
-                terminal_review.summary,
-                [
-                    finding.model_dump(mode="json")
-                    for finding in terminal_review.findings
-                    if finding.severity == "error"
-                ],
-            )
         raise RuntimeError(f"Could not generate an approved scenario: {last_error}")
 
     async def review_scenario(
@@ -928,10 +1108,17 @@ JSONのみを返してください:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview:
         last_error: Exception | None = None
-        prompt = scenario_review_prompt(machine, scenario, review_context)
+        prompt = scenario_review_prompt(
+            machine,
+            scenario,
+            review_context,
+            reconsideration,
+        )
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -942,7 +1129,7 @@ JSONのみを返してください:
                 return ScenarioReview.model_validate_json(response)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review scenario: {last_error}")
 
     @staticmethod
@@ -970,6 +1157,7 @@ JSONのみを返してください:
         skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.SOURCE))
         prompt = code_prompt(machine, scenario, skill_context)
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -982,7 +1170,7 @@ JSONのみを返してください:
                 return generated
             except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not generate valid VM source: {last_error}")
 
     async def repair_source(
@@ -997,6 +1185,7 @@ JSONのみを返してください:
         retry_report = failure_report
         skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.REPAIR))
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     repair_prompt(
@@ -1018,6 +1207,7 @@ JSONのみを返してください:
                 retry_report = {
                     **failure_report,
                     "model_output_validation_error": str(error),
+                    "rejected_model_output": response[:12_000] if response else None,
                 }
         raise RuntimeError(f"Could not repair VM source: {last_error}")
 
@@ -1031,6 +1221,7 @@ JSONのみを返してください:
         last_error: Exception | None = None
         prompt = scenario_sync_prompt(machine, scenario, current, review_feedback)
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -1062,7 +1253,7 @@ JSONのみを返してください:
                 return revision
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not synchronize scenario with VM source: {last_error}")
 
     async def review_source(
@@ -1071,11 +1262,19 @@ JSONのみを返してください:
         scenario: ScenarioDraft,
         current: GeneratedSource,
         skills: SkillContext | None = None,
+        reconsideration: dict | None = None,
     ) -> SourceReview:
         last_error: Exception | None = None
         skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.REVIEW))
-        prompt = source_review_prompt(machine, scenario, current, skill_context)
+        prompt = source_review_prompt(
+            machine,
+            scenario,
+            current,
+            skill_context,
+            reconsideration,
+        )
         for _ in range(self.settings.generation_retries):
+            response: str | None = None
             try:
                 response = await self._generate(
                     prompt,
@@ -1086,7 +1285,7 @@ JSONのみを返してください:
                 return SourceReview.model_validate_json(response)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
-                prompt = _prompt_with_rejection(prompt, error)
+                prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review VM source: {last_error}")
 
 
@@ -1106,12 +1305,33 @@ def _validate_generated_file_payload(files: list[SourceFile]) -> None:
             raise TypeError("scenario_manifest.json root must be a JSON object")
 
 
-def _prompt_with_rejection(prompt: str, error: Exception) -> str:
-    return (
-        prompt
-        + "\n\n前回の出力は次の理由で受理できませんでした。同じ誤りを繰り返さず、"
-        + "全体を正しいJSONとして再生成してください:\n"
+def _prompt_with_rejection(
+    prompt: str,
+    error: Exception,
+    attempted_output: str | None = None,
+) -> str:
+    feedback = (
+        "\n\n前回の出力は次の理由で受理できませんでした。同じ誤りを繰り返さず、"
+        "全体を正しいJSONとして再生成してください:\n"
         + str(error)[:2_000]
+    )
+    if attempted_output:
+        feedback += "\n\n受理されなかった前回出力:\n```json\n"
+        feedback += attempted_output[:12_000]
+        feedback += "\n```"
+    return prompt + feedback
+
+
+def _generated_artifact_failure_feedback(error: Exception) -> str:
+    if not isinstance(error, _GeneratedArtifactValidationFailure):
+        return str(error)
+    return json.dumps(
+        {
+            "kind": f"{error.artifact_kind}_validation_failure",
+            "validation_error": error.validation_error[:4_000],
+            "attempted_output": error.attempted_output,
+        },
+        ensure_ascii=False,
     )
 
 
@@ -1124,6 +1344,7 @@ def _compact_scenario_review(review: ScenarioReview) -> dict:
                 "severity": finding.severity,
                 "category": finding.category,
                 "repair_target": finding.repair_target,
+                "repair_fields": finding.repair_fields,
                 "evidence": finding.evidence[:500],
                 "remediation": finding.remediation[:500],
             }

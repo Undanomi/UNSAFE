@@ -9,6 +9,8 @@ from pydantic import ValidationError
 
 from ..models import AttackGraph, MachineInformation, ScenarioDraft, ScenarioReview
 
+SCENARIO_REVIEW_POLICY_VERSION = 4
+
 
 class ScenarioDraftArchive:
     """Persist generated scenario attempts beside their eventual source tree."""
@@ -49,6 +51,9 @@ class ScenarioDraftArchive:
             "title": scenario.title,
             "target_os": scenario.target_os,
             "review_approved": review.approved if review is not None else None,
+            "review_policy_version": (
+                SCENARIO_REVIEW_POLICY_VERSION if review is not None else None
+            ),
             "machine_information_checksum": (
                 self.machine_checksum(machine) if machine is not None else None
             ),
@@ -173,6 +178,8 @@ class ScenarioDraftArchive:
                 ScenarioReview.model_validate(review_value)
                 if isinstance(review_value, dict)
                 and isinstance(review_value.get("approved"), bool)
+                and metadata.get("review_policy_version")
+                == SCENARIO_REVIEW_POLICY_VERSION
                 else None
             )
         except (KeyError, OSError, UnicodeError, json.JSONDecodeError, ValidationError):

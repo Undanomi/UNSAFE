@@ -224,6 +224,9 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "`apache2ctl configtest`" in review_prompt
     assert "implementation_mismatch" in review_prompt
     assert "一律に不合格にはせず" in review_prompt
+    assert '"repair_target":"source_code"' in review_prompt
+    assert "source_code、実装が正しく本文だけが古い場合はscenario_text" in review_prompt
+    assert "存在しないフィールドの" in review_prompt
 
 
 def test_source_prompts_include_persisted_flag_values() -> None:
