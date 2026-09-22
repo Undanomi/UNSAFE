@@ -13,6 +13,8 @@ from starlette.background import BackgroundTask
 from .models import (
     CreateMachineRequest,
     DownloadURLResponse,
+    GuidancePlan,
+    GuidanceRequest,
     MachineInformation,
     SessionResponse,
     SessionState,
@@ -23,7 +25,11 @@ from .repository import SessionRepository
 from .services.download_signing import DownloadSigner, InvalidDownloadSignatureError
 from .services.events import ServerEvent
 from .services.scenarios import ScenarioCoordinator
-from .services.workflow import InvalidSessionStateError, MachineWorkflow
+from .services.workflow import (
+    DISTRIBUTION_ARTIFACT_TYPE,
+    InvalidSessionStateError,
+    MachineWorkflow,
+)
 
 router = APIRouter(prefix="/v1")
 UserHeader = Annotated[str | None, Header(alias="X-Authenticated-User-ID")]
@@ -112,8 +118,7 @@ def _stale_running_phases(
     return (
         state.status == SessionStatus.GENERATING_SCENARIO
         and not scenarios.is_running(state.session_id),
-        state.status in _RUNNING_WORKFLOW_STATUSES
-        and not workflow.is_running(state.session_id),
+        state.status in _RUNNING_WORKFLOW_STATUSES and not workflow.is_running(state.session_id),
     )
 
 
@@ -131,10 +136,11 @@ async def get_session(
     response: Response,
     user_id: UserHeader = None,
 ) -> SessionResponse:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
     state = await _cancel_stale_running_state(request, state)
+    state = await workflow.refresh_distribution_artifact(state)
     response.headers["Cache-Control"] = "private, no-store"
     return _response(request, state)
 
@@ -155,10 +161,15 @@ async def save_machine_information(
             status_code=status.HTTP_409_CONFLICT,
             detail="stopped machine generation was marked as cancelled; update again",
         )
-    if scenarios.is_running(session_id) or workflow.is_running(session_id) or state.status in {
-        SessionStatus.GENERATING_SCENARIO,
-        *_RUNNING_WORKFLOW_STATUSES,
-    }:
+    if (
+        scenarios.is_running(session_id)
+        or workflow.is_running(session_id)
+        or state.status
+        in {
+            SessionStatus.GENERATING_SCENARIO,
+            *_RUNNING_WORKFLOW_STATUSES,
+        }
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="machine generation already started"
         )
@@ -186,6 +197,7 @@ async def save_machine_information(
     state.build_progress = 0
     state.build_repair_attempts = 0
     state.build_repair_attempt_limit = 0
+    state.repair_failure_report = None
     state.machine_access = None
     state.artifact = None
     state.status = SessionStatus.READY
@@ -198,9 +210,10 @@ async def save_machine_information(
 async def skill_selection_report(
     session_id: str, request: Request, user_id: UserHeader = None
 ) -> dict:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
+    state = await workflow.refresh_distribution_artifact(state)
     report = await request.app.state.skills.selection_report(session_id)
     if state.scenario is None:
         report["cve_usage"] = None
@@ -317,6 +330,45 @@ async def create_machine(
 
 
 @router.post(
+    "/sessions/{session_id}/guidance",
+    response_model=GuidancePlan,
+)
+async def create_guidance(
+    session_id: str,
+    body: GuidanceRequest,
+    request: Request,
+    response: Response,
+    user_id: UserHeader = None,
+) -> GuidancePlan:
+    repository, _, workflow = _services(request)
+    state = await repository.get(session_id)
+    _authorize(state, user_id)
+    if (
+        state.status != SessionStatus.COMPLETED
+        or not state.machine_information
+        or not state.scenario
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
+    if not state.source_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="machine source is unavailable"
+        )
+    generated = workflow.source_archive.load(state.source_path)
+    if generated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="machine source is unavailable"
+        )
+    guidance = await workflow.generator.generate_guidance(
+        state.machine_information,
+        state.scenario,
+        generated,
+        body.acquired_flags,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return guidance
+
+
+@router.post(
     "/sessions/{session_id}/download-url",
     response_model=DownloadURLResponse,
 )
@@ -326,11 +378,17 @@ async def create_download_url(
     response: Response,
     user_id: UserHeader = None,
 ) -> DownloadURLResponse:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
+    state = await workflow.refresh_distribution_artifact(state)
     if state.status != SessionStatus.COMPLETED or not state.artifact or not state.build_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
+    if state.artifact.artifact_type != DISTRIBUTION_ARTIFACT_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="zip artifact migration is not complete",
+        )
     download_url, expires_at = _signed_download_url(request, state)
     response.headers["Cache-Control"] = "private, no-store"
     return DownloadURLResponse(download_url=download_url, expires_at=expires_at)
@@ -373,6 +431,13 @@ async def download_machine(
     except InvalidDownloadSignatureError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
 
+    state = await workflow.refresh_distribution_artifact(state)
+    if not state.artifact or state.artifact.artifact_type != DISTRIBUTION_ARTIFACT_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="zip artifact migration is not complete",
+        )
+
     etag = _artifact_etag(state.artifact.checksum)
     upstream_range = range_header
     upstream_if_range = if_range
@@ -403,7 +468,7 @@ async def download_machine(
     return StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "application/zstd"),
+        media_type=upstream.headers.get("content-type", "application/zip"),
         headers=headers,
         background=BackgroundTask(upstream.aclose),
     )

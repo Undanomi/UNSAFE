@@ -2,10 +2,10 @@
 
 このマシンはNATやポート転送を使用しません。QEMUのTAPをKaliと同じL2セグメントへ接続するため、TCP/UDPを問わず、ターゲット上のすべてのポートをKaliから探索できます。
 
-ダウンロードした配布物は、QEMUと`zstd`を導入したLinux上で展開します。
+ダウンロードしたZIP配布物を展開します。
 
 ```sh
-tar --zstd -xf slsg-machine.tar.zst
+unzip ARTIFACT_ID.zip
 cd slsg-machine
 ```
 
@@ -22,7 +22,7 @@ Debianでは次のようにQEMUを導入できます。
 
 ```sh
 sudo apt update
-sudo apt install qemu-system-x86 qemu-utils iproute2 zstd
+sudo apt install qemu-system-x86 qemu-utils iproute2 unzip
 ```
 
 ## TAPを隔離ブリッジへ接続

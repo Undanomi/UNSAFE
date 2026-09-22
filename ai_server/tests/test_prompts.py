@@ -11,12 +11,64 @@ from ai_server.models import (
 from ai_server.prompts import (
     attack_graph_prompt,
     code_prompt,
+    guidance_prompt,
     repair_prompt,
     scenario_prompt,
     scenario_review_prompt,
     scenario_sync_prompt,
     source_review_prompt,
 )
+
+
+def test_guidance_prompt_uses_scenario_source_and_acquired_flags() -> None:
+    machine = MachineInformation(
+        name="Guided Machine",
+        visibility="public",
+        theme="Web",
+        difficulty="Medium",
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-guidance",
+        title="Guided Machine",
+        definition="# Confirmed scenario\nInspect the web service.",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="inspect-web",
+                    title="Inspect web",
+                    kind="reconnaissance",
+                    phase="reconnaissance",
+                    description="Inspect port 8080.",
+                    implementation_steps=["Provision the web service"],
+                )
+            ]
+        ),
+        user_flag="flag{user_0123456789abcdef0123456789abcdef}",
+    )
+    source = GeneratedSource(
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=(
+                    "#!/bin/bash\nprintf 'configured-service'\n"
+                    "printf 'flag{user_0123456789abcdef0123456789abcdef}'\n"
+                ),
+            )
+        ]
+    )
+
+    prompt = guidance_prompt(machine, scenario, source, ["user"])
+
+    assert "取得済みフラグ: user" in prompt
+    assert "inspect-web" in prompt
+    assert "contents/scripts/provision.sh" in prompt
+    assert "configured-service" in prompt
+    assert "flag{user_0123456789abcdef0123456789abcdef}" not in prompt
+    assert "[REDACTED FLAG]" in prompt
+    assert "正解フラグ値" in prompt
+    assert "GitHub Flavored Markdown" in prompt
+    assert "後続項目は画面上で順番に開示" in prompt
+    assert "生のHTMLは使用しない" in prompt
 
 
 def test_all_generation_prompts_include_shared_constraints() -> None:
@@ -224,6 +276,9 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "`apache2ctl configtest`" in review_prompt
     assert "implementation_mismatch" in review_prompt
     assert "一律に不合格にはせず" in review_prompt
+    assert '"repair_target":"source_code"' in review_prompt
+    assert "source_code、実装が正しく本文だけが古い場合はscenario_text" in review_prompt
+    assert "存在しないフィールドの" in review_prompt
 
 
 def test_source_prompts_include_persisted_flag_values() -> None:

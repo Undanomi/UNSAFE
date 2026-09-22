@@ -79,18 +79,15 @@ class AISessionRecord(Base):
         Integer, nullable=False, default=0
     )
     source_generation_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    source_generation_attempt_limit: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    source_generation_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scenario_sync_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    scenario_sync_attempt_limit: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    scenario_sync_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     build_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     build_repair_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     build_repair_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repair_failure_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     machine_access: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     artifact: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     error_message: Mapped[str | None] = mapped_column(Text)

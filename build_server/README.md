@@ -67,11 +67,11 @@ network and the AI server is its sole application-level caller. Users create and
 inspect machines through the AI server API, then download the completed distribution with:
 
 ```sh
-curl -L -o slsg-machine.tar.zst \
+curl -L -OJ \
   http://localhost:8000/v1/sessions/{session_id}/download \
   -H 'X-Authenticated-User-ID: user-123'
 
-tar --zstd -xf slsg-machine.tar.zst
+unzip ARTIFACT_ID.zip
 cd slsg-machine
 ```
 
@@ -110,5 +110,8 @@ customization. It waits for DHCP and writes every global IPv4 address to
 launchers and their platform-specific connection guides are copied from
 `builder/launchers/` beside `image.qcow2`. The worker packages all of these files
 under a top-level `slsg-machine/` directory in the single
-`slsg-machine.tar.zst` distribution artifact, then removes the individual files
+`<artifact_id>.zip` distribution artifact, then removes the individual files
 from the public artifact directory.
+When the worker starts, it also converts registered legacy `tar.zst` artifacts
+to ZIP, keeps the existing artifact ID, updates the stored size and SHA-256,
+and removes the old file only after the metadata update succeeds.

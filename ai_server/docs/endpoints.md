@@ -28,6 +28,7 @@ GET /v1/sessions/{session_id}/download?expires=...&signature=...
 | `PUT` | `/v1/sessions/{session_id}/machine-information` | マシン名や難易度などの生成条件を保存する |
 | `GET` | `/v1/sessions/{session_id}/scenarios/events` | シナリオを生成し、結果をSSEで受信する |
 | `POST` | `/v1/sessions/{session_id}/machines` | VMコード生成とbuild_serverへのビルド依頼を開始する |
+| `POST` | `/v1/sessions/{session_id}/guidance` | シナリオと生成コードからフラグ別の誘導問題を作る |
 | `POST` | `/v1/sessions/{session_id}/download-url` | 一時的な署名付きダウンロードURLを発行する |
 | `GET` | `/v1/sessions/{session_id}/download?expires=...&signature=...` | 完成したマシンイメージをダウンロードする |
 | `GET` | `/v1/health/live` | ai_serverプロセスの生存を確認する |
@@ -282,6 +283,36 @@ validationを使い切っても次のBuild枠が残っていれば停止せず�
 
 ## セッションとビルド状態を取得する
 
+### `POST /v1/sessions/{session_id}/guidance`
+
+ビルド済みマシンの確定シナリオ、攻撃グラフ、実際の生成コードを照合し、誘導問題を生成します。
+フラグ正解値はモデル入力前にマスクし、出力にも含まれていないことを検査します。
+
+```json
+{"acquired_flags":["user"]}
+```
+
+`acquired_flags` は現在のユーザーが取得済みのフラグ種別です。取得済みまたは存在しないフラグを
+対象とする項目は拒否します。各項目の `target_flag` は、その項目群の直後に置くフラグ入力欄を
+表します。
+
+```json
+{
+  "introduction": "各項目を順に調査してください。",
+  "items": [
+    {
+      "target_flag": "system",
+      "title": "権限境界を調べる",
+      "question": "現在の権限で利用できる管理コマンドはありますか？",
+      "hint": "sudo権限やローカルサービス設定を確認してください。"
+    }
+  ]
+}
+```
+
+このAPI自体は結果を保存しません。BFFがユーザーとマシンの組み合わせごとに保存し、明示的な
+再生成操作までは同じ内容を返します。未完成のマシンや生成ソースがない場合は `409` です。
+
 ### `GET /v1/sessions/{session_id}`
 
 画面の再読み込み、進捗ポーリング、エラー表示に使う状態取得エンドポイントです。
@@ -294,8 +325,8 @@ curl http://localhost:8000/v1/sessions/{session_id} \
   -H 'X-Authenticated-User-ID: user-123'
 ```
 
-build_serverの状態が `completed` になると、ai_serverは成果物一覧から`tar.zst`形式の配布物を
-ダウンロード対象に選びます。`tar.zst`がなければ旧形式へフォールバックせずエラーになります。
+build_serverの状態が `completed` になると、ai_serverは成果物一覧から`zip`形式の配布物を
+ダウンロード対象に選びます。`zip`がなければ旧形式へフォールバックせずエラーになります。
 選択後、セッション状態が `completed` となり、一時的な署名付き`download_url`
 が設定されます。build_serverが返したランダムなマシンパスワードも `machine_access` として
 同じセッションへ保存されます。変更前に完了したビルドなど、パスワード情報がない場合は
@@ -331,7 +362,7 @@ build_serverの内部URLを利用者へ公開せず、選択済み成果物をai
 署名はsession ID、build ID、artifact ID、失効時刻に結び付いており、改変または期限切れの場合は
 `403 Forbidden`を返します。build_serverのポートはホストへ公開しないため、利用者はこの
 AIサーバのエンドポイントを使用します。
-レスポンスは `application/zstd` で、ファイル名は
+レスポンスは `application/zip` で、ファイル名は `<artifact_id>.zip` として
 `Content-Disposition` ヘッダーに設定されます。成果物メタデータにファイルサイズがある場合は
 `Content-Length` も返します。`Range`を指定すると`206 Partial Content`と`Content-Range`を返し、
 範囲外の場合は`416 Range Not Satisfiable`を返します。SHA256チェックサムを`ETag`として返し、
@@ -341,14 +372,14 @@ AIサーバのエンドポイントを使用します。
 DOWNLOAD_URL=$(curl -s -X POST \
   http://localhost:8000/v1/sessions/{session_id}/download-url \
   -H 'X-Authenticated-User-ID: user-123' | jq -r .download_url)
-curl -L -C - -o slsg-machine.tar.zst "$DOWNLOAD_URL"
+curl -L -C - -OJ "$DOWNLOAD_URL"
 ```
 
 配布物には`image.qcow2`、Windows/macOS/Linux用起動スクリプト、各OS用READMEが含まれます。
 Linuxでは次のように展開できます。
 
 ```sh
-tar --zstd -xf slsg-machine.tar.zst
+unzip ARTIFACT_ID.zip
 cd slsg-machine
 ```
 

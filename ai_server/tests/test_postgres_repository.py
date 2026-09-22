@@ -114,13 +114,18 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted.build_progress = 100
         persisted.build_repair_attempts = 2
         persisted.build_repair_attempt_limit = 5
+        persisted.repair_failure_report = {
+            "kind": "scenario_sync_review",
+            "status": "fail",
+            "error_message": "scenario and source differ",
+        }
         persisted.machine_access = MachineAccess(
             username="provisioner", password="generated-password"
         )
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
-            artifact_type="tar.zst",
-            file_name="slsg-machine.tar.zst",
+            artifact_type="zip",
+            file_name="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
             file_size=4,
             checksum="checksum",
         )
@@ -133,11 +138,16 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         assert completed.source_generation_attempt_limit == 12
         assert completed.build_repair_attempts == 2
         assert completed.build_repair_attempt_limit == 5
+        assert completed.repair_failure_report == {
+            "kind": "scenario_sync_review",
+            "status": "fail",
+            "error_message": "scenario and source differ",
+        }
         assert completed.machine_access == MachineAccess(
             username="provisioner", password="generated-password"
         )
         assert completed.artifact is not None
-        assert completed.artifact.file_name == "slsg-machine.tar.zst"
+        assert completed.artifact.file_name == "3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"
         async with repository.session_factory() as session:
             generation_jobs = await session.scalar(
                 text("SELECT to_regclass('public.generation_jobs')")
