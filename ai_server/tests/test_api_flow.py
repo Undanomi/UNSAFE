@@ -1201,8 +1201,8 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
         return SourcePatch(
             files=[
                 SourceFile(
-                    path="contents/scripts/provision.sh",
-                    content="#!/bin/bash\nset -euo pipefail\necho invalid mode\n",
+                    path="contents/scenario_manifest.json",
+                    content="{}",
                     mode="0644",
                 )
             ]
@@ -1250,11 +1250,8 @@ async def test_validation_continues_into_next_build_slot(client) -> None:
             return SourcePatch(
                 files=[
                     SourceFile(
-                        path="contents/scripts/provision.sh",
-                        content=(
-                            "#!/bin/bash\nset -euo pipefail\n"
-                            f"echo invalid mode attempt {repair_calls}\n"
-                        ),
+                        path="contents/scenario_manifest.json",
+                        content=json.dumps({"attempt": repair_calls}),
                         mode="0644",
                     )
                 ]

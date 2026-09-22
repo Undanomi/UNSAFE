@@ -280,19 +280,23 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         )
         manifest = json.dumps(
             {
-                "title": machine.name,
-                "difficulty": machine.difficulty,
                 "target_os": machine.operating_system,
                 "required_files": [
                     "contents/README.md",
                     "contents/scenario_manifest.json",
                     "contents/build.sh",
                     "contents/scripts/provision.sh",
+                    "contents/scripts/verify.sh",
                 ],
-                "services": [{"name": "ssh", "port": 22}],
+                "services": [{"name": "ssh", "protocol": "tcp", "port": 22}],
                 "acceptance_tests": acceptance_tests,
                 "expected_vulnerabilities": [
-                    {"name": "local demonstration setting"},
+                    {
+                        "name": "local demonstration setting",
+                        "description": (
+                            "The generated training service intentionally exposes the attack path."
+                        ),
+                    },
                     *[
                         {
                             "cve_id": step.cve_id,

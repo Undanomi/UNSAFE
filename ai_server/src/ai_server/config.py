@@ -56,6 +56,10 @@ class Settings(RuntimeLimitSettings):
     gemini_model: str = "gemini-2.5-flash"
     github_token: str | None = None
 
+    rockyou_path: Path = Path("/app/data/rockyou.txt")
+    rockyou_min_line: int = Field(default=100_000, ge=1)
+    rockyou_max_line: int = Field(default=200_000, ge=1)
+
     build_server_url: str = "http://localhost:8080"
     build_server_token: SecretStr = Field(min_length=32)
     download_signing_secret: SecretStr = SecretStr(
@@ -68,6 +72,8 @@ class Settings(RuntimeLimitSettings):
     def validate_download_signing_settings(self) -> Settings:
         if len(self.download_signing_secret.get_secret_value()) < 32:
             raise ValueError("DOWNLOAD_SIGNING_SECRET must contain at least 32 characters")
+        if self.rockyou_min_line > self.rockyou_max_line:
+            raise ValueError("ROCKYOU_MIN_LINE must not exceed ROCKYOU_MAX_LINE")
         return self
 
 

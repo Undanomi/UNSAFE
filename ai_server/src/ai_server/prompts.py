@@ -2,9 +2,73 @@ from __future__ import annotations
 
 import json
 
-from .models import AttackGraph, GeneratedSource, MachineInformation, ScenarioDraft
+from .models import (
+    ROCKYOU_PASSWORD_PLACEHOLDER,
+    AttackGraph,
+    GeneratedSource,
+    MachineInformation,
+    ScenarioDraft,
+)
+from .scenario_manifest import scenario_manifest_json_schema
 
 GUIDANCE_SOURCE_MAX_CHARS = 40_000
+
+SCENARIO_MANIFEST_CONSTRAINTS = f"""scenario_manifest.jsonのJSON Schema:
+```json
+{scenario_manifest_json_schema()}
+```
+- 上記JSON Schemaを厳密に満たし、定義されていないプロパティを追加しない
+- `objectives`は攻撃グラフに目標がない場合だけ空配列にする。それ以外の配列は空にしない
+- `services`は外部またはローカルで待受するネットワークサービスだけを記載する。各要素の`name`は
+  空でない文字列、`port`は1〜65535の整数、`protocol`は`http`、`https`、`tcp`、`udp`のいずれかにする
+- `required_files`の各要素は`contents/`から始まる生成ファイルのパス文字列にする
+- `acceptance_tests`と`health_checks`の各要素は、空でない`command`を持つobjectにする
+- `expected_vulnerabilities`には実装した脆弱性を最低1件記載する。CVEでない脆弱性は空でない
+  `name`と`description`を持つobjectにする。`"training-only"`のような文字列だけの要素は禁止する
+- CVEの要素は上記の`name`形式ではなく、`cve_id`、`official_title`、`description`、`references`、
+  `installation_artifact`、`artifact_source`、`source_build_reason`を持つobjectにする
+- `attack_steps`と`objectives`は検証済み攻撃グラフから値を変更せず転記する
+"""
+
+
+def attack_graph_json_for_ai(graph: AttackGraph, *, indent: int | None = 2) -> str:
+    """Serialize a graph without revealing late-bound password material to the model."""
+    value = graph.model_dump(mode="json")
+    for step in value["steps"]:
+        spec = step.get("password_cracking")
+        if spec is None:
+            continue
+        spec["password"] = ROCKYOU_PASSWORD_PLACEHOLDER
+        spec["line_number"] = None
+        spec["search_space_lines"] = None
+    return json.dumps(value, ensure_ascii=False, indent=indent)
+
+
+def _redact_passwords(text: str, graph: AttackGraph) -> str:
+    for step in graph.steps:
+        spec = step.password_cracking
+        if spec is not None and spec.password is not None:
+            text = text.replace(spec.password, ROCKYOU_PASSWORD_PLACEHOLDER)
+    return text
+
+
+def source_json_for_ai(current: GeneratedSource, scenario: ScenarioDraft) -> str:
+    """Redact a materialized password before review, repair, or synchronization."""
+    value = current.model_dump(mode="json")
+    for source_file in value["files"]:
+        source_file["content"] = _redact_passwords(
+            source_file["content"], scenario.attack_graph
+        )
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _scenario_secrets(scenario: ScenarioDraft) -> tuple[str | None, ...]:
+    passwords = tuple(
+        spec.password
+        for step in scenario.attack_graph.steps
+        if (spec := step.password_cracking) is not None
+    )
+    return (scenario.user_flag, scenario.system_flag, *passwords)
 
 
 def _guidance_source(current: GeneratedSource, secrets: tuple[str | None, ...]) -> str:
@@ -12,6 +76,7 @@ def _guidance_source(current: GeneratedSource, secrets: tuple[str | None, ...]) 
         "scenario_manifest.json",
         "README",
         "provision",
+        "verify",
         "build.sh",
         "sudoers",
         "systemd",
@@ -59,17 +124,17 @@ def guidance_prompt(
 
 攻撃グラフ:
 ```json
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
 シナリオ設計書:
 ```markdown
-{scenario.definition}
+{_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
 
 生成コード（関連度順、最大{GUIDANCE_SOURCE_MAX_CHARS}文字）:
 ```
-{_guidance_source(current, (scenario.user_flag, scenario.system_flag))}
+{_guidance_source(current, _scenario_secrets(scenario))}
 ```
 
 JSONだけを返してください。形式:
@@ -100,15 +165,30 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - rockyou.txtはハッシュの一覧ではなく、攻撃者が自分のマシンで辞書攻撃に使う平文パスワード候補の
   wordlistである。ターゲットVMへインストールする教材コンポーネントや、ハッシュの保存先として
   扱わない
-- 攻略経路にハッシュクラックを含める場合、平文パスワードは標準的なrockyou.txtに
-  変形なしで完全一致するエントリから選ぶ
+- 攻略経路にハッシュクラックを含める場合、AIは実際の平文パスワードを選択・推測しない。
+  password、line_number、search_space_linesはnullのまま設計し、最初のソース生成が終わった後に
+  サーバーがrockyou.txtから選択して構造化フィールドへ確定する
+- 該当ステップはkindを`password_cracking`にし、password_cracking objectへハッシュ方式、実装の
+  hash_runtimeとhash_api、Hashcat modeまたはJohn format、120〜180秒のtarget_crack_secondsを
+  構造化して記録する
 - 攻略者がrockyou.txtだけを指定した辞書攻撃で発見できるようにし、追加辞書、ルール、
   マスク攻撃、総当たり、外部サービスを必須にしない
-- 一般的な開発用PC上のHashcatまたはJohn the Ripperで、適切な形式を指定した辞書攻撃を
-  開始してから約3分以内にクラックできるハッシュ方式と平文を使う
-- 内部用の攻撃グラフとシナリオ仕様書には、選んだ平文パスワード、完全なハッシュ、
-  ハッシュ方式、HashcatのモードまたはJohnの形式、再現用コマンドを明確に記載する
-- 実装する認証情報は仕様書に記載した値と完全に一致させ、受け入れテストでも検証できるようにする
+- サーバーが後から確定するline_numberとsearch_space_linesを探索量の根拠にできるよう、一般的な
+  開発用PC上のHashcatまたはJohn the Ripperで約2〜3分となる現実的なハッシュ方式とwork factorを
+  選ぶ。極端に高速または低速な方式を選ばない
+- ソース内で平文が必要な箇所には必ずリテラル`__SLSG_ROCKYOU_PASSWORD__`だけを使用する。
+  別の平文を推測・創作せず、この値を最終ダイジェスト、seed済みハッシュ、期待ハッシュとして扱わない
+- SQLへ格納する値は、プロビジョニング時に`__SLSG_ROCKYOU_PASSWORD__`を入力として対象
+  アプリのハッシュ生成APIを実行した結果にする。固定ダイジェストを設計書、README、manifest、SQL、
+  アプリ設定、provision scriptへ例示・seed・期待値として埋め込まない
+- 実際に格納するハッシュ値は、原則としてcontents/scripts/provision.shの実行中に、対象実装と
+  同じランタイムおよび同じハッシュAPIから生成する。PHPアプリならそのPHP実装の`password_hash`等、
+  PythonアプリならそのPython実装が検証に使うライブラリまたはヘルパーを実行し、別言語の近似実装、
+  shell上の別アルゴリズム、AIが予測したダイジェストを埋め込まない
+- saltを使う方式ではプロビジョニング時に正規APIへsalt生成も任せる。受け入れテストは固定ハッシュの
+  文字列一致ではなく、対象アプリと同じ検証APIで選択済み平文が成功し、誤った平文が失敗すること、
+  さらに実際の認証入口で選択済み平文だけが通ることを確認する
+- 実装する認証情報はサーバーが後から確定する値と一致させ、受け入れテストでも検証できるようにする
 - 通常、rockyou.txtの用意とHashcatまたはJohnの実行は攻撃者側の準備・操作として扱う。
   「選んだ平文がrockyou.txtに含まれる」という要件だけを理由に、ターゲットVMへ辞書を導入したり、
   VMビルド中にクラックを実行したりする必要はない
@@ -150,16 +230,17 @@ DEPLOYMENT_VERIFICATION_CONSTRAINTS = """デプロイ結果の共通検証制約
   別サービスの応答ではないことを否定確認する
 - HTTP以外でも単なる接続成功ではなく、対象プロトコルの応答、バナー、認証、データ取得など
   攻略経路に必要な観測可能な挙動を検証する
-- 肯定確認と否定確認を、失敗時に非ゼロ終了するコマンドとしてbuild.shおよび
-  scenario_manifest.jsonのhealth_checksとacceptance_testsへ記載する
+- 肯定確認と否定確認を、失敗時に非ゼロ終了する独立したコマンドとしてscenario_manifest.jsonの
+  health_checksとacceptance_testsへ記載する。サーバーが全コマンドからscripts/verify.shを生成する
 """
 
 SYNTAX_VALIDATION_CONSTRAINTS = """構文・設定ファイル検査の共通制約:
 - 使用する言語、スクリプト、設定ファイルに公式または標準的な構文検査・設定検査コマンドがある場合、
   検査可能なものを省略せず、生成した全対象ファイルへ実行する。目視確認やファイル存在確認だけで
   構文が正しいと判断しない
-- 検査は対象ランタイムやソフトウェアをインストールし、ファイルを最終配置した後に実行する。
-  build.shまたはprovision.shを`set -euo pipefail`で実行し、検査失敗を無視せずビルドを非ゼロ終了させる
+- 検査は対象ランタイムやソフトウェアをインストールし、ファイルを最終配置した後に実行できる
+  独立したコマンドとしてmanifestへ記載する。サーバー生成のscripts/verify.shが各コマンドを
+  `bash -o pipefail -c`で実行し、失敗を無視せずビルドを非ゼロ終了させる
 - 例として、PHPは`php -l`、Bash/shは`bash -n`または`sh -n`、Pythonは
   `python3 -m py_compile`、Node.jsのJavaScriptは`node --check`、Rubyは`ruby -c`、Perlは`perl -c`を使う
 - 構文検査が対象コードを認識せず単なるテキストとして扱う偽陰性も防ぐ。特にPHPは`php -l`に加え、
@@ -190,7 +271,7 @@ WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッシ
 - 攻撃グラフがディレクトリリスティングを攻略要素として明示している場合に限り、Apacheの
   `Options Indexes`やNginxの`autoindex on`などを必要なパスへ限定して構成する。公開する項目と
   そこから得られる成果物をシナリオに一致させ、別パスや不要なファイルまで露出させない
-- build.shから実行されるシェルとmanifestのhealth_checks/acceptance_testsの両方で、Hostを
+- manifestのhealth_checks/acceptance_testsで、Hostを
   上書きせず`curl -fsSL http://127.0.0.1/`相当を実行し、アプリ固有マーカーを肯定確認する。
   ディレクトリリスティングを意図する場合は必要なパスと項目を肯定確認し、意図しない場合は
   `Index of`やWebサーバー既定ページが含まれないことを否定確認する
@@ -205,8 +286,8 @@ WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッシ
   `test -x`を実行する。`namei -l`または`stat`でも所有者・mode・親ディレクトリを検査する。
   `stat`だけでは実効アクセスの検証にならない。例えばWebユーザーが`www-data`で公開ファイルが
   `/var/www/html/index.php`なら、`namei -l /var/www/html/index.php`と
-  `runuser -u www-data -- test -r /var/www/html/index.php`の両方を、build.shから実行されるシェルと
-  scenario_manifest.jsonのhealth_checksまたはacceptance_testsへそれぞれ入れる
+  `runuser -u www-data -- test -r /var/www/html/index.php`の両方を、scenario_manifest.jsonの
+  health_checksまたはacceptance_testsへそれぞれ入れる
 - アップロード、cache、sessionなど攻略上必要な場所だけを書き込み可能にし、DocumentRoot全体への
   `chmod -R 777`、無差別な所有者変更、world-writable化で権限問題を回避しない
 """
@@ -253,16 +334,17 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
 """
 
-DESIGN_CONSTRAINTS = """設計段階の共通制約（詳細な実装規則やコマンドを本文へ転載しない）:
+DESIGN_CONSTRAINTS = """設計段階の共通制約:
 - 攻撃経路はテーマと難易度を満たす必要最小限のステップにし、各requiresの成果物を後段で実際に使う。
   benign control、exploit固有の成功、negative control、前提なしでは失敗することを検証計画に含める
 - WebはIPアドレスの`/`から意図した入口へ到達でき、既定ページや意図しない一覧・近道を公開しない
-- 各段階の実効ユーザーと、重要なファイルおよび全親ディレクトリのowner/group/modeを定義する。
-  必要な読み取り・書き込み・探索・実行を許可しつつ、攻略前の主体へ成果物を公開しない
+- 各段階の実効ユーザー、重要ファイルと全親ディレクトリのowner/group/modeを定義し、
+  攻略前の主体へ成果物を公開しない
 - flagは指定パスだけへ配置し、攻略後の主体だけが読める権限と、攻略前後の可読性検証を計画する
-- ハッシュクラックを使う場合、rockyou.txtは平文wordlistで通常は攻撃者側で使うものと理解し、
-  完全なハッシュ、方式、モード、短時間で得られる収録済み平文を一貫させる。ターゲット側で辞書を
-  使う合理的な理由があれば許可するが、不要な導入や未検証URLへの依存は避ける
+- ハッシュクラック: rockyou.txtは平文wordlistで通常は攻撃者側で使う。kindは
+  `password_cracking`とし、password、line_number、search_space_linesはソース生成後のサーバー選択
+  までnullにする。方式・mode/format・120〜180秒を記録し、固定ハッシュは設計書へ書かず、
+  provision時に対象アプリと同じAPIで生成する
 - 使用する言語とソフトウェアに応じ、標準的な構文・設定検査と実行時検査を計画する。ここでは
   検査対象と目的だけを簡潔に示し、完全なスクリプトや全コマンドはコード生成段階へ委ねる
 """
@@ -275,16 +357,10 @@ REVIEW_RESPONSE_CONSTRAINTS = """レビュー出力は簡潔にする。同じ�
 
 def _skill_section(skill_context: str) -> str:
     policy = (
-        "脆弱性選択方針: Skillsとreferenceは補助資料であり、利用可能な脆弱性の許可リストではありません。"
-        "利用者のテーマ、難易度、開始権限、到達目標に合う場合、未登録の一般的脆弱性やCVEも利用できます。"
-        "資料がなければ、その不在だけを理由に別の手法へ変更しないでください。"
-        "資料内の『未登録CVEは禁止』『reference追加後のみ利用可』など収録範囲に関する制限より、"
-        "この選択方針を優先します。ただしCVEの実在、影響版、必要条件、Debian適合性を推測で断定せず、"
-        "公式情報による検証と既存の安全・出力・検証規則を維持してください。"
-        "Webのみを希望する場合にローカルの脆弱性を勝手に加えず、権限昇格を希望する場合は"
-        "先行ステップで得た権限と後続の必要条件を接続してください。"
-        "シナリオ確定後のコード生成・修復・レビューでは採用済み攻撃グラフを維持し、"
-        "未登録手法の許可を理由に新しい攻撃経路やCVEを追加しないでください。"
+        "脆弱性選択方針: Skills/referenceは補助であり許可リストではありません。要件に合う未登録手法や"
+        "CVEも利用でき、資料内の登録限定より本方針を優先します。CVEの実在、影響版、条件、Debian適合性は"
+        "公式情報による検証を行います。Web限定ならローカル脆弱性を加えず、権限昇格は先行成果へ接続します。"
+        "シナリオ確定後は攻撃グラフを維持し、新しい経路やCVEを追加しません。"
     )
     if not skill_context:
         return policy
@@ -357,15 +433,17 @@ JSONのみを返してください:
       "compatibility_reason": null,
       "installation_method": "provisioning script",
       "implementation_steps": ["教材環境へ再現可能な状態を実装する具体的手順"],
-      "references": []
+      "references": [],
+      "password_cracking": null
     }}
   ]
 }}
 
 規則:
 - stepsは1〜30件で、step_idは英小文字から始まる英数字・ハイフン・アンダースコアだけを使う
-- kindの推奨値はreconnaissance、cve、web_vulnerability、misconfiguration、credential、
-  logic_flaw、weak_cryptography、custom。必要なら新しい値も使用できる
+- kindはreconnaissance、cve、web_vulnerability、misconfiguration、credential、
+  password_cracking、logic_flaw、weak_cryptography、custom等を使う。rockyou.txtによる
+  パスワードハッシュ辞書攻撃はpassword_crackingに限定する
 - phaseの推奨値はreconnaissance、initial_access、post_exploitation、lateral_movement、
   privilege_escalation、objective
 - requiresには前提となるstep_idを指定し、循環参照を作らない
@@ -373,7 +451,12 @@ JSONのみを返してください:
 - 非CVEステップではcve_id、cve_title、cve_description、installation_artifact、
   artifact_source、source_build_reasonをnull、cwe_idsを空配列にする。脆弱版ソフトウェアの導入情報は
   対応するkind=cveのステップへ記載し、reconnaissanceやセットアップ用ステップへ重複させない
-- 各ステップのimplementation_stepsに、VMへ意図的な教材状態を構築する具体的手順を含める
+- password_crackingは同名kindだけに設定する。wordlistはrockyou.txt、password、line_number、
+  search_space_linesはnullとし、残りはhash_algorithm、hashcat_modeまたはjohn_format、hash_runtime、
+  hash_api、target_crack_seconds（120〜180）とする。秘密値はソース生成後にサーバーが設定する
+- 各ステップのdescriptionには攻撃者の操作と得られる成果物を記載し、implementation_stepsには
+  その攻撃を可能にするVM側のプロビジョニング手順だけを記載する。Nmap、curl、SSH、exploit
+  payload、flag読取りなど攻撃者が実行する操作をimplementation_stepsへ入れない
 - 実環境を攻撃する手順ではなく、隔離された演習VMで再現できる構成にする
 - ステップ数は攻略に必要な最小限にし、descriptionは1〜3文、implementation_stepsは2〜8個の
   短い手順にする。完成したソースコード、長いシェル、SQL全文、共通制約を値へ転載しない
@@ -413,7 +496,7 @@ def scenario_prompt(
 
 前回のシナリオ設計書:
 ```markdown
-{previous_scenario.definition}
+{_redact_passwords(previous_scenario.definition, previous_scenario.attack_graph)}
 ```
 """
     return f"""あなたはHack The Box風の教育用Linuxマシンを設計するアーキテクトです。
@@ -465,6 +548,15 @@ definitionには必ず次の章をこの順で含めてください。
 記載してください。CVEステップではCVE-ID、対象コンポーネント、脆弱な厳密バージョン、
 対象OSとの適合根拠、入手元とリファレンスも記載してください。攻撃グラフの情報を省略せず、
 存在しないURLを追加しないでください。
+- `## 4. 攻撃グラフ`では、攻撃グラフの各stepを同じ順序でちょうど1回ずつ扱い、見出しまたは表に
+  正確なstep_idとtitleをそのまま記載する。stepを別IDへ改名したり、複数stepへ分割・統合したり、
+  設計書だけの追加stepを作らない。細かな調査操作は同じstep内の箇条書きとして扱う
+- password_crackingのhash_algorithm、hash_runtime、hash_api、hashcat_mode、john_format、
+  target_crack_secondsは攻撃グラフの値をそのまま使い、別方式へ読み替えない。password、line_number、
+  search_space_linesが未確定なら、設計書でもサーバーによるソース生成後の確定として扱う
+- installation_artifact、artifact_source、source_build_reasonはkind=cveの配布物追跡用フィールドであり、
+  自作するシナリオ用PHP等を「source_build」と呼ばない。自作アプリはcontents/appへ生成する実装として
+  記載し、非CVE stepへCVE専用フィールドを要求しない
 - CVEステップのcve_title、cve_description、cwe_idsは公式レコード由来の不変な事実です。
   別の脆弱性メカニズムや一般的な設定不備へ読み替えず、「仮想」「模擬」「simulated」として扱わず、
   公式の発火条件、影響、前提条件をそのまま設計の根拠にしてください。再現不能なら成立可能と捏造せず、
@@ -493,12 +585,12 @@ def attack_graph_revision_prompt(
 
 現在の攻撃グラフ:
 ```json
-{attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(attack_graph)}
 ```
 
 レビュー指摘:
 ```json
-{json.dumps(review_feedback, ensure_ascii=False, indent=2)}
+{_redact_passwords(json.dumps(review_feedback, ensure_ascii=False, indent=2), attack_graph)}
 ```
 
 JSON以外は返さないでください。
@@ -533,7 +625,7 @@ def scenario_correction_prompt(
 
 現在の攻撃グラフ:
 ```json
-{attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(attack_graph)}
 ```
 
 現在のプレイヤー向け紹介文:
@@ -543,7 +635,7 @@ def scenario_correction_prompt(
 
 現在のシナリオ設計書:
 ```markdown
-{previous_scenario.definition}
+{_redact_passwords(previous_scenario.definition, previous_scenario.attack_graph)}
 ```
 
 レビュー指摘:
@@ -613,13 +705,15 @@ def scenario_review_prompt(
         reconsideration_section = f"""
 前回レビューの再検討資料:
 ```json
-{json.dumps(reconsideration, ensure_ascii=False, indent=2)}
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
 ```
 生成物の修正案がサーバー検証に失敗しました。修正案だけでなく、前回レビューの前提や修正先が
 誤っていた可能性も検討してください。修正案だけが誤りなら指摘を維持し、検証可能な修正内容へ具体化
 してください。検証エラーを回避する内容を捏造せず、指摘が誤りなら撤回し、
 限定修正で扱えない構造問題ならattack_graph_regeneration、入力条件の問題ならuser_inputへ変更して
-シナリオ全体を改めて判定してください。同じ根拠のない修正要求を繰り返さないでください。
+シナリオ全体を改めて判定してください。ただし、スキーマで禁止されたフィールドを許可するために
+attack_graph_regenerationへ逃がさず、その要求自体を撤回してください。同じ根拠のない修正要求を
+繰り返さないでください。
 """
     return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
 作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
@@ -642,12 +736,12 @@ System flag取得要件（正解値ではない）: {machine.needs_system_flag},
 
 攻撃グラフ:
 ```json
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
 シナリオ設計書:
 ```markdown
-{scenario.definition}
+{_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
 {reconsideration_section}
 
@@ -667,10 +761,16 @@ JSONのみを返してください:
   攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
   errorにする
 - 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
-  semantic_mismatchのerrorにする
+  semantic_mismatchのerrorにする。検証済み攻撃グラフを正とし、設計書側の改名、step分割・統合、
+  ハッシュ方式の読み替えが原因ならrepair_targetはscenario_textにする。本文へ合わせるために
+  step_idやpassword_cracking等の不変フィールドを変更・再生成しない
+- attack graphのdescriptionは攻撃者の操作、implementation_stepsはその攻撃を成立させるVM側の
+  プロビジョニング手順である。implementation_stepsにユーザー作成、アプリ配置、権限設定、脆弱な
+  状態の構築があることを理由に、攻撃者コマンドへ書き換える指摘をしない
 - CVEステップのcve_title、cve_description、cwe_idsは公式事実。設計書が別の脆弱性、設定不備、
   模擬実装へ置き換えていればsemantic_mismatchのerrorにする
-- installation_artifactとartifact_sourceが示すビルド済み配布経路を設計書が維持しているか確認する。
+- kind=cveのstepだけについてinstallation_artifactとartifact_sourceが示すビルド済み配布経路を
+  設計書が維持しているか確認する。自作PHP等の非CVE stepにはこれらのフィールドを要求しない。
   source_buildの場合はsource_build_reasonに、先行するパッケージ・公式バイナリ経路を利用できない
   具体的根拠がなければunsupported_assumptionのerrorにする
 - 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
@@ -683,33 +783,19 @@ JSONのみを返してください:
   記載する。単なる一般論や推測だけで不合格にしない
 - repair_target: scenario_text=本文、attack_graph=限定修正、attack_graph_regeneration=再作成、
   source_code=実装(source_sync時のみ)、user_input=入力
-- attack_graphはtitle、description、implementation_stepsのみ。repair_fieldsに列挙し、他は再作成とする
+- attack_graphの限定修正はtitle、description、implementation_stepsのみで、repair_fieldsへ列挙する。
+  それ以外のフィールドが本文と違うだけならscenario_textを修正する
+- attack_graph_regenerationは、設計書との表現差ではなく、攻撃グラフ単体のrequires/achievesが
+  破綻しているbroken_chain、またはグラフ単体の前提が成立不能なunsupported_assumptionに限定する。
+  必ず該当する既存step_idと構造フィールドをrepair_fieldsへ入れる
 
-パーミッションは最重点項目として、各ステップで次を明示的に反証する:
-- 重要パスのowner・group・mode・ACL・sudoers・capabilityと各主体の可否を時系列の権限表で検証する
-- 同じ時点・同じパスに対して「読める／読めない」、異なるowner・group・modeなど相反する記述が
-  1つでもあればsemantic_mismatchのerrorにする。negative controlの条件を完成構成へ混入させない
-- 攻撃前、各ステップ完了後、flag取得時点の実効UID・主group・補助groupと、サービスの実行ユーザー
-- 必要な全パスと親ディレクトリのowner・group・mode、ACL、sudoers、setuid/setgid、capability
-- Web/PHP/CGI/systemdなど実際の実行形態。PHP-FPMやApache moduleのPHPへ実行ビットを付けても
-  読めなければ成立せず、CGIやExecStart対象は読み取り・探索に加えて実行可能でなければ成立しない
-- アップロード、cache、session、ログ、鍵、設定、実行ファイル、ホーム、flagの権限が厳しすぎて
-  intended exploitを阻害しないこと。阻害する場合はpermission_blockerのerrorにする
-- 権限が広すぎて未権限主体が成果物やflagを先に読める、実行ファイルや設定を書き換えられる、
-  requiresを飛ばせる場合はpermission_shortcutのerrorにする
-- 権限昇格では、攻撃前後の実効UIDまたはcapabilityと保護対象へのアクセス差を説明できること。
-  root所有という記述だけ、chmod 777、無差別なchown、設計にないgroup所属を成立根拠にしない
-- 任意のコマンド・コード・式を実行できる段階へ到達した主体は、その時点のUIDで利用可能な
-  ファイル操作、資格情報、sudo、setuid、capability、インタープリタ、ローカルサービスをすべて
-  利用できるものとして扱う。「対話シェルをまだ得ていない」など実行経路の名前の違いだけを、
-  後続ステップの前提が必要である根拠にしない
-- 各requiresは、前段完了前には存在せず完了後に初めて得られる権限・秘密・到達性・実効IDなどの
-  能力差を生むこと。単なる操作方法や通信チャネルの変更で同じ操作が既に可能ならbroken_chainにする
-- flagについて、指定パスと全親ディレクトリの権限が、意図したステップ完了後の主体には読め、
-  完了前の主体には読めないこと。配置先の重複、リンク、ログや設定への値の漏洩も近道として扱う
-- レビュー時点では実ファイルが未生成であるため、具体値が設計書に十分定義されているかを審査する。
-  根拠なくOS既定値を仮定せず、実装時に明示すべきowner・group・mode・検証コマンドが欠けていて
-  成立性を判断できない場合はerrorにする
+権限レビューでは、時系列の権限表として攻撃前後の実効UID、重要パスと全親ディレクトリ、
+owner/group/mode、sudoers、capabilityを追う。同じ状態に相反する記述がある、意図した主体が読めず
+permission_blockerになる、未権限主体が先に読めてpermission_shortcutになる場合だけerrorにする。
+レビュー時点では実ファイルが未生成なので、一般的なアプリファイルやDB接続設定の全permissionを
+網羅していないことだけでerrorにせず、コード生成で安全に具体化できない攻撃連鎖上の曖昧さを示す。
+任意のコマンド・コード・式を実行可能な主体の能力を過小評価せず、操作方法や通信チャネルの変更だけを
+requiresの根拠にしない。flagは攻略後の主体だけが読めることを確認する。
 
 {DESIGN_CONSTRAINTS}
 
@@ -725,10 +811,10 @@ def code_prompt(
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。
 
-{scenario.definition}
+{_redact_passwords(scenario.definition, scenario.attack_graph)}
 
 検証済みの攻撃グラフ:
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 
 配置する正解フラグ（未設定は配置しない）:
 - User flag: {scenario.user_flag or "未設定"}
@@ -738,9 +824,11 @@ JSON以外は返さないでください。形式:
 {{"files":[{{"path":"contents/build.sh","content":"#!/bin/bash\\nset -euo pipefail\\n...","mode":"0755"}}]}}
 
 制約:
-- Packerは生成ルートを /tmp/scenario にコピーし、rootで contents/build.sh を実行する
+- Packerは生成ルートを /tmp/scenario にコピーし、rootでcontents/build.sh、続いて
+  サーバーがmanifestから生成したcontents/scripts/verify.shを必ず実行する
 - contents/README.md、contents/scenario_manifest.json、contents/build.sh、
-  contents/scripts/provision.sh を必ず生成する
+  contents/scripts/provision.shを必ず生成する。contents/scripts/verify.shはfilesへ返さず、
+  scenario_manifest.jsonのrequired_filesには記載する
 - scenario_manifest.json は required_files、services、acceptance_tests、
   expected_vulnerabilities、health_checks、attack_steps、objectivesを配列として持ち、target_osを
   `{scenario.target_os}` とする
@@ -753,6 +841,8 @@ JSON以外は返さないでください。形式:
 - required_files は contents/ 基準で、生成する全必須ファイルと一致させる
 - build.sh は #!/bin/bash と set -euo pipefail を使い、
   /tmp/scenario/contents がカレントディレクトリである前提で bash ./scripts/provision.sh を呼ぶ
+- manifestのhealth_checksとacceptance_testsの各commandは他のentryの変数や状態へ依存させず、
+  プロビジョニング完了後の実環境に対して単独で実行可能にする
 - アプリは contents/app/、設定は contents/config/ に置く
 - JSONのfiles[].pathはVM内の最終配置先ではなく生成ZIP内のパスであり、必ずcontents/から始める。
   `/var/www`、`/etc`、`/opt`などの最終配置先をfiles[].pathへ返さず、contents/app/や
@@ -781,6 +871,8 @@ JSON以外は返さないでください。形式:
   再現できない場合はCVE名だけを付けた代替実装を作らない
 - 設定された正解フラグは1文字も変更せず、指定された配置先へそのまま保存する
 
+{SCENARIO_MANIFEST_CONSTRAINTS}
+
 {HASH_CRACKING_CONSTRAINTS}
 
 {INSTALLATION_PREFERENCE_CONSTRAINTS}
@@ -805,8 +897,10 @@ def repair_prompt(
     failure_report: dict,
     skill_context: str = "",
 ) -> str:
-    current_json = current.model_dump_json(indent=2)
-    report_json = json.dumps(failure_report, ensure_ascii=False, indent=2)
+    current_json = source_json_for_ai(current, scenario)
+    report_json = _redact_passwords(
+        json.dumps(failure_report, ensure_ascii=False, indent=2), scenario.attack_graph
+    )
     return f"""あなたは生成済みの教育用VMソースを差分修正するエージェントです。
 新規生成はせず、検査またはPackerビルドで失敗した箇所だけを修正してください。
 
@@ -817,7 +911,7 @@ User flag正解値: {scenario.user_flag or "未設定"}
 System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
 失敗内容:
@@ -830,8 +924,6 @@ known_failed_resourcesに列挙された要素は、現在の失敗内容に現�
 original_triggerとrejected_patchが含まれる場合、元の修正目的を維持しつつ、拒否された同じパッチを
 繰り返さないでください。元レビューのremediationと決定的検証が衝突する場合は検証制約を破らず、
 別の有効な修正方法を選んでください。レビュー自体の再判定は呼び出し側が行います。
-checks内にrequired_commandsがある場合は、表示用の説明へ写すだけでなく、適切な実行ユーザーと
-実在パスへ具体化した同等のコマンドを生成物とmanifestへ追加し、失敗時に非ゼロ終了させてください。
 failed_commandsまたはfailure_log_contextがある場合は、そのコマンドと前後のエラーを根本原因として
 扱い、末尾の後処理メッセージだけを修正しないでください。
 
@@ -847,6 +939,8 @@ JSON以外は返さないでください。形式:
 - filesには追加・変更が必要なファイルだけを含め、変更不要なファイルを返さない
 - 同じpathをfilesへ複数回含めない
 - delete_pathsには削除が必要な既存ファイルだけを含める
+- contents/scripts/verify.shはサーバー生成物なので直接修正・削除せず、検査の変更は
+  contents/scenario_manifest.jsonのhealth_checksまたはacceptance_testsへ行う
 - 失敗原因とその依存箇所を調べ、必要最小限の一貫した差分にする
 - 複数行のビルドログがある場合は最終行だけで判断せず、失敗したコマンドと前後の文脈から
   根本原因を特定する。後処理や終了時のメッセージを原因と取り違えない
@@ -868,6 +962,8 @@ JSON以外は返さないでください。形式:
   JSONエスケープを作らない
 - Markdownと攻撃グラフに矛盾がある場合は攻撃グラフを正とする
 - 攻撃グラフのCVE公式事実と異なる脆弱性へ変更しない。CVE名や説明だけを合わせた模擬実装も禁止する
+
+{SCENARIO_MANIFEST_CONSTRAINTS}
 
 {HASH_CRACKING_CONSTRAINTS}
 
@@ -897,7 +993,10 @@ def scenario_sync_prompt(
         feedback_section = (
             "\n直前のレビューで次のシナリオ本文の不整合が指摘されました。実装ファイルを変更したことにせず、"
             "攻撃グラフの意図を保ったまま指摘をシナリオ本文へ反映してください。\n```json\n"
-            + json.dumps(review_feedback, ensure_ascii=False, indent=2)
+            + _redact_passwords(
+                json.dumps(review_feedback, ensure_ascii=False, indent=2),
+                scenario.attack_graph,
+            )
             + "\n```\n"
         )
     return f"""あなたは教育用攻撃マシンの実装とシナリオを同期する設計担当です。
@@ -917,17 +1016,17 @@ def scenario_sync_prompt(
 
 修復前の攻撃グラフ:
 ```json
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
 修復前のシナリオ:
 ```markdown
-{scenario.definition}
+{_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
 
 修復後の実装ファイル:
 ```json
-{current.model_dump_json(indent=2)}
+{source_json_for_ai(current, scenario)}
 ```
 {feedback_section}
 
@@ -967,7 +1066,7 @@ def source_review_prompt(
         reconsideration_section = f"""
 前回レビューの再検討資料:
 ```json
-{json.dumps(reconsideration, ensure_ascii=False, indent=2)}
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
 ```
 前回レビューに従った修正が決定的検証に失敗したか、修正後レビューで同じ指摘が残る・指摘が増える
 など意味的な改善が確認できませんでした。修正案だけでなく、前回レビューの前提、repair_target、
@@ -988,17 +1087,17 @@ User flag正解値: {scenario.user_flag or "未設定"}
 System flag正解値: {scenario.system_flag or "未設定"}
 攻撃グラフ:
 ```json
-{scenario.attack_graph.model_dump_json(indent=2)}
+{attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
 シナリオ設計書:
 ```markdown
-{scenario.definition}
+{_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
 
 生成ファイル:
 ```json
-{current.model_dump_json(indent=2)}
+{source_json_for_ai(current, scenario)}
 ```
 {reconsideration_section}
 

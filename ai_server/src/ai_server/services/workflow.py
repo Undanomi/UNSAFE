@@ -24,6 +24,7 @@ from ..skills.service import NoopSkillService, SkillResolver
 from .ai import AIGenerator
 from .build_client import BuildClient
 from .errors import exception_detail
+from .rockyou import RockYouPasswordSelector, bind_rockyou_passwords
 from .source_archive import InvalidSourceError, SourceArchive
 from .source_repair import apply_source_patch
 from .source_validation import known_failed_resources
@@ -49,6 +50,9 @@ class MachineWorkflow:
         build_repair_max_attempts: int,
         scenario_sync_attempts: int,
         skill_service: SkillResolver | None = None,
+        rockyou_path: Path | None = None,
+        rockyou_min_line: int = 1,
+        rockyou_max_line: int = 1,
     ) -> None:
         self.repository = repository
         self.generator = generator
@@ -58,6 +62,9 @@ class MachineWorkflow:
         self.build_repair_max_attempts = build_repair_max_attempts
         self.scenario_sync_attempts = scenario_sync_attempts
         self.skill_service = skill_service or NoopSkillService()
+        self.rockyou_path = rockyou_path
+        self.rockyou_min_line = rockyou_min_line
+        self.rockyou_max_line = rockyou_max_line
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.starting_sessions: set[str] = set()
         self.cancel_requests: set[str] = set()
@@ -425,6 +432,26 @@ class MachineWorkflow:
                             state.machine_information, working_scenario, source_skills
                         )
                     assert generated is not None
+                    if any(
+                        step.password_cracking is not None
+                        and not step.password_cracking.selection_bound
+                        for step in working_scenario.attack_graph.steps
+                    ):
+                        if self.rockyou_path is None:
+                            raise RuntimeError(
+                                "rockyou selector is required to bind password cracking source"
+                            )
+                        working_scenario = bind_rockyou_passwords(
+                            working_scenario,
+                            RockYouPasswordSelector(
+                                self.rockyou_path,
+                                self.rockyou_min_line,
+                                self.rockyou_max_line,
+                            ),
+                        )
+                        authoritative_attack_graph = working_scenario.attack_graph
+                        state.scenario = working_scenario
+                        await self.repository.save(state)
                     retry_base = generated
                     retry_scenario = working_scenario
                     patch_applied = False
