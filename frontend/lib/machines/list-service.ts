@@ -34,7 +34,7 @@ function escapeLike(value: string) {
 function buildFilters(viewerUserId: string, query: MachineListQuery) {
   const values: unknown[] = [viewerUserId]
   const conditions = [
-    "m.status IN ('created', 'building', 'ready', 'failed', 'preparing')",
+    "m.status IN ('created', 'building', 'ready', 'failed', 'cancelled', 'preparing')",
     query.owned ? "m.created_by = $1" : "(m.published = true OR m.created_by = $1)",
   ]
 

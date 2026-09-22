@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers"
 import {
+  cancelAiSessionService,
   createAiSessionService,
   saveMachineInformationService,
   startMachineBuildService,
@@ -12,12 +13,16 @@ import {
   createChatSessionService,
   createMachineDocumentService,
   saveChatProgressService,
+  setChatCreationCancelledService,
+  setChatCreationFailureService,
+  setChatCreationReadyService,
   setChatCreationStatusService,
 } from "@/lib/chat/service"
 import {
   CHAT_CONFIG,
   CHAT_STEPS,
   type ChatAnswers,
+  type ChatCreationFailure,
   DIFFICULTY_OPTIONS,
   VISIBILITY_OPTIONS,
 } from "@/stores/chat"
@@ -203,8 +208,43 @@ export async function startMachineBuildAction(
   }
 }
 
-export async function markMachineCreationFailedAction(sessionId: string): Promise<void> {
+export async function markMachineCreationFailedAction(
+  sessionId: string,
+  failure: ChatCreationFailure,
+): Promise<void> {
   const user = await getAuthenticatedUser()
   if (!user) return
-  await setChatCreationStatusService(user.uid, sessionId, "failed")
+  const normalized: ChatCreationFailure = {
+    kind: failure.kind === "settings" ? "settings" : "system",
+    summary: failure.summary.trim().slice(0, 4000),
+    suggestions: failure.suggestions
+      .filter((suggestion) => typeof suggestion === "string" && suggestion.trim())
+      .slice(0, 5)
+      .map((suggestion) => suggestion.trim().slice(0, 4000)),
+  }
+  await setChatCreationFailureService(user.uid, sessionId, normalized)
+}
+
+export async function cancelMachineCreationAction(sessionId: string): Promise<ChatActionResult> {
+  const user = await getAuthenticatedUser()
+  if (!user) return { success: false, message: "ログインし直してください。" }
+
+  try {
+    await cancelAiSessionService(user.uid, sessionId)
+    const updated = await setChatCreationCancelledService(user.uid, sessionId)
+    return updated
+      ? { success: true, sessionId }
+      : { success: false, message: SESSION_ERROR_MESSAGE }
+  } catch (error) {
+    console.error("Failed to cancel machine creation.", error)
+    return { success: false, message: "マシン作成を中止できませんでした。" }
+  }
+}
+
+export async function markMachineCreationReadyAction(sessionId: string): Promise<ChatActionResult> {
+  const user = await getAuthenticatedUser()
+  if (!user) return { success: false, message: "ログインし直してください。" }
+
+  const updated = await setChatCreationReadyService(user.uid, sessionId)
+  return updated ? { success: true, sessionId } : { success: false, message: SESSION_ERROR_MESSAGE }
 }

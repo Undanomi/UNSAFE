@@ -66,7 +66,7 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
     assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
 
     assert len(design_prompts[0]) < 3000
-    assert len(design_prompts[1]) < 3000
+    assert len(design_prompts[1]) < 3500
 
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt
@@ -78,6 +78,10 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "ターゲットVMへ辞書を導入" in prompt
         assert "使用してよい" in prompt
         assert "単一の未検証URLへ無条件に依存せず" in prompt
+        assert "ソースコードからのコンパイルを既定にしない" in prompt
+        assert "snapshot APTリポジトリ" in prompt
+        assert "ベンダー公式releaseのビルド済みバイナリ" in prompt
+        assert "ソースビルドは" in prompt
         assert "既定ページ、サンプルアプリ、既定VirtualHost" in prompt
         assert "入口の選択と優先順位" in prompt
         assert "肯定確認と否定確認" in prompt
@@ -177,6 +181,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "実際のデータフロー" in review_prompt
     assert "シナリオ設計書" in review_prompt
     assert scenario.definition in review_prompt
+    assert "ビルド済み成果物を選択済みなのにソースをコンパイル" in review_prompt
+    assert "ソースコードからのコンパイルを既定にしない" in review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
     assert "独立した敵対的レビュー担当" in scenario_review
@@ -191,6 +197,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "操作方法や通信チャネルの変更" in scenario_review
     assert "description_spoiler" in scenario_review
     assert "特定の定型句や表記の完全一致は要求しない" in scenario_review
+    assert "source_build_reason" in scenario_review
 
     sync_prompt = scenario_sync_prompt(machine, scenario, source)
     assert "実装とシナリオを同期" in sync_prompt
@@ -198,11 +205,19 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "実装と異なる古いパス、権限" in sync_prompt
     assert "正解フラグ値そのもの" in sync_prompt
     assert "scenario_description" in sync_prompt
+    feedback_sync_prompt = scenario_sync_prompt(
+        machine,
+        scenario,
+        source,
+        {"kind": "scenario_sync_review", "summary": "negative control is missing"},
+    )
+    assert "negative control is missing" in feedback_sync_prompt
+    assert "攻撃グラフの意図を保ったまま" in feedback_sync_prompt
     assert "negative control" in scenario_review
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
-    assert len(scenario_review) < 4500
+    assert len(scenario_review) < 5000
 
     assert "`php -l`" in review_prompt
     assert "`bash -n`" in review_prompt

@@ -1,11 +1,13 @@
 import "server-only"
 
 import type { PoolClient } from "pg"
+import { cancelAiSessionService, getAiSessionService } from "@/lib/ai/service"
 import { queryDatabase, withDatabaseTransaction } from "@/lib/database/client"
 import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
 import {
   CHAT_STEPS,
   type ChatAnswers,
+  type ChatCreationFailure,
   type ChatCreationStatus,
   type ChatSession,
   type ChatSessionSummary,
@@ -20,6 +22,7 @@ type ChatSessionRow = {
   basic_ready: boolean
   answers: ChatAnswers
   creation_status: ChatCreationStatus
+  creation_failure?: ChatCreationFailure | null
   machine_id: string | null
   error_message: string | null
   created_at: Date
@@ -34,6 +37,7 @@ function toChatSession(row: ChatSessionRow): ChatSession {
     initialStep: row.current_step ?? CHAT_STEPS.machineName,
     initialAnswers: { ...EMPTY_CHAT_ANSWERS, ...row.answers },
     creationStatus: row.creation_status ?? "input",
+    creationFailure: row.creation_failure ?? null,
     machineId: row.machine_id ?? null,
   }
 }
@@ -64,6 +68,38 @@ export async function getChatSessionService(
     [sessionId, ownerUserId],
   )
   return result.rows[0] ? toChatSession(result.rows[0]) : null
+}
+
+export async function getChatSessionPageService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<ChatSession | null> {
+  const session = await getChatSessionService(ownerUserId, sessionId)
+  if (
+    !session ||
+    (session.creationStatus !== "generating_scenario" && session.creationStatus !== "building")
+  ) {
+    return session
+  }
+
+  const aiSession = await getAiSessionService(ownerUserId, sessionId)
+  const runtimeMatches =
+    (session.creationStatus === "generating_scenario" &&
+      aiSession.status === "generating_scenario") ||
+    (session.creationStatus === "building" &&
+      ["generating_code", "build_queued", "building"].includes(aiSession.status))
+  if (runtimeMatches) return session
+
+  if (aiSession.status === "completed") {
+    await setChatCreationStatusService(ownerUserId, sessionId, "completed")
+    return { ...session, creationStatus: "completed", creationFailure: null }
+  }
+  if (aiSession.status !== "cancelled") {
+    await cancelAiSessionService(ownerUserId, sessionId)
+  }
+
+  await setChatCreationCancelledService(ownerUserId, sessionId)
+  return { ...session, creationStatus: "cancelled", creationFailure: null }
 }
 
 export async function listChatSessionsService(ownerUserId: string): Promise<ChatSessionSummary[]> {
@@ -103,11 +139,79 @@ export async function setChatCreationStatusService(
 ): Promise<boolean> {
   const result = await queryDatabase(
     `UPDATE chat_sessions SET
-       creation_status = $3, error_message = NULL, updated_at = now()
+       creation_status = $3, creation_failure = NULL, error_message = NULL,
+       updated_at = now()
      WHERE ai_session_id = $1 AND owner_user_id = $2`,
     [sessionId, ownerUserId, creationStatus],
   )
   return result.rowCount === 1
+}
+
+export async function setChatCreationFailureService(
+  ownerUserId: string,
+  sessionId: string,
+  failure: ChatCreationFailure,
+): Promise<boolean> {
+  const result = await queryDatabase(
+    `UPDATE chat_sessions SET
+       creation_status = 'failed', creation_failure = $3::jsonb,
+       error_message = $4, updated_at = now()
+     WHERE ai_session_id = $1 AND owner_user_id = $2`,
+    [sessionId, ownerUserId, failure, failure.summary],
+  )
+  return result.rowCount === 1
+}
+
+export async function setChatCreationCancelledService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<boolean> {
+  return withDatabaseTransaction(async (client) => {
+    const chat = await lockOwnedChat(client, ownerUserId, sessionId)
+    if (!chat) return false
+
+    await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = 'cancelled', creation_failure = NULL,
+         error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1 AND owner_user_id = $2`,
+      [sessionId, ownerUserId],
+    )
+    if (chat.machine_id) {
+      await client.query(
+        `UPDATE machines SET status = 'cancelled', error_message = NULL, updated_at = now()
+         WHERE id = $1 AND created_by = $2`,
+        [chat.machine_id, ownerUserId],
+      )
+    }
+    return true
+  })
+}
+
+export async function setChatCreationReadyService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<boolean> {
+  return withDatabaseTransaction(async (client) => {
+    const chat = await lockOwnedChat(client, ownerUserId, sessionId)
+    if (!chat) return false
+
+    await client.query(
+      `UPDATE chat_sessions SET
+         creation_status = 'input', creation_failure = NULL,
+         error_message = NULL, updated_at = now()
+       WHERE ai_session_id = $1 AND owner_user_id = $2`,
+      [sessionId, ownerUserId],
+    )
+    if (chat.machine_id) {
+      await client.query(
+        `UPDATE machines SET status = 'cancelled', error_message = NULL, updated_at = now()
+         WHERE id = $1 AND created_by = $2`,
+        [chat.machine_id, ownerUserId],
+      )
+    }
+    return true
+  })
 }
 
 function difficultyToLevel(difficulty: ChatAnswers["difficulty"]) {
@@ -159,6 +263,10 @@ export async function createMachineDocumentService(
          summary = EXCLUDED.summary,
          level = EXCLUDED.level,
          published = EXCLUDED.published,
+         status = 'building',
+         build_progress = 0,
+         description = EXCLUDED.description,
+         error_message = NULL,
          system_flag = EXCLUDED.system_flag,
          user_flag = EXCLUDED.user_flag,
          tags = EXCLUDED.tags,
@@ -184,7 +292,7 @@ export async function createMachineDocumentService(
     const chatResult = await client.query(
       `UPDATE chat_sessions SET
          creation_status = 'building', current_step = $3, machine_id = $4,
-         error_message = NULL, updated_at = now()
+         creation_failure = NULL, error_message = NULL, updated_at = now()
        WHERE ai_session_id = $1 AND owner_user_id = $2`,
       [sessionId, ownerUserId, CHAT_STEPS.complete, machineId],
     )

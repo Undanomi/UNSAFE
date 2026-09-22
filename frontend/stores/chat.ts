@@ -39,7 +39,14 @@ export type ChatSession = {
   initialStep: number
   initialAnswers?: Partial<ChatAnswers>
   creationStatus: ChatCreationStatus
+  creationFailure: ChatCreationFailure | null
   machineId: string | null
+}
+
+export type ChatCreationFailure = {
+  kind: "settings" | "system"
+  summary: string
+  suggestions: string[]
 }
 
 export type ChatCreationStatus =
@@ -48,6 +55,7 @@ export type ChatCreationStatus =
   | "building"
   | "completed"
   | "failed"
+  | "cancelled"
 export type ChatSessionSummary = Pick<ChatSession, "id" | "name" | "status">
 
 export type ChatAnswers = {
@@ -169,5 +177,6 @@ export const NEW_CHAT_SESSION: ChatSession = {
   status: "入力中",
   initialStep: CHAT_STEPS.machineName,
   creationStatus: "input",
+  creationFailure: null,
   machineId: null,
 }

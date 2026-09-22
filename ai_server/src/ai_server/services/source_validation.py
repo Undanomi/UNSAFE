@@ -45,17 +45,22 @@ MISSING_SYSTEMD_UNIT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-WEB_SERVICE_PORTS = {80, 443, 3000, 8000, 8080, 8443}
-WEB_SERVICE_NAMES = {"apache", "caddy", "http", "https", "lighttpd", "nginx", "php", "web"}
-
-
 def validate_source(
     root: Path, scenario: ScenarioDraft, repair_history: list[dict] | None = None
 ) -> dict:
-    checks: list[dict[str, str]] = []
+    checks: list[dict[str, object]] = []
 
-    def add(status: str, name: str, message: str) -> None:
-        checks.append({"status": status, "name": name, "message": message})
+    def add(
+        status: str,
+        name: str,
+        message: str,
+        *,
+        required_commands: list[str] | None = None,
+    ) -> None:
+        check: dict[str, object] = {"status": status, "name": name, "message": message}
+        if status == "fail" and required_commands:
+            check["required_commands"] = required_commands
+        checks.append(check)
 
     for relative in sorted(REQUIRED_FILES):
         add("pass" if (root / relative).is_file() else "fail", f"required:{relative}", "exists")
@@ -63,11 +68,13 @@ def validate_source(
     if manifest is not None:
         _validate_manifest(root, manifest, add)
         _validate_attack_graph(manifest, scenario.attack_graph, add)
+        _validate_cve_grounding(root / "contents", manifest, scenario.attack_graph, add)
     _validate_build(root / "contents/build.sh", add)
     _validate_source_modes(root / "contents", add)
     if manifest is not None:
         _validate_web_delivery(root / "contents", manifest, add)
         _validate_flag_values(root / "contents", manifest, scenario, add)
+        _validate_exploit_acceptance_tests(root / "contents", manifest, scenario, add)
     _validate_base_image_compatibility(root / "contents", repair_history or [], add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
@@ -125,6 +132,41 @@ def _validate_flag_values(contents: Path, manifest: dict, scenario: ScenarioDraf
                 else "all flag occurrences preserve the persisted value's case"
             ),
         )
+
+
+def _validate_exploit_acceptance_tests(
+    contents: Path, manifest: dict, scenario: ScenarioDraft, add
+) -> None:
+    direct_reads: list[str] = []
+    flag_path = re.compile(
+        r"(?:^|[/_.-])(?:user|system|root)?[_-]?(?:flag|user\.txt|system\.txt)(?:$|[\s'\"])",
+        re.IGNORECASE,
+    )
+    identity_switch = re.compile(r"\b(?:sudo\s+-u|runuser\s+-u|su\s+-s)\b", re.IGNORECASE)
+    direct_reader = re.compile(r"\b(?:cat|grep|head|tail|awk|sed)\b", re.IGNORECASE)
+    expected_flags = tuple(
+        value for value in (scenario.user_flag, scenario.system_flag) if value is not None
+    )
+    for index, test in enumerate(manifest.get("acceptance_tests", [])):
+        command = test.get("command") if isinstance(test, dict) else test
+        if not isinstance(command, str):
+            continue
+        targets_flag = any(flag in command for flag in expected_flags) or bool(
+            flag_path.search(command)
+        )
+        if targets_flag and identity_switch.search(command) and direct_reader.search(command):
+            direct_reads.append(str(index))
+    add(
+        "fail" if direct_reads else "pass",
+        "exploit:no_direct_identity_flag_read",
+        (
+            "acceptance tests bypass the attack path by switching identity and directly reading a "
+            "flag in entries: "
+            + ", ".join(direct_reads)
+            if direct_reads
+            else "acceptance tests do not switch identity to read flags directly"
+        ),
+    )
 
 
 def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:
@@ -190,11 +232,13 @@ def _validate_build(path: Path, add) -> None:
         "pass" if "set -euo pipefail" in text else "fail",
         "build:strict_mode",
         "set -euo pipefail required",
+        required_commands=["set -euo pipefail"],
     )
     add(
         "pass" if "scripts/provision.sh" in text else "fail",
         "build:provision",
         "scripts/provision.sh reference required",
+        required_commands=["bash ./scripts/provision.sh"],
     )
 
 
@@ -258,17 +302,8 @@ def _has_web_service(manifest: dict) -> bool:
     for service in manifest.get("services", []):
         if not isinstance(service, dict):
             continue
-        name = str(service.get("name", "")).lower()
         protocol = str(service.get("protocol", "")).lower()
-        try:
-            port = int(service.get("port"))
-        except (TypeError, ValueError):
-            port = None
-        if (
-            any(token in name for token in WEB_SERVICE_NAMES)
-            or protocol in {"http", "https"}
-            or port in WEB_SERVICE_PORTS
-        ):
+        if protocol in {"http", "https"}:
             return True
     return False
 
@@ -286,20 +321,72 @@ def _validate_web_check_text(text: str, location: str, add) -> None:
         "pass" if root_request else "fail",
         f"web:{location}:ip_root_entrypoint",
         "numeric/localhost root URL must be requested",
+        required_commands=["curl -fsSL http://127.0.0.1/"],
     )
     add(
         "pass" if root_request and "grep" in lowered else "fail",
         f"web:{location}:application_identity",
         "root response must be checked for a scenario-specific marker",
+        required_commands=[
+            "curl -fsSL http://127.0.0.1/ | grep -F -- '<scenario-specific marker>'"
+        ],
     )
     permission_tool = any(token in lowered for token in ("namei ", "stat ", "test -r", "test -x"))
     runtime_identity = any(token in lowered for token in ("runuser ", "sudo -u ", "su -s "))
     add(
         "pass" if permission_tool and runtime_identity else "fail",
         f"permissions:{location}:web_runtime_access",
-        "web runtime user readability/traversal and deployed modes must be checked",
+        (
+            "web runtime access requires both deployed owner/mode/path inspection and an "
+            "effective-user readability/traversal check; stat alone is insufficient"
+        ),
+        required_commands=[
+            "namei -l <deployed-web-file>",
+            "runuser -u <actual-web-runtime-user> -- test -r <deployed-web-file>",
+        ],
     )
 
+
+def _validate_cve_grounding(contents: Path, manifest: dict, attack_graph: AttackGraph, add) -> None:
+    cve_steps = [step for step in attack_graph.steps if step.cve_id]
+    if not cve_steps:
+        return
+    vulnerabilities = manifest.get("expected_vulnerabilities", [])
+    indexed = {
+        item.get("cve_id"): item
+        for item in vulnerabilities
+        if isinstance(item, dict) and isinstance(item.get("cve_id"), str)
+    }
+    for step in cve_steps:
+        assert step.cve_id is not None
+        item = indexed.get(step.cve_id)
+        add(
+            "pass" if item is not None else "fail",
+            f"cve:{step.cve_id}:manifest_entry",
+            "each verified CVE must have an expected_vulnerabilities entry",
+        )
+        if item is None:
+            continue
+        official_title = item.get("official_title")
+        title_matches = bool(step.cve_title) and official_title == step.cve_title
+        add(
+            "pass" if title_matches else "fail",
+            f"cve:{step.cve_id}:official_title",
+            "expected_vulnerabilities.official_title must exactly match the verified CVE title",
+        )
+        installation_matches = (
+            item.get("installation_artifact") == step.installation_artifact
+            and item.get("artifact_source") == step.artifact_source
+            and item.get("source_build_reason") == step.source_build_reason
+        )
+        add(
+            "pass" if installation_matches else "fail",
+            f"cve:{step.cve_id}:installation_strategy",
+            (
+                "expected_vulnerabilities must preserve installation_artifact, "
+                "artifact_source, and source_build_reason from the verified attack graph"
+            ),
+        )
 
 def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> None:
     expected_steps = {

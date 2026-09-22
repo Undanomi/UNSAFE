@@ -87,6 +87,37 @@ class SourceArchive:
             )
         self._promote_candidate(candidate_root, source_root)
         archive_path = version_root / "source.zip"
+        return archive_path, self._write_archive(source_root, archive_path)
+
+    def record_semantic_review(
+        self,
+        archive_path: Path,
+        review_report: dict,
+        *,
+        approved: bool,
+    ) -> str:
+        """Persist the final semantic verdict and refresh the submitted archive checksum."""
+
+        source_root = archive_path.parent / "source"
+        report_path = source_root / "repair_report.json"
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            report = {"attempts": []}
+        if not isinstance(report, dict):
+            report = {"attempts": []}
+        report["source_semantic_review"] = {
+            "status": "approved" if approved else "rejected",
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "report": review_report,
+        }
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return self._write_archive(source_root, archive_path)
+
+    @staticmethod
+    def _write_archive(source_root: Path, archive_path: Path) -> str:
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(source_root.rglob("*")):
                 if path.is_file():
@@ -94,9 +125,8 @@ class SourceArchive:
                     info.external_attr = (path.stat().st_mode & 0xFFFF) << 16
                     with path.open("rb") as source:
                         archive.writestr(info, source.read(), compress_type=zipfile.ZIP_DEFLATED)
-        checksum = hashlib.sha256(archive_path.read_bytes()).hexdigest()
         os.chmod(archive_path, 0o640)
-        return archive_path, checksum
+        return hashlib.sha256(archive_path.read_bytes()).hexdigest()
 
     @staticmethod
     def _promote_candidate(candidate_root: Path, source_root: Path) -> None:

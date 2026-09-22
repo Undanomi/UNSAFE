@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Annotated
@@ -14,7 +15,9 @@ from .models import (
     DownloadURLResponse,
     MachineInformation,
     SessionResponse,
+    SessionState,
     SessionStatus,
+    scenario_is_valid_for_machine,
 )
 from .repository import SessionRepository
 from .services.download_signing import DownloadSigner, InvalidDownloadSignatureError
@@ -27,6 +30,12 @@ UserHeader = Annotated[str | None, Header(alias="X-Authenticated-User-ID")]
 RangeHeader = Annotated[str | None, Header(alias="Range")]
 IfRangeHeader = Annotated[str | None, Header(alias="If-Range")]
 _ETAG_VALUE = re.compile(r"^[!#-~]+$")
+logger = logging.getLogger(__name__)
+_RUNNING_WORKFLOW_STATUSES = {
+    SessionStatus.GENERATING_CODE,
+    SessionStatus.BUILD_QUEUED,
+    SessionStatus.BUILDING,
+}
 
 
 def _services(request: Request) -> tuple[SessionRepository, ScenarioCoordinator, MachineWorkflow]:
@@ -70,6 +79,44 @@ def _authorize(state, user_id: str | None) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
 
+async def _cancel_stale_running_state(request: Request, state: SessionState) -> SessionState:
+    repository, scenarios, workflow = _services(request)
+    stale_scenario, stale_workflow = _stale_running_phases(state, scenarios, workflow)
+    if not stale_scenario and not stale_workflow:
+        return state
+
+    try:
+        if stale_scenario:
+            await scenarios.cancel(state.session_id)
+        if stale_workflow:
+            await workflow.cancel(state.session_id)
+    except Exception:
+        logger.warning(
+            "failed to cancel stale external work",
+            exc_info=True,
+            extra={"session_id": state.session_id},
+        )
+    state = await repository.get(state.session_id)
+    state.status = SessionStatus.CANCELLED
+    if state.build_id and state.build_status not in {"completed", "failed"}:
+        state.build_status = "cancelled"
+    state.error_message = None
+    return await repository.save(state)
+
+
+def _stale_running_phases(
+    state: SessionState,
+    scenarios: ScenarioCoordinator,
+    workflow: MachineWorkflow,
+) -> tuple[bool, bool]:
+    return (
+        state.status == SessionStatus.GENERATING_SCENARIO
+        and not scenarios.is_running(state.session_id),
+        state.status in _RUNNING_WORKFLOW_STATUSES
+        and not workflow.is_running(state.session_id),
+    )
+
+
 @router.post("/sessions", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_session(request: Request, user_id: UserHeader = None) -> SessionResponse:
     repository, _, _ = _services(request)
@@ -84,16 +131,10 @@ async def get_session(
     response: Response,
     user_id: UserHeader = None,
 ) -> SessionResponse:
-    repository, _, workflow = _services(request)
+    repository, _, _ = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    if state.build_id:
-        try:
-            state = await workflow.synchronize(state, auto_repair=False)
-        except Exception as error:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)
-            ) from error
+    state = await _cancel_stale_running_state(request, state)
     response.headers["Cache-Control"] = "private, no-store"
     return _response(request, state)
 
@@ -105,14 +146,26 @@ async def save_machine_information(
     request: Request,
     user_id: UserHeader = None,
 ) -> SessionResponse:
-    repository, _, _ = _services(request)
+    repository, scenarios, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    if state.build_id or state.status in {
+    if any(_stale_running_phases(state, scenarios, workflow)):
+        await _cancel_stale_running_state(request, state)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="stopped machine generation was marked as cancelled; update again",
+        )
+    if scenarios.is_running(session_id) or workflow.is_running(session_id) or state.status in {
         SessionStatus.GENERATING_SCENARIO,
-        SessionStatus.GENERATING_CODE,
-        SessionStatus.BUILD_QUEUED,
-        SessionStatus.BUILDING,
+        *_RUNNING_WORKFLOW_STATUSES,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="machine generation already started"
+        )
+    if state.build_id and state.status not in {
+        SessionStatus.CANCELLED,
+        SessionStatus.COMPLETED,
+        SessionStatus.FAILED,
     }:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="machine generation already started"
@@ -120,6 +173,21 @@ async def save_machine_information(
     await request.app.state.skills.reset(session_id)
     state.machine_information = machine_information
     state.scenario = None
+    state.source_path = None
+    state.source_checksum = None
+    state.scenario_generation_attempts = 0
+    state.scenario_generation_attempt_limit = 0
+    state.source_generation_attempts = 0
+    state.source_generation_attempt_limit = 0
+    state.scenario_sync_attempts = 0
+    state.scenario_sync_attempt_limit = 0
+    state.build_id = None
+    state.build_status = None
+    state.build_progress = 0
+    state.build_repair_attempts = 0
+    state.build_repair_attempt_limit = 0
+    state.machine_access = None
+    state.artifact = None
     state.status = SessionStatus.READY
     state.error_message = None
     await repository.save(state)
@@ -167,11 +235,22 @@ async def scenario_events(
 
     async def stream():
         current = await repository.get(session_id)
-        if current.scenario:
-            yield ServerEvent(
-                "scenario.completed", {"scenario": current.scenario.model_dump(mode="json")}
-            ).encode()
+        current = await _cancel_stale_running_state(request, current)
+        if current.status == SessionStatus.CANCELLED:
+            yield ServerEvent("scenario.cancelled", {"session_id": session_id}).encode()
             return
+        if current.scenario:
+            if current.machine_information and scenario_is_valid_for_machine(
+                current.machine_information, current.scenario
+            ):
+                yield ServerEvent(
+                    "scenario.completed", {"scenario": current.scenario.model_dump(mode="json")}
+                ).encode()
+                return
+            current.scenario = None
+            current.status = SessionStatus.READY
+            current.error_message = None
+            await repository.save(current)
         queue = scenarios.broker.subscribe(session_id)
         scenarios.ensure_started(session_id)
         async for event in scenarios.broker.events(session_id, queue):
@@ -182,6 +261,32 @@ async def scenario_events(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/sessions/{session_id}/cancel", response_model=SessionResponse)
+async def cancel_session(
+    session_id: str,
+    request: Request,
+    user_id: UserHeader = None,
+) -> SessionResponse:
+    repository, scenarios, workflow = _services(request)
+    state = await repository.get(session_id)
+    _authorize(state, user_id)
+    if state.status == SessionStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="completed machine generation cannot be cancelled",
+        )
+
+    await scenarios.cancel(session_id)
+    await workflow.cancel(session_id)
+    state = await repository.get(session_id)
+    state.status = SessionStatus.CANCELLED
+    if state.build_id and state.build_status not in {"completed", "failed"}:
+        state.build_status = "cancelled"
+    state.error_message = None
+    state = await repository.save(state)
+    return _response(request, state)
 
 
 @router.post(
@@ -195,9 +300,15 @@ async def create_machine(
     request: Request,
     user_id: UserHeader = None,
 ) -> SessionResponse:
-    repository, _, workflow = _services(request)
+    repository, scenarios, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
+    if any(_stale_running_phases(state, scenarios, workflow)):
+        await _cancel_stale_running_state(request, state)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="stopped machine generation was marked as cancelled; retry explicitly",
+        )
     try:
         state = await workflow.start(session_id, body.scenario_id)
     except InvalidSessionStateError as error:
@@ -215,10 +326,9 @@ async def create_download_url(
     response: Response,
     user_id: UserHeader = None,
 ) -> DownloadURLResponse:
-    repository, _, workflow = _services(request)
+    repository, _, _ = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
-    state = await workflow.synchronize(state, auto_repair=False)
     if state.status != SessionStatus.COMPLETED or not state.artifact or not state.build_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
     download_url, expires_at = _signed_download_url(request, state)

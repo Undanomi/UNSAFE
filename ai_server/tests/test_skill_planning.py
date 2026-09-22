@@ -181,13 +181,10 @@ async def test_limits_do_not_silently_drop_choices(tmp_path):
         context_from_plan(plan, SkillPhase.SOURCE, machine(), max_per_phase=8, max_context_chars=1)
 
 
-def test_reference_environment_is_hard_filtered(tmp_path):
+def test_reference_eligibility_uses_structured_id_and_year_only(tmp_path):
     refs = next(s for s in catalog(tmp_path) if s.name == "cve").references
     old = next(r for r in refs if "2021" in r.reference_id)
-    assert not reference_is_eligible(old, machine(), 2020)
-    assert reference_is_eligible(
-        old, machine().model_copy(update={"operating_system": "Debian 11"}), 2020
-    )
+    assert reference_is_eligible(old, machine(), 2020)
     assert not reference_is_eligible(
         old, machine().model_copy(update={"operating_system": "Debian 11"}), 2024
     )
@@ -339,7 +336,7 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
     import httpx
 
     from ai_server.config import Settings
-    from ai_server.models import ScenarioReview, ScenarioReviewFinding
+    from ai_server.models import ScenarioCorrection, ScenarioReview, ScenarioReviewFinding
     from ai_server.services.ai import GeminiGenerator
     from ai_server.skills.models import ScenarioSkillContexts
 
@@ -388,10 +385,20 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
                 ).model_dump_json()
             return ScenarioReview(approved=True, summary="Approved", findings=[]).model_dump_json()
         prompts.append(prompt)
+        if kwargs.get("response_schema") is ScenarioCorrection:
+            return ScenarioCorrection(
+                scenario_description=None,
+                definition_replacements=[
+                    {
+                        "old": "Owner is unspecified.",
+                        "new": "The file owner is www-data.",
+                    }
+                ],
+            ).model_dump_json()
         return json.dumps(
             {
                 "scenario_description": "Investigate the generated training machine.",
-                "definition": "# Scenario",
+                "definition": "# Scenario\n\nOwner is unspecified.",
             }
         )
 

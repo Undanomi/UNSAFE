@@ -51,6 +51,12 @@ class BuildClient:
         self._raise(response)
         return response.json()
 
+    async def cancel(self, build_id: str) -> None:
+        response = await self.client.post(
+            f"{self.base_url}/v1/builds/{build_id}/cancel", headers=self.headers
+        )
+        self._raise(response)
+
     async def packer_log(self, build_id: str) -> str:
         response = await self.client.get(
             f"{self.base_url}/v1/builds/{build_id}/logs/packer", headers=self.headers

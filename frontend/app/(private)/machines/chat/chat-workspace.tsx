@@ -10,12 +10,15 @@ import {
   LoaderCircle,
   MessageSquareText,
   Pencil,
+  XCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
+  cancelMachineCreationAction,
   markMachineCreationFailedAction,
+  markMachineCreationReadyAction,
   prepareMachineCreationAction,
   saveChatProgressAction,
   startMachineBuildAction,
@@ -26,6 +29,7 @@ import {
   CHAT_PROMPTS,
   CHAT_STEPS,
   type ChatAnswers,
+  type ChatCreationFailure,
   type ChatSession,
   DIFFICULTY_OPTIONS,
   EMPTY_CHAT_ANSWERS,
@@ -40,6 +44,37 @@ type ChatWorkspaceProps = {
 type ScenarioEvent = {
   event: string
   data: unknown
+}
+
+const SCENARIO_STREAM_MAX_ATTEMPTS = 3
+const SCENARIO_STREAM_RETRY_DELAY_MS = 500
+
+class ScenarioGenerationFailedError extends Error {}
+class ScenarioGenerationCancelledError extends Error {}
+
+class ScenarioInputRevisionRequiredError extends Error {
+  suggestions: string[]
+
+  constructor(summary: string, suggestions: string[]) {
+    super(summary)
+    this.name = "ScenarioInputRevisionRequiredError"
+    this.suggestions = suggestions
+  }
+}
+
+function readInputRevisionError(data: unknown): ScenarioInputRevisionRequiredError | null {
+  if (!data || typeof data !== "object" || !("code" in data)) return null
+  if (data.code !== "scenario_input_revision_required") return null
+  const summary =
+    "summary" in data && typeof data.summary === "string"
+      ? data.summary
+      : "入力された条件では、成立するシナリオを構成できませんでした。"
+  const findings = "findings" in data && Array.isArray(data.findings) ? data.findings : []
+  const suggestions = findings.flatMap((finding) => {
+    if (!finding || typeof finding !== "object" || !("remediation" in finding)) return []
+    return typeof finding.remediation === "string" ? [finding.remediation] : []
+  })
+  return new ScenarioInputRevisionRequiredError(summary, suggestions)
 }
 
 function readScenarioId(data: unknown): string | null {
@@ -94,7 +129,14 @@ async function consumeScenarioStream(
         generatedCharacters += typeof content === "string" ? content.length : 0
         onProgress(generatedCharacters)
       }
-      if (parsed.event === "scenario.error") throw new Error("シナリオ生成に失敗しました。")
+      if (parsed.event === "scenario.error") {
+        const revisionError = readInputRevisionError(parsed.data)
+        if (revisionError) throw revisionError
+        throw new ScenarioGenerationFailedError("シナリオ生成に失敗しました。")
+      }
+      if (parsed.event === "scenario.cancelled") {
+        throw new ScenarioGenerationCancelledError("マシン作成は中止されました。")
+      }
       if (parsed.event === "scenario.completed") {
         const scenarioId = readScenarioId(parsed.data)
         if (!scenarioId) throw new Error("生成されたシナリオを確認できませんでした。")
@@ -105,6 +147,39 @@ async function consumeScenarioStream(
   }
 
   throw new Error("AIサーバーとの接続が途中で終了しました。")
+}
+
+async function waitForScenario(
+  sessionId: string,
+  onProgress: (generatedCharacters: number) => void,
+  signal: AbortSignal,
+): Promise<string> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= SCENARIO_STREAM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/scenario`, {
+        cache: "no-store",
+        signal,
+      })
+      return await consumeScenarioStream(response, onProgress)
+    } catch (error) {
+      if (
+        error instanceof ScenarioGenerationFailedError ||
+        error instanceof ScenarioInputRevisionRequiredError ||
+        error instanceof ScenarioGenerationCancelledError ||
+        signal.aborted
+      )
+        throw error
+      lastError = error
+      if (attempt < SCENARIO_STREAM_MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, SCENARIO_STREAM_RETRY_DELAY_MS))
+        if (signal.aborted) throw signal.reason
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("AIサーバーとの接続が途中で終了しました。")
 }
 
 function buildInitialAnswers(session: ChatSession): ChatAnswers {
@@ -145,6 +220,16 @@ function getNextChatStep(step: number, answers: ChatAnswers) {
     return answers.needsSystemFlag ? CHAT_STEPS.systemFlagDetails : CHAT_STEPS.complete
   }
   return step + CHAT_CONFIG.stepIncrement
+}
+
+function getFlagDetailsStep(step: number, answers: ChatAnswers) {
+  if (step === CHAT_STEPS.userFlagChoice && answers.needsUserFlag === true) {
+    return CHAT_STEPS.userFlagDetails
+  }
+  if (step === CHAT_STEPS.systemFlagChoice && answers.needsSystemFlag === true) {
+    return CHAT_STEPS.systemFlagDetails
+  }
+  return null
 }
 
 function getChatValidationMessage(step: number) {
@@ -224,27 +309,38 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   )
   const [creationStatus, setCreationStatus] = useState(session.creationStatus)
   const [creationMessage, setCreationMessage] = useState("")
+  const [creationFailure, setCreationFailure] = useState<ChatCreationFailure | null>(
+    session.creationFailure,
+  )
   const [error, setError] = useState("")
   const [editingStep, setEditingStep] = useState<number | null>(null)
   const [editingError, setEditingError] = useState("")
   const [isSummaryOpen, setIsSummaryOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
+  const [showRebuildButton, setShowRebuildButton] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
   const creationStartedRef = useRef(false)
+  const creationAbortRef = useRef<AbortController | null>(null)
+  const cancellationRequestedRef = useRef(false)
 
   const progress = Math.min(step, CHAT_STEPS.systemFlagDetails)
   const isFinalStep = step === CHAT_STEPS.complete
   const prompt = getChatPrompt(step, basicReady)
-  const transcript = buildChatTranscript(step, basicReady, answers)
+  const transcriptStep = editingStep === null ? step : Math.max(step, editingStep + 1)
+  const transcript = buildChatTranscript(transcriptStep, basicReady, answers)
   const chatProgress = `${step}:${basicReady}`
 
   useEffect(() => {
     if (!chatProgress) return
     const conversation = conversationRef.current
     if (conversation) {
-      conversation.scrollTo({ behavior: "smooth", top: conversation.scrollHeight })
+      conversation.scrollTo({
+        behavior: editingStep === null ? "smooth" : "auto",
+        top: conversation.scrollHeight,
+      })
     }
-  }, [chatProgress])
+  }, [chatProgress, editingStep])
 
   function updateAnswers(values: Partial<ChatAnswers>) {
     setAnswers((current) => ({ ...current, ...values }))
@@ -298,26 +394,44 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     async (resume = false) => {
       if (!sessionId || creationStartedRef.current) return
       creationStartedRef.current = true
+      cancellationRequestedRef.current = false
+      const abortController = new AbortController()
+      creationAbortRef.current = abortController
       setCreationStatus("generating_scenario")
       setCreationMessage("AIにマシン設定を送信しています…")
+      setCreationFailure(null)
       setError("")
 
       try {
         if (!resume) {
           const preparation = await prepareMachineCreationAction(sessionId, answers)
           if (!preparation.success) throw new Error(preparation.message)
+          if (cancellationRequestedRef.current) {
+            await cancelMachineCreationAction(sessionId)
+            return
+          }
         }
 
         setCreationMessage("AIがシナリオを生成しています…")
-        const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/scenario`, {
-          cache: "no-store",
-        })
-        const scenarioId = await consumeScenarioStream(response, (characters) => {
-          setCreationMessage(`AIがシナリオを生成しています… ${characters.toLocaleString()}文字`)
-        })
+        const scenarioId = await waitForScenario(
+          sessionId,
+          (characters) => {
+            setCreationMessage(`AIがシナリオを生成しています… ${characters.toLocaleString()}文字`)
+          },
+          abortController.signal,
+        )
+
+        if (cancellationRequestedRef.current) {
+          await cancelMachineCreationAction(sessionId)
+          return
+        }
 
         setCreationMessage("シナリオが完成しました。ビルドを開始しています…")
         const build = await startMachineBuildAction(sessionId, scenarioId)
+        if (cancellationRequestedRef.current) {
+          await cancelMachineCreationAction(sessionId)
+          return
+        }
         if (!build.success || !build.machineId) {
           throw new Error(build.success ? "マシン情報を保存できませんでした。" : build.message)
         }
@@ -326,11 +440,32 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
         setCreationMessage("マシンの生成・ビルドを受け付けました。")
         router.push(`/machines/${build.machineId}`)
       } catch (creationError) {
+        if (
+          cancellationRequestedRef.current ||
+          abortController.signal.aborted ||
+          creationError instanceof ScenarioGenerationCancelledError
+        ) {
+          return
+        }
         console.error("Machine creation failed.", creationError)
+        const failure: ChatCreationFailure =
+          creationError instanceof ScenarioInputRevisionRequiredError
+            ? {
+                kind: "settings",
+                summary: creationError.message,
+                suggestions: creationError.suggestions,
+              }
+            : {
+                kind: "system",
+                summary: "マシンを作成できませんでした。",
+                suggestions: [],
+              }
         setCreationStatus("failed")
         setCreationMessage("")
-        await markMachineCreationFailedAction(sessionId)
+        setCreationFailure(failure)
+        await markMachineCreationFailedAction(sessionId, failure)
       } finally {
+        if (creationAbortRef.current === abortController) creationAbortRef.current = null
         creationStartedRef.current = false
       }
     },
@@ -341,7 +476,47 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     void runMachineCreation(false)
   }
 
-  function startEditing(targetStep: number) {
+  async function handleCancel() {
+    if (!sessionId || creationStatus === "input") {
+      router.push("/machines")
+      return
+    }
+
+    if (!(await cancelActiveCreation())) return
+    router.push("/machines")
+    router.refresh()
+  }
+
+  async function cancelActiveCreation() {
+    if (!sessionId) return false
+    const previousCreationStatus = creationStatus
+    const previousCreationMessage = creationMessage
+    cancellationRequestedRef.current = true
+    creationAbortRef.current?.abort()
+    setIsCancelling(true)
+    setCreationStatus("cancelled")
+    setCreationMessage("")
+    setCreationFailure(null)
+    setError("")
+    const result = await cancelMachineCreationAction(sessionId)
+    setIsCancelling(false)
+    if (result.success) return true
+
+    cancellationRequestedRef.current = false
+    setCreationStatus(previousCreationStatus)
+    setCreationMessage(previousCreationMessage)
+    setError(result.message)
+    return false
+  }
+
+  async function startEditing(targetStep: number) {
+    if (
+      sessionId &&
+      (creationStatus === "generating_scenario" || creationStatus === "building") &&
+      !(await cancelActiveCreation())
+    ) {
+      return
+    }
     setEditingStep(targetStep)
     setEditingError("")
   }
@@ -352,16 +527,29 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
       setEditingError(getChatValidationMessage(editingStep))
       return
     }
+    const flagDetailsStep = getFlagDetailsStep(editingStep, answers)
+    if (flagDetailsStep !== null) {
+      setEditingStep(flagDetailsStep)
+      setEditingError("")
+      return
+    }
     if (!(await persistProgress(step, basicReady))) {
       setEditingError("変更を保存できませんでした。もう一度お試しください。")
       return
     }
+    if (sessionId) {
+      const ready = await markMachineCreationReadyAction(sessionId)
+      if (!ready.success) {
+        setEditingError(ready.message)
+        return
+      }
+    }
+    setCreationStatus("input")
+    setCreationMessage("")
+    setCreationFailure(null)
+    setShowRebuildButton(true)
     setEditingStep(null)
   }
-
-  useEffect(() => {
-    if (session.creationStatus === "generating_scenario") void runMachineCreation(true)
-  }, [runMachineCreation, session.creationStatus])
 
   return (
     <div className="mx-auto flex h-[calc(100dvh-92px)] max-w-5xl min-h-0 flex-col max-lg:h-[calc(100dvh-64px)]">
@@ -380,12 +568,14 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-3 max-sm:flex-col max-sm:items-end">
-              <Link
-                className="text-[0.78rem] font-bold text-[#61605b] hover:text-[#20201e]"
-                href="/machines"
+              <button
+                className="text-[0.78rem] font-bold text-[#61605b] hover:text-[#20201e] disabled:cursor-not-allowed disabled:opacity-55"
+                disabled={isCancelling}
+                onClick={() => void handleCancel()}
+                type="button"
               >
-                中止する
-              </Link>
+                {isCancelling ? "中止しています…" : "中止する"}
+              </button>
               <span className="rounded-full border border-[#d6d6d2] bg-[#f8f8f7] px-3 py-1.5 text-[0.75rem] font-extrabold text-[#61605b]">
                 {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
               </span>
@@ -432,9 +622,16 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
             {transcript.map((message) => (
               <div className="grid gap-3" key={message.step}>
                 <AssistantMessage prompt={message.prompt} />
-                <UserMessage answer={message.answer} onEdit={() => startEditing(message.step)} />
+                <UserMessage
+                  answer={message.answer}
+                  disabled={isCancelling}
+                  onEdit={() => void startEditing(message.step)}
+                />
                 {editingStep === message.step ? (
                   <AnswerEditor
+                    actionLabel={
+                      getFlagDetailsStep(message.step, answers) === null ? "更新" : "次へ"
+                    }
                     answers={answers}
                     error={editingError}
                     onChange={updateAnswers}
@@ -457,6 +654,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
             <CreationStatusPanel
               machineId={session.machineId}
               message={creationMessage || "マシンを作成しています…"}
+              failure={creationFailure}
               onRetry={handleMachineCreation}
               status={creationStatus}
             />
@@ -468,7 +666,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                 onClick={handleMachineCreation}
                 type="button"
               >
-                {CHAT_COPY.buttons.createBasic}
+                {showRebuildButton ? "改めてマシンをビルドする" : CHAT_COPY.buttons.createBasic}
               </button>
               <button
                 className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px"
@@ -486,7 +684,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               onClick={handleMachineCreation}
               type="button"
             >
-              {CHAT_COPY.buttons.createComplete}
+              {showRebuildButton ? "改めてマシンをビルドする" : CHAT_COPY.buttons.createComplete}
             </button>
           ) : (
             <button
@@ -517,11 +715,13 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
 }
 
 function CreationStatusPanel({
+  failure,
   machineId,
   message,
   onRetry,
   status,
 }: {
+  failure: ChatCreationFailure | null
   machineId: string | null
   message: string
   onRetry: () => void
@@ -547,18 +747,52 @@ function CreationStatusPanel({
   }
 
   if (status === "failed") {
+    const revisionFailure = failure?.kind === "settings" ? failure : null
     return (
       <div className="mt-4 rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-4">
         <p className="flex items-start gap-2 text-[0.88rem] font-bold text-[#9a392d]">
           <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
-          マシンを作成できませんでした。
+          {revisionFailure ? "問題設定の見直しが必要です。" : "マシンを作成できませんでした。"}
+        </p>
+        {revisionFailure ? (
+          <div className="mt-3 space-y-3 text-[0.84rem] leading-[1.65] text-[#63352f]">
+            <p>{revisionFailure.summary}</p>
+            {revisionFailure.suggestions.length > 0 ? (
+              <ul className="list-disc space-y-2 pl-5">
+                {revisionFailure.suggestions.map((suggestion) => (
+                  <li key={suggestion}>{suggestion}</li>
+                ))}
+              </ul>
+            ) : null}
+            <p>
+              上の回答にある鉛筆ボタンから、難易度、脆弱性の利用条件、フラグ取得方法などを修正してから再生成してください。
+            </p>
+          </div>
+        ) : null}
+        <button
+          className="mt-4 inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
+          onClick={onRetry}
+          type="button"
+        >
+          {revisionFailure ? "修正した設定で再生成する" : "もう一度試す"}
+        </button>
+      </div>
+    )
+  }
+
+  if (status === "cancelled") {
+    return (
+      <div className="mt-4 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
+        <p className="flex items-center gap-2 text-[0.88rem] font-bold text-[#61605b]">
+          <XCircle aria-hidden="true" size={18} />
+          マシン作成を中止しました。
         </p>
         <button
           className="mt-4 inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
           onClick={onRetry}
           type="button"
         >
-          もう一度試す
+          もう一度作成する
         </button>
       </div>
     )
@@ -592,7 +826,15 @@ function AssistantMessage({ prompt }: { prompt: { help: string; question: string
   )
 }
 
-function UserMessage({ answer, onEdit }: { answer: string; onEdit: () => void }) {
+function UserMessage({
+  answer,
+  disabled,
+  onEdit,
+}: {
+  answer: string
+  disabled: boolean
+  onEdit: () => void
+}) {
   return (
     <div className="ml-auto flex max-w-[80%] flex-col items-end gap-1">
       <div className="w-full rounded-2xl rounded-tr-sm bg-[#20201e] px-4 py-3 text-white">
@@ -604,6 +846,7 @@ function UserMessage({ answer, onEdit }: { answer: string; onEdit: () => void })
       <button
         aria-label="この回答を編集"
         className="inline-flex size-7 items-center justify-center rounded-md text-[#61605b] hover:bg-[#f5f5f3] hover:text-[#20201e]"
+        disabled={disabled}
         onClick={onEdit}
         type="button"
       >
@@ -614,12 +857,14 @@ function UserMessage({ answer, onEdit }: { answer: string; onEdit: () => void })
 }
 
 function AnswerEditor({
+  actionLabel,
   answers,
   error,
   onChange,
   onComplete,
   step,
 }: {
+  actionLabel: "更新" | "次へ"
   answers: ChatAnswers
   error: string
   onChange: (values: Partial<ChatAnswers>) => void
@@ -636,7 +881,7 @@ function AnswerEditor({
         onClick={onComplete}
         type="button"
       >
-        更新
+        {actionLabel}
       </button>
     </div>
   )

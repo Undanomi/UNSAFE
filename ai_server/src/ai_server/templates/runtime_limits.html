@@ -1,0 +1,31 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="col-12">
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table table-vcenter card-table">
+        <thead>
+          <tr>
+            <th>Limit</th>
+            <th>Environment variable</th>
+            <th>Current value</th>
+            <th>Allowed range</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>{{ row.label }}</td>
+            <td><code>{{ row.environment }}</code></td>
+            <td><strong>{{ row.value }}</strong></td>
+            <td>{{ row.allowed }}</td>
+            <td class="text-muted">{{ row.description }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

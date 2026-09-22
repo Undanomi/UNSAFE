@@ -292,6 +292,33 @@ function BuildStatusPanel({
     )
   }
 
+  if (state.status === "cancelled") {
+    return (
+      <section className="rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-5">
+        <div className="flex items-start gap-3 text-[#61605b]">
+          <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
+          <h2 className="font-extrabold">マシン作成は中止されました</h2>
+        </div>
+        {canRetry ? (
+          <button
+            className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#20201e] px-4 text-[0.86rem] font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-55"
+            disabled={isRetrying}
+            onClick={onRetry}
+            type="button"
+          >
+            {isRetrying ? (
+              <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />
+            ) : (
+              <RefreshCw aria-hidden="true" size={17} />
+            )}
+            {isRetrying ? "再開中…" : "もう一度作成する"}
+          </button>
+        ) : null}
+        {error ? <p className="mt-3 text-[0.84rem] font-bold text-[#9a392d]">{error}</p> : null}
+      </section>
+    )
+  }
+
   return (
     <section className="rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-5">
       <div className="flex items-center justify-between gap-4">

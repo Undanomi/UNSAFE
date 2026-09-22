@@ -69,34 +69,10 @@ def reference_summary(reference: SkillReference) -> dict:
 
 
 def reference_is_eligible(
-    reference: SkillReference, machine: MachineInformation, min_year: int
+    reference: SkillReference, _machine: MachineInformation, min_year: int
 ) -> bool:
     match = re.fullmatch(r"CVE-(\d{4})-\d{4,7}", reference.reference_id)
-    if not match or int(match[1]) < min_year:
-        return False
-    # Explicit versions in Target OS are hard prerequisites; ambiguous prose is
-    # left for the semantic selector and the existing official CVE verification.
-    target = re.search(r"(?im)^\s*[-*]?\s*Target OS:\s*(.+)$", reference.content)
-    if target:
-        text = target[1]
-        if re.search(r"ubuntu|windows", text, re.IGNORECASE) and not re.search(
-            r"debian", text, re.IGNORECASE
-        ):
-            return False
-        versions = re.findall(
-            r"debian\s+(\d+(?:\.\d+){0,2}(?:\s*[、,・/]\s*(?:debian\s+)?\d+(?:\.\d+){0,2})*)",
-            text,
-            re.IGNORECASE,
-        )
-        major = re.search(r"\d+", machine.operating_system)[0]
-        allowed = {
-            item.split(".")[0]
-            for group in versions
-            for item in re.findall(r"\d+(?:\.\d+){0,2}", group)
-        }
-        if allowed and major not in allowed:
-            return False
-    return True
+    return bool(match and int(match[1]) >= min_year)
 
 
 def hard_eligible(skill: StoredSkill, machine: MachineInformation) -> bool:

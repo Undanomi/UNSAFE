@@ -9,11 +9,26 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 from sqlalchemy import delete
 
-from ai_server.admin import AISessionAdmin, ScenarioVersionAdmin, configure_sqladmin
+from ai_server.admin import (
+    AISessionAdmin,
+    ScenarioVersionAdmin,
+    SessionSkillPlanAdmin,
+    SessionSkillSnapshotAdmin,
+    SessionSkillSnapshotItemAdmin,
+    SkillAdmin,
+    SkillVersionAdmin,
+    configure_sqladmin,
+)
 from ai_server.admin_app import create_admin_app
 from ai_server.config import AdminSettings, Settings
-from ai_server.database import AISessionRecord, create_database_engine, sqlalchemy_database_url
+from ai_server.database import (
+    AISessionRecord,
+    SkillRecord,
+    create_database_engine,
+    sqlalchemy_database_url,
+)
 from ai_server.main import create_app
+from ai_server.models import utcnow
 
 
 def admin_settings(**overrides) -> AdminSettings:
@@ -46,6 +61,55 @@ def test_admin_views_allow_editing_only() -> None:
     assert AISessionAdmin.can_edit is True
     assert AISessionAdmin.can_delete is False
     assert AISessionAdmin.form_excluded_columns == (AISessionAdmin.model.created_at,)
+    assert AISessionAdmin.model.scenario_generation_attempts in AISessionAdmin.column_list
+    assert AISessionAdmin.model.scenario_generation_attempt_limit in AISessionAdmin.column_list
+    assert AISessionAdmin.model.source_generation_attempts in AISessionAdmin.column_list
+    assert AISessionAdmin.model.source_generation_attempt_limit in AISessionAdmin.column_list
+
+
+def test_skill_admin_views_preserve_published_history() -> None:
+    assert SkillAdmin.can_create is False
+    assert SkillAdmin.can_edit is True
+    assert SkillAdmin.can_delete is False
+    assert SkillVersionAdmin.can_edit is False
+    assert SessionSkillPlanAdmin.can_edit is False
+    assert SessionSkillSnapshotAdmin.can_edit is False
+    assert SessionSkillSnapshotItemAdmin.can_edit is False
+
+
+@pytest.mark.asyncio
+async def test_skill_admin_validates_metadata_and_activation() -> None:
+    record = SkillRecord(
+        skill_id=UUID("00000000-0000-0000-0000-000000000001"),
+        name="web-security",
+        description="Web security guidance",
+        status="draft",
+        current_version=None,
+        created_at=utcnow(),
+        updated_at=utcnow(),
+    )
+    view = SkillAdmin()
+
+    with pytest.raises(ValidationError, match="String should match pattern"):
+        await view.on_model_change(
+            {"name": "Invalid Skill", "description": record.description, "status": "draft"},
+            record,
+            False,
+            None,
+        )
+
+    with pytest.raises(ValueError, match="published version"):
+        await view.on_model_change(
+            {"name": record.name, "description": record.description, "status": "active"},
+            record,
+            False,
+            None,
+        )
+
+    before = record.updated_at
+    data = {"name": record.name, "description": "Updated", "status": "disabled"}
+    await view.on_model_change(data, record, False, None)
+    assert data["updated_at"] >= before
 
 
 @pytest.mark.asyncio
@@ -88,6 +152,12 @@ async def test_sqladmin_login_protects_admin_routes() -> None:
 
             index = await client.get("/admin/")
             assert index.status_code == 200
+
+            limits = await client.get("/admin/runtime-limits")
+            assert limits.status_code == 200
+            assert "AI server runtime limits" in limits.text
+            assert "SKILLS_MAX_ACTIVE" in limits.text
+            assert ">32<" in limits.text
     finally:
         await engine.dispose()
 
@@ -160,10 +230,15 @@ async def test_sqladmin_lists_sessions_from_postgres() -> None:
                             "scenario_version_id": "",
                             "generated_code_path": "",
                             "generated_code_checksum": "",
+                            "scenario_generation_attempts": "0",
+                            "scenario_generation_attempt_limit": "0",
+                            "source_generation_attempts": "0",
+                            "source_generation_attempt_limit": "0",
                             "build_id": "",
                             "build_status": "",
                             "build_progress": "0",
                             "build_repair_attempts": "0",
+                            "build_repair_attempt_limit": "0",
                             "machine_access": "",
                             "artifact": "",
                             "error_message": "",

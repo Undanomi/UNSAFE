@@ -15,6 +15,7 @@ from .services.ai import GeminiGenerator
 from .services.build_client import BuildClient
 from .services.download_signing import DownloadSigner
 from .services.events import EventBroker
+from .services.scenario_archive import ScenarioDraftArchive
 from .services.scenarios import ScenarioCoordinator
 from .services.source_archive import SourceArchive
 from .services.stub_ai import StubGenerator
@@ -86,6 +87,8 @@ def create_app(
             generator,
             broker,
             resolved.scenario_chunk_size,
+            resolved.scenario_generation_attempts,
+            ScenarioDraftArchive(resolved.source_root),
             skill_service,
         )
         app.state.workflow = MachineWorkflow(
@@ -95,6 +98,7 @@ def create_app(
             build_client,
             resolved.source_generation_attempts,
             resolved.build_repair_max_attempts,
+            resolved.scenario_sync_attempts,
             skill_service,
         )
         app.state.download_signer = DownloadSigner(

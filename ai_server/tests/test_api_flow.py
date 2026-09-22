@@ -17,6 +17,8 @@ from ai_server.models import (
     AttackStep,
     MachineInformation,
     ScenarioDraft,
+    ScenarioReview,
+    ScenarioReviewFinding,
     ScenarioRevision,
     SessionState,
     SessionStatus,
@@ -26,6 +28,7 @@ from ai_server.models import (
     SourceReviewFinding,
 )
 from ai_server.repository import SessionNotFoundError
+from ai_server.services.errors import ScenarioInputRevisionRequiredError
 from ai_server.services.workflow import MachineWorkflow
 
 
@@ -73,9 +76,11 @@ class FakeBuildClient:
         self.submitted_request: dict | None = None
         self.submitted_requests: list[dict] = []
         self.get_response: dict | None = None
+        self.requested_build_ids: list[str] = []
         self.packer_log_response = ""
         self.download_requests: list[tuple[str, str]] = []
         self.download_headers: list[tuple[str | None, str | None]] = []
+        self.cancelled_build_ids: list[str] = []
 
     async def submit(self, **request) -> dict:
         self.submitted_request = request
@@ -93,6 +98,7 @@ class FakeBuildClient:
         }
 
     async def get(self, build_id: str) -> dict:
+        self.requested_build_ids.append(build_id)
         if self.get_response is not None:
             return {"build_id": build_id, **self.get_response}
         return {
@@ -101,6 +107,9 @@ class FakeBuildClient:
             "progress": 100,
             "machine_password": "test-generated-machine-password",
         }
+
+    async def cancel(self, build_id: str) -> None:
+        self.cancelled_build_ids.append(build_id)
 
     async def packer_log(self, build_id: str) -> str:
         return self.packer_log_response
@@ -206,12 +215,20 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert "event: scenario.completed" in events.text
     assert '"target_os": "Debian 13.7.0"' in events.text
 
-    scenario = (await app.state.repository.get(session_id)).scenario
+    scenario_state = await app.state.repository.get(session_id)
+    scenario = scenario_state.scenario
     assert scenario is not None
+    assert scenario_state.scenario_generation_attempts == 1
+    assert scenario_state.scenario_generation_attempt_limit == 5
     assert scenario.user_flag is not None
     assert re.fullmatch(r"flag\{user_[0-9a-f]{32}\}", scenario.user_flag)
     assert scenario.system_flag is None
     assert scenario.user_flag not in events.text
+    version_root = app.state.workflow.source_archive.root / session_id / "v1"
+    assert (version_root / "scenario.md").read_text() == scenario.definition.rstrip() + "\n"
+    assert (version_root / "attempts/000001/scenario.md").is_file()
+    persisted_review = json.loads((version_root / "scenario_review.json").read_text())
+    assert persisted_review["approved"] is True
     scenario_id = scenario.scenario_id
     accepted = await http.post(
         f"/v1/sessions/{session_id}/machines",
@@ -240,6 +257,9 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
         "username": "provisioner",
         "password": "test-generated-machine-password",
     }
+    completed_state = await app.state.repository.get(session_id)
+    assert completed_state.source_generation_attempts == 1
+    assert completed_state.source_generation_attempt_limit == 12
     download_url = completed.json()["download_url"]
     assert f"/v1/sessions/{session_id}/download?" in download_url
     assert "expires=" in download_url
@@ -323,6 +343,331 @@ async def test_scenario_requires_machine_information(client) -> None:
     session_id = (await http.post("/v1/sessions")).json()["session_id"]
     response = await http.get(f"/v1/sessions/{session_id}/scenarios/events")
     assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cancel_stops_scenario_task_and_persists_cancelled_state(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    machine = {
+        "name": "Cancellation test",
+        "visibility": "private",
+        "theme": "Web security",
+        "difficulty": "Easy",
+        "needs_user_flag": False,
+        "needs_system_flag": False,
+    }
+    assert (
+        await http.put(
+            f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+        )
+    ).status_code == 200
+
+    started = asyncio.Event()
+    blocked = asyncio.Event()
+
+    async def generate_scenario(*_args, **_kwargs):
+        started.set()
+        await blocked.wait()
+        raise AssertionError("cancelled generation must not complete")
+
+    app.state.scenarios.generator.generate_scenario = generate_scenario
+    app.state.scenarios.ensure_started(session_id)
+    await asyncio.wait_for(started.wait(), timeout=1)
+
+    cancelled = await http.post(f"/v1/sessions/{session_id}/cancel", headers=headers)
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert session_id not in app.state.scenarios.tasks
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.status == SessionStatus.CANCELLED
+
+    events = await http.get(f"/v1/sessions/{session_id}/scenarios/events", headers=headers)
+    assert events.status_code == 200
+    assert "event: scenario.cancelled" in events.text
+    assert session_id not in app.state.scenarios.tasks
+
+
+@pytest.mark.asyncio
+async def test_cancel_requests_active_build_cancellation(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await app.state.repository.create("user-123")
+    state.status = SessionStatus.BUILDING
+    state.build_id = "a49f148e-1f8c-4703-97bb-d0aa180682ae"
+    state.build_status = "building"
+    await app.state.repository.save(state)
+
+    cancelled = await http.post(f"/v1/sessions/{state.session_id}/cancel", headers=headers)
+
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["build_status"] == "cancelled"
+    assert fake_build.cancelled_build_ids == [state.build_id]
+
+    fake_build.get_response = {"status": "building", "progress": 80}
+    refreshed = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["status"] == "cancelled"
+    assert refreshed.json()["build_status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_get_marks_orphaned_running_build_cancelled_without_status_synchronization(
+    client,
+) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await app.state.repository.create("user-123")
+    state.status = SessionStatus.BUILDING
+    state.build_id = "a49f148e-1f8c-4703-97bb-d0aa180682ae"
+    state.build_status = "building"
+    await app.state.repository.save(state)
+    fake_build.get_response = {"status": "completed", "progress": 100}
+
+    response = await http.get(f"/v1/sessions/{state.session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert response.json()["build_status"] == "cancelled"
+    assert fake_build.cancelled_build_ids == [state.build_id]
+    assert fake_build.requested_build_ids == []
+
+
+@pytest.mark.asyncio
+async def test_editing_cancelled_build_resets_generated_state_for_fresh_build(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app, status=SessionStatus.CANCELLED)
+    state.build_status = "cancelled"
+    state.build_progress = 47
+    state.build_repair_attempts = 2
+    state.build_repair_attempt_limit = 3
+    await app.state.repository.save(state)
+
+    updated = await http.put(
+        f"/v1/sessions/{state.session_id}/machine-information",
+        headers=headers,
+        json={
+            **state.machine_information.model_dump(mode="json"),
+            "name": "edited after cancellation",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "ready"
+    persisted = await app.state.repository.get(state.session_id)
+    assert persisted.machine_information is not None
+    assert persisted.machine_information.name == "edited after cancellation"
+    assert persisted.scenario is None
+    assert persisted.source_path is None
+    assert persisted.source_checksum is None
+    assert persisted.build_id is None
+    assert persisted.build_status is None
+    assert persisted.build_progress == 0
+    assert persisted.build_repair_attempts == 0
+    assert persisted.build_repair_attempt_limit == 0
+    assert persisted.artifact is None
+    assert persisted.machine_access is None
+
+
+@pytest.mark.asyncio
+async def test_scenario_input_revision_error_is_returned_as_structured_event(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    await http.put(
+        f"/v1/sessions/{session_id}/machine-information",
+        headers=headers,
+        json={
+            "name": "Unstable RCE",
+            "visibility": "private",
+            "theme": "Web security",
+            "difficulty": "Easy",
+            "needs_user_flag": False,
+            "needs_system_flag": False,
+        },
+    )
+
+    async def reject_input(*_args, **_kwargs):
+        raise ScenarioInputRevisionRequiredError(
+            "Stable RCE is not justified at the requested difficulty.",
+            [
+                {
+                    "step_id": "exploit-cve",
+                    "severity": "error",
+                    "category": "unsupported_assumption",
+                    "evidence": "The required exploit is not established.",
+                    "remediation": "Raise the difficulty or relax the required impact.",
+                }
+            ],
+        )
+
+    app.state.scenarios.generator.generate_scenario = reject_input
+    events = await http.get(
+        f"/v1/sessions/{session_id}/scenarios/events",
+        headers=headers,
+    )
+
+    assert events.status_code == 200
+    assert "event: scenario.error" in events.text
+    assert '"code": "scenario_input_revision_required"' in events.text
+    assert "Raise the difficulty or relax the required impact." in events.text
+    failed = await app.state.repository.get(session_id)
+    assert failed.status == SessionStatus.FAILED
+    assert failed.error_message == "Stable RCE is not justified at the requested difficulty."
+
+
+@pytest.mark.asyncio
+async def test_machine_information_promotes_cve_from_flag_details(client) -> None:
+    http, _, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    response = await http.put(
+        f"/v1/sessions/{session_id}/machine-information",
+        headers=headers,
+        json={
+            "name": "Nginx Engine",
+            "visibility": "非公開",
+            "theme": "Web セキュリティ",
+            "difficulty": "Very Easy",
+            "needs_user_flag": True,
+            "user_flag_details": "CVE-2026-42533を用いたRCE。",
+            "needs_system_flag": False,
+            "system_flag_details": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["machine_information"]["cve_ids"] == ["CVE-2026-42533"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_machine_information_cancels_stale_scenario_state(
+    client,
+) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    machine = {
+        "name": "Nginx Engine",
+        "visibility": "非公開",
+        "theme": "Web セキュリティ",
+        "difficulty": "Very Easy",
+        "needs_user_flag": True,
+        "user_flag_details": "CVE-2026-42533を用いたRCE。",
+        "needs_system_flag": False,
+        "system_flag_details": "",
+    }
+    first = await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+    assert first.status_code == 200
+    state = await app.state.repository.get(session_id)
+    state.status = SessionStatus.GENERATING_SCENARIO
+    await app.state.repository.save(state)
+
+    repeated = await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+
+    assert repeated.status_code == 409
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.machine_information is not None
+    assert persisted.machine_information.cve_ids == ["CVE-2026-42533"]
+    assert persisted.status == SessionStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_repeated_machine_information_starts_a_fresh_generation_cycle(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    machine = {
+        "name": "Retry scenario",
+        "visibility": "private",
+        "theme": "Web security",
+        "difficulty": "Easy",
+        "needs_user_flag": False,
+        "needs_system_flag": False,
+    }
+    await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+    state = await app.state.repository.get(session_id)
+    state.status = SessionStatus.FAILED
+    state.scenario_generation_attempts = 5
+    state.scenario_generation_attempt_limit = 5
+    state.source_generation_attempts = 2
+    state.source_generation_attempt_limit = 12
+    await app.state.repository.save(state)
+
+    repeated = await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+
+    assert repeated.status_code == 200
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.status == SessionStatus.READY
+    assert persisted.scenario_generation_attempts == 0
+    assert persisted.scenario_generation_attempt_limit == 0
+    assert persisted.source_generation_attempts == 0
+    assert persisted.source_generation_attempt_limit == 0
+
+
+@pytest.mark.asyncio
+async def test_machine_information_change_requires_stale_generation_to_cancel_first(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    machine = {
+        "name": "Original",
+        "visibility": "private",
+        "theme": "Web",
+        "difficulty": "Easy",
+        "needs_user_flag": False,
+        "user_flag_details": "",
+        "needs_system_flag": False,
+        "system_flag_details": "",
+    }
+    await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+    state = await app.state.repository.get(session_id)
+    state.status = SessionStatus.GENERATING_SCENARIO
+    state.scenario_generation_attempts = 4
+    state.scenario_generation_attempt_limit = 5
+    state.source_generation_attempts = 3
+    state.source_generation_attempt_limit = 12
+    await app.state.repository.save(state)
+
+    changed = await http.put(
+        f"/v1/sessions/{session_id}/machine-information",
+        json={**machine, "name": "Changed"},
+        headers=headers,
+    )
+
+    assert changed.status_code == 409
+    cancelled = await app.state.repository.get(session_id)
+    assert cancelled.status == SessionStatus.CANCELLED
+
+    changed = await http.put(
+        f"/v1/sessions/{session_id}/machine-information",
+        json={**machine, "name": "Changed"},
+        headers=headers,
+    )
+    assert changed.status_code == 200
+    assert changed.json()["status"] == "ready"
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.machine_information is not None
+    assert persisted.machine_information.name == "Changed"
+    assert persisted.scenario is None
+    assert persisted.scenario_generation_attempts == 0
+    assert persisted.scenario_generation_attempt_limit == 0
+    assert persisted.source_generation_attempts == 0
+    assert persisted.source_generation_attempt_limit == 0
 
 
 async def create_failed_build_state(
@@ -417,13 +762,23 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
-    fake_build.packer_log_response = "command before failure\nerror detail"
+    assert state.scenario is not None
+    authoritative_graph = state.scenario.attack_graph
+    fake_build.packer_log_response = "+ command before failure\nerror detail"
 
     async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
+        rewritten_graph = scenario.attack_graph.model_copy(
+            update={
+                "steps": [
+                    step.model_copy(update={"description": "rewritten to match repaired code"})
+                    for step in scenario.attack_graph.steps
+                ]
+            }
+        )
         return ScenarioRevision(
             scenario_description="Updated player introduction after source repair.",
             definition="retry synchronized with repaired source",
-            attack_graph=scenario.attack_graph,
+            attack_graph=rewritten_graph,
             summary="Updated the scenario after source repair.",
         )
 
@@ -447,6 +802,7 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert submitted_state.build_repair_attempts == 1
     assert submitted_state.build_repair_attempt_limit == 3
     assert submitted_state.scenario is not None
+    assert submitted_state.scenario.attack_graph == authoritative_graph
     assert (
         submitted_state.scenario.scenario_description
         == "Updated player introduction after source repair."
@@ -464,7 +820,279 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert "contents/README.md" in repair_report
     assert "command before failure" in repair_report
     assert "error detail" in repair_report
+    assert '"failed_commands"' in repair_report
+    assert '"failure_log_context"' in repair_report
     assert '"scenario_sync_status": "approved"' in repair_report
+
+
+@pytest.mark.asyncio
+async def test_scenario_review_feedback_revises_scenario_without_another_code_patch(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_calls = 0
+    sync_feedback: list[dict | None] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, _failure_report, _skills=None) -> SourcePatch:
+        nonlocal repair_calls
+        repair_calls += 1
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + "\nSingle source repair.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def synchronize(
+        _machine, scenario, _current, review_feedback=None
+    ) -> ScenarioRevision:
+        sync_feedback.append(review_feedback)
+        return ScenarioRevision(
+            scenario_description="Reviewed scenario introduction.",
+            definition="review feedback applied" if review_feedback else "initial synchronization",
+            attack_graph=scenario.attack_graph,
+            summary="Scenario synchronized without changing source.",
+        )
+
+    async def review(_machine, _scenario, review_context="generation") -> ScenarioReview:
+        assert review_context == "source_sync"
+        nonlocal review_calls
+        review_calls += 1
+        if review_calls == 1:
+            return ScenarioReview(
+                approved=False,
+                summary="The scenario omits the negative control.",
+                findings=[
+                    ScenarioReviewFinding(
+                        step_id="web-entry",
+                        severity="error",
+                        category="acceptance_test_gap",
+                        evidence="No negative control is described.",
+                        remediation="Describe the negative control in the scenario.",
+                    )
+                ],
+            )
+        return ScenarioReview(approved=True, summary="Scenario feedback was applied.")
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.synchronize_scenario = synchronize
+    app.state.workflow.generator.review_scenario = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert repair_calls == 1
+    assert sync_feedback[0] is None
+    assert sync_feedback[1]["kind"] == "scenario_sync_review"
+    submitted = await app.state.repository.get(state.session_id)
+    assert submitted.scenario is not None
+    assert submitted.scenario.definition == "review feedback applied"
+
+
+@pytest.mark.asyncio
+async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_calls = 0
+    feedback_seen: list[dict | None] = []
+
+    async def repair(_machine, _scenario, current, _failure_report, _skills=None) -> SourcePatch:
+        nonlocal repair_calls
+        repair_calls += 1
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[SourceFile(path=readme.path, content=readme.content + "\nrepair\n")]
+        )
+
+    async def synchronize(
+        _machine, scenario, _current, review_feedback=None
+    ) -> ScenarioRevision:
+        feedback_seen.append(review_feedback)
+        return ScenarioRevision(
+            scenario_description="Still rejected.",
+            definition="still rejected",
+            attack_graph=scenario.attack_graph,
+            summary="Attempted scenario-only repair.",
+        )
+
+    async def reject(_machine, _scenario, review_context="generation") -> ScenarioReview:
+        assert review_context == "source_sync"
+        return ScenarioReview(
+            approved=False,
+            summary="Scenario remains inconsistent.",
+            findings=[
+                ScenarioReviewFinding(
+                    severity="error",
+                    category="semantic_mismatch",
+                    evidence=(
+                        "Scenario prose mentions implementation and generated code, but is "
+                        "internally inconsistent."
+                    ),
+                    remediation="Revise scenario prose only.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.synchronize_scenario = synchronize
+    app.state.workflow.generator.review_scenario = reject
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        current = await app.state.repository.get(state.session_id)
+        if current.status == SessionStatus.FAILED:
+            break
+        await asyncio.sleep(0.01)
+
+    assert current.status == SessionStatus.FAILED
+    assert repair_calls == 1
+    assert len(feedback_seen) == app.state.workflow.source_generation_attempts
+    assert feedback_seen[0] is None
+    assert all(feedback is not None for feedback in feedback_seen[1:])
+    assert fake_build.submitted_request is None
+
+
+@pytest.mark.asyncio
+async def test_cve_scenario_sync_rejection_returns_to_source_repair(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_reports: list[dict] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_reports.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + f"\nrepair {len(repair_reports)}\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def synchronize(
+        _machine, scenario, _current, review_feedback=None
+    ) -> ScenarioRevision:
+        return ScenarioRevision(
+            scenario_description=scenario.scenario_description or "Training scenario.",
+            definition="Synchronized scenario.",
+            attack_graph=scenario.attack_graph,
+            summary="Synchronized the scenario with the current source.",
+        )
+
+    async def review(_machine, _scenario, review_context="generation") -> ScenarioReview:
+        assert review_context == "source_sync"
+        nonlocal review_calls
+        review_calls += 1
+        if review_calls <= app.state.workflow.scenario_sync_attempts:
+            return ScenarioReview(
+                approved=False,
+                summary=(
+                    "The configured CVE-2026-42533 condition conflicts with the official "
+                    "description."
+                ),
+                findings=[
+                    ScenarioReviewFinding(
+                        step_id="web-entry",
+                        severity="error",
+                        category="semantic_mismatch",
+                        repair_target="source_code",
+                        evidence=(
+                            "The implemented configuration does not satisfy the CVE-2026-42533 "
+                            "trigger condition."
+                        ),
+                        remediation="Repair the source configuration to match the official record.",
+                    )
+                ],
+            )
+        return ScenarioReview(approved=True, summary="The repaired source matches the CVE.")
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.synchronize_scenario = synchronize
+    app.state.workflow.generator.review_scenario = review
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert len(repair_reports) == 2
+    assert repair_reports[1]["kind"] == "scenario_sync_review"
+    assert "CVE-2026-42533" in repair_reports[1]["error_message"]
+    submitted = await app.state.repository.get(state.session_id)
+    assert submitted.status in {SessionStatus.BUILD_QUEUED, SessionStatus.COMPLETED}
+    assert submitted.source_generation_attempts < submitted.source_generation_attempt_limit
+
+
+@pytest.mark.asyncio
+async def test_invalid_persisted_flag_regenerates_scenario(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    created = await http.post("/v1/sessions", headers=headers)
+    session_id = created.json()["session_id"]
+    machine = {
+        "name": "Flag regeneration",
+        "visibility": "private",
+        "theme": "Web security",
+        "difficulty": "Easy",
+        "needs_user_flag": True,
+        "user_flag_details": "/home/student/user.txt after exploitation",
+        "needs_system_flag": False,
+    }
+    await http.put(
+        f"/v1/sessions/{session_id}/machine-information", json=machine, headers=headers
+    )
+    state = await app.state.repository.get(session_id)
+    invalid_id = "scenario-invalid-flag"
+    state.scenario = ScenarioDraft(
+        scenario_id=invalid_id,
+        title="Invalid flag",
+        definition="invalid persisted scenario",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="entry",
+                    title="Entry",
+                    kind="custom",
+                    phase="initial_access",
+                    description="Training entry",
+                    implementation_steps=["Provision entry"],
+                )
+            ]
+        ),
+        user_flag="flag{wrong_0123456789abcdef0123456789abcdef}",
+    )
+    state.status = SessionStatus.SCENARIO_READY
+    await app.state.repository.save(state)
+
+    events = await http.get(f"/v1/sessions/{session_id}/scenarios/events", headers=headers)
+    assert events.status_code == 200
+    regenerated = await app.state.repository.get(session_id)
+    assert regenerated.scenario is not None
+    assert regenerated.scenario.scenario_id != invalid_id
+    assert re.fullmatch(r"flag\{user_[0-9a-f]{32}\}", regenerated.scenario.user_flag or "")
 
 
 @pytest.mark.asyncio
@@ -560,6 +1188,8 @@ async def test_validation_failures_do_not_consume_build_repair_attempts(client) 
     assert failed.status == SessionStatus.FAILED
     assert failed.build_repair_attempts == 0
     assert failed.build_repair_attempt_limit == 0
+    assert failed.source_generation_attempts == repair_calls
+    assert failed.source_generation_attempt_limit == repair_calls
     assert repair_calls == (
         app.state.workflow.build_repair_max_attempts * app.state.workflow.source_generation_attempts
     )
@@ -622,6 +1252,11 @@ async def test_validation_continues_into_next_build_slot(client) -> None:
     assert repair_calls == app.state.workflow.source_generation_attempts + 1
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.build_repair_attempts == 1
+    assert submitted.source_generation_attempts == repair_calls
+    assert submitted.source_generation_attempt_limit == (
+        app.state.workflow.build_repair_max_attempts
+        * app.state.workflow.source_generation_attempts
+    )
 
 
 @pytest.mark.asyncio
@@ -747,6 +1382,51 @@ async def test_failed_semantic_review_is_repaired_before_build_submission(client
 
 
 @pytest.mark.asyncio
+async def test_final_semantic_rejection_is_persisted_when_attempts_are_exhausted(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    app.state.workflow.source_generation_attempts = 1
+    app.state.workflow.build_repair_max_attempts = 1
+
+    async def reject(*_args, **_kwargs) -> SourceReview:
+        return SourceReview(
+            approved=False,
+            summary="Exploit verification uses a test-only shortcut.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    category="unproven_exploit",
+                    evidence="A marker branch creates the success artifact directly.",
+                    remediation="Exercise the real vulnerable data flow.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.review_source = reject
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        current = await app.state.repository.get(state.session_id)
+        if current.status == SessionStatus.FAILED:
+            break
+        await asyncio.sleep(0.01)
+
+    assert current.status == SessionStatus.FAILED
+    assert fake_build.submitted_request is None
+    report_path = Path(current.source_path or "") / "repair_report.json"
+    report = json.loads(report_path.read_text())
+    assert report["source_semantic_review"]["status"] == "rejected"
+    assert (
+        report["source_semantic_review"]["report"]["checks"][0]["name"]
+        == "semantic:unproven_exploit:web-entry"
+    )
+
+
+@pytest.mark.asyncio
 async def test_explicit_reaccess_preserves_and_increments_build_repair_count(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
@@ -806,7 +1486,7 @@ async def test_explicit_reaccess_adds_a_full_automatic_repair_cycle(client) -> N
 
 
 @pytest.mark.asyncio
-async def test_explicit_reaccess_refreshes_stale_status_before_extending_cycle(client) -> None:
+async def test_explicit_reaccess_cancels_stale_build_instead_of_synchronizing(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app, status=SessionStatus.BUILDING)
@@ -822,21 +1502,13 @@ async def test_explicit_reaccess_refreshes_stale_status_before_extending_cycle(c
     restarted = await http.post(
         f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
     )
-    assert restarted.status_code == 202
-    assert restarted.json()["status"] == "generating_code"
-    assert restarted.json()["build_status"] == "failed"
-    assert restarted.json()["build_repair_attempts"] == 2
-
-    for _ in range(200):
-        if (
-            len(fake_build.submitted_requests) == 3
-            and state.session_id not in app.state.workflow.tasks
-        ):
-            break
-        await asyncio.sleep(0.01)
-    submitted = await app.state.repository.get(state.session_id)
-    assert submitted.build_repair_attempts == 5
-    assert submitted.build_repair_attempt_limit == 5
+    assert restarted.status_code == 409
+    assert restarted.json()["detail"].startswith("stopped machine generation")
+    cancelled = await app.state.repository.get(state.session_id)
+    assert cancelled.status == SessionStatus.CANCELLED
+    assert cancelled.build_status == "cancelled"
+    assert fake_build.cancelled_build_ids == [state.build_id]
+    assert fake_build.submitted_requests == []
 
 
 def test_build_repair_limit_can_be_set_from_environment(monkeypatch) -> None:

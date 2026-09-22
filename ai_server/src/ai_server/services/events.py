@@ -33,6 +33,9 @@ class EventBroker:
         self._subscribers[session_id].add(queue)
         return queue
 
+    def has_subscribers(self, session_id: str) -> bool:
+        return bool(self._subscribers.get(session_id))
+
     async def events(
         self, session_id: str, queue: asyncio.Queue[ServerEvent | None]
     ) -> AsyncIterator[ServerEvent]:

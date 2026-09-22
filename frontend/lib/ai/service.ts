@@ -16,6 +16,7 @@ export type AiSessionResponse = {
     | "building"
     | "completed"
     | "failed"
+    | "cancelled"
   build_status: string | null
   build_progress: number
   download_url: string | null
@@ -136,6 +137,22 @@ export async function getAiSessionService(
     cache: "no-store",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
+  return parseAiResponse(response)
+}
+
+export async function cancelAiSessionService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<AiSessionResponse> {
+  const response = await fetch(
+    `${getAiServerUrl()}/v1/sessions/${encodeURIComponent(sessionId)}/cancel`,
+    {
+      method: "POST",
+      headers: userHeaders(ownerUserId),
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  )
   return parseAiResponse(response)
 }
 

@@ -105,7 +105,15 @@ async def test_unlisted_cve_still_uses_official_verification(monkeypatch):
 
     async def record(cve_id):
         calls.append(("record", cve_id))
-        return {"containers": {"cna": {"descriptions": [{"value": "Test application"}]}}}
+        return {
+            "cveMetadata": {"state": "PUBLISHED"},
+            "containers": {
+                "cna": {
+                    "title": "Test application vulnerability",
+                    "descriptions": [{"lang": "en", "value": "Test application"}],
+                }
+            },
+        }
 
     async def osv(cve_id, os):
         calls.append(("osv", cve_id))
@@ -121,6 +129,7 @@ async def test_unlisted_cve_still_uses_official_verification(monkeypatch):
                 "vulnerable_version": "1.0",
                 "os_compatible": False,
                 "compatibility_reason": "Incompatible with target OS",
+                "installation_artifact": "other_prebuilt",
                 "installation_method": "none",
                 "implementation_steps": ["unsupported"],
                 "references": [],
@@ -152,8 +161,10 @@ async def test_api_can_complete_without_skill_and_reports_unlisted_cve():
     captured = []
 
     class RecordingGenerator(StubGenerator):
-        async def generate_scenario(self, machine, skills=None):
+        async def generate_scenario(self, machine, skills=None, on_attempt=None):
             captured.append(skills)
+            if on_attempt is not None:
+                await on_attempt()
             return scenario().model_copy(update={"attack_graph": graph("CVE-2025-9999")})
 
     app = create_app(
