@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from ..models import AttackGraph, MachineInformation, ScenarioDraft, ScenarioReview
 
-SCENARIO_REVIEW_POLICY_VERSION = 3
+SCENARIO_REVIEW_POLICY_VERSION = 4
 
 
 class ScenarioDraftArchive:

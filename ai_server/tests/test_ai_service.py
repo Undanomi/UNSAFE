@@ -226,6 +226,8 @@ async def test_vm_source_generation_retries_duplicate_embedded_paths() -> None:
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "duplicate generated path: contents/build.sh" in second_prompt
+    assert "受理されなかった前回出力" in second_prompt
+    assert '"path": "contents/build.sh"' in second_prompt
 
 
 @pytest.mark.asyncio
@@ -271,7 +273,9 @@ async def test_vm_source_repair_retries_invalid_embedded_manifest_json() -> None
     assert len(requests) == 2
     second_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     assert "model_output_validation_error" in second_prompt
+    assert "rejected_model_output" in second_prompt
     assert "scenario_manifest.json is not valid JSON" in second_prompt
+    assert "find /tmp -exec test" in second_prompt
 
 
 @pytest.mark.asyncio
@@ -481,8 +485,92 @@ async def test_invalid_non_cve_cwe_revision_is_returned_to_reviewer() -> None:
     assert "前回レビューの再検討資料" in second_prompt
     assert "The SQL injection step omits CWE-89" in second_prompt
     assert "official CVE facts are only valid when kind is cve" in second_prompt
-    assert '"attempted_revision"' in second_prompt
+    assert '"attempted_output"' in second_prompt
     assert '\\"cwe_ids\\": [' in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_repeated_invalid_text_patch_is_returned_to_reviewer() -> None:
+    requests: list[dict] = []
+    scenario = ScenarioDraft(
+        scenario_id="scenario-text-patch",
+        title="Text patch",
+        scenario_description="Inspect the machine and recover the flag.",
+        definition="# Scenario\n\nThe existing sentence remains here.",
+        attack_graph=graph_without_objectives(),
+    )
+    rejected = ScenarioReview(
+        approved=False,
+        summary="The negative control is missing.",
+        findings=[
+            ScenarioReviewFinding(
+                severity="error",
+                category="acceptance_test_gap",
+                repair_target="scenario_text",
+                evidence="No negative control is documented.",
+                remediation="Add a negative control to the validation plan.",
+            )
+        ],
+    )
+    invalid_correction = {
+        "scenario_description": None,
+        "definition_replacements": [
+            {
+                "old": "This sentence does not exist in the document.",
+                "new": "This sentence includes a negative control.",
+            }
+        ],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) <= 2:
+            return gemini_response(invalid_correction)
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The prior text finding cannot be applied as requested.",
+                "findings": [],
+            }
+        )
+
+    class Observer:
+        resume_scenario = scenario
+        resume_review = rejected
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await GeminiGenerator(
+            Settings(
+                gemini_api_key="test-key",
+                generation_retries=2,
+                scenario_generation_attempts=2,
+            ),
+            client,
+        ).generate_scenario(
+            MachineInformation(
+                name="Text patch",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            ),
+            on_attempt=Observer(),
+        )
+
+    assert result == scenario
+    assert len(requests) == 3
+    retry_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    reconsideration_prompt = requests[2]["contents"][0]["parts"][0]["text"]
+    assert "rejected old=\"This sentence does not exist" in retry_prompt
+    assert "受理されなかった前回出力" in retry_prompt
+    assert "scenario_correction_validation_failure" in reconsideration_prompt
+    assert "This sentence does not exist" in reconsideration_prompt
+    assert "found 0 occurrences" in reconsideration_prompt
 
 
 @pytest.mark.asyncio
