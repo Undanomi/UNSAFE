@@ -114,6 +114,11 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         persisted.build_progress = 100
         persisted.build_repair_attempts = 2
         persisted.build_repair_attempt_limit = 5
+        persisted.repair_failure_report = {
+            "kind": "scenario_sync_review",
+            "status": "fail",
+            "error_message": "scenario and source differ",
+        }
         persisted.machine_access = MachineAccess(
             username="provisioner", password="generated-password"
         )
@@ -133,6 +138,11 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         assert completed.source_generation_attempt_limit == 12
         assert completed.build_repair_attempts == 2
         assert completed.build_repair_attempt_limit == 5
+        assert completed.repair_failure_report == {
+            "kind": "scenario_sync_review",
+            "status": "fail",
+            "error_message": "scenario and source differ",
+        }
         assert completed.machine_access == MachineAccess(
             username="provisioner", password="generated-password"
         )

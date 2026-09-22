@@ -735,6 +735,9 @@ System flag正解値: {scenario.system_flag or "未設定"}
 
 失敗内容にrepair_historyが含まれる場合、そこに記録された過去の失敗と変更をすべて考慮してください。
 known_failed_resourcesに列挙された要素は、現在の失敗内容に現れなくても再利用してはいけません。
+original_triggerとrejected_patchが含まれる場合、元の修正目的を維持しつつ、拒否された同じパッチを
+繰り返さないでください。元レビューのremediationと決定的検証が衝突する場合は検証制約を破らず、
+別の有効な修正方法を選んでください。レビュー自体の再判定は呼び出し側が行います。
 checks内にrequired_commandsがある場合は、表示用の説明へ写すだけでなく、適切な実行ユーザーと
 実在パスへ具体化した同等のコマンドを生成物とmanifestへ追加し、失敗時に非ゼロ終了させてください。
 failed_commandsまたはfailure_log_contextがある場合は、そのコマンドと前後のエラーを根本原因として
@@ -800,7 +803,7 @@ def scenario_sync_prompt(
     feedback_section = ""
     if review_feedback:
         feedback_section = (
-            "\n直前のシナリオレビューで次の不整合が指摘されました。実装ファイルを変更したことにせず、"
+            "\n直前のレビューで次のシナリオ本文の不整合が指摘されました。実装ファイルを変更したことにせず、"
             "攻撃グラフの意図を保ったまま指摘をシナリオ本文へ反映してください。\n```json\n"
             + json.dumps(review_feedback, ensure_ascii=False, indent=2)
             + "\n```\n"
@@ -865,7 +868,22 @@ def source_review_prompt(
     scenario: ScenarioDraft,
     current: GeneratedSource,
     skill_context: str = "",
+    reconsideration: dict | None = None,
 ) -> str:
+    reconsideration_section = ""
+    if reconsideration is not None:
+        reconsideration_section = f"""
+前回レビューの再検討資料:
+```json
+{json.dumps(reconsideration, ensure_ascii=False, indent=2)}
+```
+前回レビューに従った修正が決定的検証に失敗したか、修正後レビューで同じ指摘が残る・指摘が増える
+など意味的な改善が確認できませんでした。修正案だけでなく、前回レビューの前提、repair_target、
+remediationが生成物のスキーマや不変条件と衝突していないかも検討してください。修正案だけが誤りなら
+指摘を維持し、正しいrepair_targetと検証可能な修正内容へ具体化してください。検証エラーを回避する
+事実を捏造せず、元の指摘が誤りなら撤回してください。同じ失敗を起こす修正要求をそのまま繰り返さず、
+再検討資料に含まれる現在のソースを対象としてレビュー全体を改めて判定してください。
+"""
     return f"""あなたは教育用攻撃マシンの独立した敵対的レビュー担当です。
 作者の説明やmanifestの自己申告を信用せず、攻撃グラフと実装ファイルを突き合わせてください。
 セキュアに修正するレビューではなく、意図した脆弱性だけが指定経路で攻略可能かを審査します。
@@ -890,10 +908,12 @@ System flag正解値: {scenario.system_flag or "未設定"}
 ```json
 {current.model_dump_json(indent=2)}
 ```
+{reconsideration_section}
 
 JSONのみを返してください:
 {{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
-"category":"unintended_shortcut","evidence":"ファイルと具体的挙動","remediation":"必要な修正"}}]}}
+"repair_target":"source_code","category":"unintended_shortcut",
+"evidence":"ファイルと具体的挙動","remediation":"必要な修正"}}]}}
 
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
@@ -915,6 +935,12 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+- 各findingのrepair_targetを必ず指定する。実装ファイル、provision、manifest、acceptance_testsの
+  修正はsource_code、実装が正しく本文だけが古い場合はscenario_textにする。このレビュー工程では
+  検証済み攻撃グラフを不変の入力として扱い、attack_graphやuser_inputをrepair_targetに返さない
+- 実装を攻撃グラフへ合わせられる不一致を別の生成物へ転嫁しない。特にinstallation_method、
+  installation_artifact、artifact_source、source_build_reasonの値を取り違えず、存在しないフィールドの
+  追加を要求しない。攻撃グラフの不変条件と衝突する修正要求をsource_code向けに出さない
 - 生成物で利用可能な構文・設定検査が省略されている、対象ファイルの一部しか検査していない、
   または検査失敗を無視する実装はacceptance_test_gapのerrorにする。言語・ソフトウェアに適した
   実際のparser、compiler、interpreter、config testを使っていることを確認する

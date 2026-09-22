@@ -149,6 +149,7 @@ class SessionRepository:
             build_progress=record.build_progress,
             build_repair_attempts=record.build_repair_attempts,
             build_repair_attempt_limit=record.build_repair_attempt_limit,
+            repair_failure_report=record.repair_failure_report,
             machine_access=self._json_model(record.machine_access, MachineAccess),
             artifact=self._json_model(record.artifact, Artifact),
             error_message=record.error_message,
@@ -193,6 +194,7 @@ class SessionRepository:
                     build_progress=state.build_progress,
                     build_repair_attempts=state.build_repair_attempts,
                     build_repair_attempt_limit=state.build_repair_attempt_limit,
+                    repair_failure_report=state.repair_failure_report,
                     machine_access=(
                         state.machine_access.model_dump(mode="json")
                         if state.machine_access

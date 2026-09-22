@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import re
 from pathlib import Path
@@ -12,6 +14,7 @@ from ..models import (
     ScenarioReview,
     SessionState,
     SessionStatus,
+    SourcePatch,
     SourceReview,
     scenario_is_valid_for_machine,
 )
@@ -28,6 +31,7 @@ from .source_validation import known_failed_resources
 logger = logging.getLogger(__name__)
 BUILD_POLL_INTERVAL_SECONDS = 5
 DISTRIBUTION_ARTIFACT_TYPE = "tar.zst"
+MAX_SOURCE_REVIEW_RECONSIDERATIONS = 2
 
 
 class InvalidSessionStateError(ValueError):
@@ -178,12 +182,17 @@ class MachineWorkflow:
             )
             await self.repository.save(state)
             return None
-        repair_report = {
-            "kind": "packer_build",
-            "status": state.build_status,
-            "error_message": state.error_message or "build failed without details",
-        }
-        if state.build_id:
+        persisted_failure_report = state.repair_failure_report
+        repair_report = (
+            dict(persisted_failure_report)
+            if isinstance(persisted_failure_report, dict)
+            else {
+                "kind": "packer_build",
+                "status": state.build_status,
+                "error_message": state.error_message or "build failed without details",
+            }
+        )
+        if persisted_failure_report is None and state.build_id:
             try:
                 build_log = await self.build_client.packer_log(state.build_id)
             except Exception:
@@ -200,14 +209,31 @@ class MachineWorkflow:
                         repair_report["failed_commands"] = failed_commands
                     if failure_context:
                         repair_report["failure_log_context"] = failure_context
+        if _source_review_report_has_unsupported_target(repair_report):
+            repair_report = {
+                "kind": "source_review_revalidation",
+                "status": "retry",
+                "error_message": (
+                    "the previous source review selected a repair target that is not mutable "
+                    "during source generation"
+                ),
+                "previous_review": repair_report,
+            }
         repair_history = (
             self.source_archive.load_repair_history_from_archive(archive_path)
             if archive_path is not None
             else self.source_archive.load_repair_history(state.source_path or "")
         )
+        # A build repair can change the source and therefore require another scenario
+        # synchronization cycle. Reserve that cycle as soon as the repair starts so
+        # progress never remains at (for example) 4/4 during an active rebuild.
+        state.scenario_sync_attempt_limit = (
+            state.scenario_sync_attempts + self.scenario_sync_attempts
+        )
         state.build_progress = 0
         state.machine_access = None
         state.artifact = None
+        state.repair_failure_report = None
         state.status = SessionStatus.GENERATING_CODE
         await self.repository.save(state)
         return repair_source, repair_report, repair_history
@@ -242,6 +268,15 @@ class MachineWorkflow:
     ) -> None:
         try:
             is_build_repair = failure_report is not None
+            persisted_failure_context = failure_report
+            review_revalidation = (
+                failure_report
+                if isinstance(failure_report, dict)
+                and failure_report.get("kind") == "source_review_revalidation"
+                else None
+            )
+            if review_revalidation is not None:
+                failure_report = None
             state = await self.repository.get(session_id)
             assert state.machine_information is not None and state.scenario is not None
             working_scenario = state.scenario
@@ -265,11 +300,101 @@ class MachineWorkflow:
                 state.scenario,
             )
             skill_snapshot = await self.skill_service.snapshot_manifest(session_id)
-            archive_path = self._existing_archive(state) if failure_report is None else None
+            archive_path = None
+            if review_revalidation is None and failure_report is None:
+                archive_path = self._existing_archive(state)
             checksum = state.source_checksum
             last_validation_error: Exception | None = None
             repair_history = list(existing_repair_history or [])
             best_validation_failures = 0 if failure_report is not None else None
+            pending_source_review: SourceReview | None = None
+            pending_source_review_source: GeneratedSource | None = None
+            source_changed_since_scenario = False
+            repair_failure_signatures: set[str] = set()
+            reconsideration_signatures: set[str] = set()
+
+            async def reconsider_source_review(
+                source: GeneratedSource,
+                review: SourceReview,
+                context: dict,
+            ) -> SourceReview:
+                reconsideration_signature = json.dumps(
+                    {
+                        "source": _generated_source_checksum(source),
+                        "review": _source_review_report(review),
+                        "context": context,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+                if (
+                    reconsideration_signature in reconsideration_signatures
+                    or len(reconsideration_signatures) >= MAX_SOURCE_REVIEW_RECONSIDERATIONS
+                ):
+                    state.build_repair_attempt_limit = state.build_repair_attempts
+                    state.source_generation_attempt_limit = state.source_generation_attempts
+                    await self.repository.save(state)
+                    raise RuntimeError(
+                        "source review reconsideration did not converge on a repairable finding"
+                    )
+                reconsideration_signatures.add(reconsideration_signature)
+                return await self.generator.review_source(
+                    state.machine_information,
+                    working_scenario,
+                    source,
+                    review_skills,
+                    reconsideration={
+                        **context,
+                        "previous_review": _source_review_report(review),
+                    },
+                )
+
+            async def reconsider_repeated_repair_failure(
+                base_source: GeneratedSource,
+                trigger: dict,
+                patch: SourcePatch,
+                validation_report: dict,
+            ) -> tuple[dict, SourceReview | None]:
+                feedback = _source_repair_failure_report(
+                    trigger,
+                    patch,
+                    validation_report,
+                )
+                signature = _source_repair_failure_signature(
+                    base_source,
+                    trigger,
+                    patch,
+                    validation_report,
+                )
+                if signature not in repair_failure_signatures:
+                    repair_failure_signatures.add(signature)
+                    return feedback, None
+                if pending_source_review is None or pending_source_review_source is None:
+                    state.build_repair_attempt_limit = state.build_repair_attempts
+                    state.source_generation_attempt_limit = state.source_generation_attempts
+                    await self.repository.save(state)
+                    raise RuntimeError(
+                        "source repair repeated the same patch and validation failure"
+                    )
+                reconsidered = await reconsider_source_review(
+                    pending_source_review_source,
+                    pending_source_review,
+                    {
+                        "kind": "source_repair_validation_failure",
+                        "validation_failure": validation_report,
+                        "attempted_patch": _serialized_source_patch(patch),
+                    },
+                )
+                reconsidered_report = _source_review_report(reconsidered)
+                return (
+                    _source_repair_failure_report(
+                        reconsidered_report,
+                        patch,
+                        validation_report,
+                    ),
+                    reconsidered,
+                )
+
             if archive_path is not None:
                 build_slots_remaining -= 1
             while archive_path is None and build_slots_remaining > 0:
@@ -284,7 +409,9 @@ class MachineWorkflow:
                     retry_base = generated
                     retry_scenario = working_scenario
                     patch_applied = False
+                    prevalidated_review: SourceReview | None = None
                     if failure_report is not None:
+                        repair_trigger = failure_report
                         repair_context = {
                             **failure_report,
                             "known_failed_resources": known_failed_resources(repair_history),
@@ -301,19 +428,49 @@ class MachineWorkflow:
                             generated = apply_source_patch(generated, patch)
                         except InvalidSourceError as error:
                             last_validation_error = error
-                            failure_report = _invalid_source_report(
+                            validation_report = _invalid_source_report(
                                 error, "source_patch_validation"
                             )
-                            continue
-                        patch_applied = True
-                        repair_history.append(
-                            {
-                                "attempt": len(repair_history) + 1,
-                                "trigger": failure_report,
-                                "changed_files": sorted(file.path for file in patch.files),
-                                "deleted_files": sorted(patch.delete_paths),
-                            }
-                        )
+                            repair_history.append(
+                                _failed_source_repair_attempt(
+                                    repair_history,
+                                    repair_trigger,
+                                    patch,
+                                    validation_report,
+                                )
+                            )
+                            failure_report, reconsidered = await reconsider_repeated_repair_failure(
+                                retry_base,
+                                repair_trigger,
+                                patch,
+                                validation_report,
+                            )
+                            if reconsidered is None or not reconsidered.approved:
+                                if reconsidered is not None:
+                                    pending_source_review = reconsidered
+                                generated = pending_source_review_source or retry_base
+                                continue
+                            generated = pending_source_review_source or retry_base
+                            pending_source_review = None
+                            pending_source_review_source = None
+                            prevalidated_review = reconsidered
+                            repair_history.append(
+                                _source_review_reconsideration_attempt(
+                                    repair_history,
+                                    reconsidered,
+                                    validation_report,
+                                )
+                            )
+                        else:
+                            patch_applied = True
+                            repair_history.append(
+                                {
+                                    "attempt": len(repair_history) + 1,
+                                    "trigger": _persistable_repair_trigger(repair_trigger),
+                                    "changed_files": sorted(file.path for file in patch.files),
+                                    "deleted_files": sorted(patch.delete_paths),
+                                }
+                            )
                     try:
                         archive_path, checksum = self.source_archive.create(
                             session_id,
@@ -335,27 +492,112 @@ class MachineWorkflow:
                             working_scenario = retry_scenario
                         elif failed_count is not None:
                             best_validation_failures = failed_count
-                        failure_report = _invalid_source_report(error, "source_validation")
-                        continue
-                    review = await self.generator.review_source(
-                        state.machine_information,
-                        working_scenario,
-                        generated,
-                        review_skills,
-                    )
+                        validation_report = _invalid_source_report(error, "source_validation")
+                        if not patch_applied:
+                            failure_report = validation_report
+                            continue
+                        repair_history[-1]["validation_report_after"] = validation_report
+                        failure_report, reconsidered = await reconsider_repeated_repair_failure(
+                            retry_base,
+                            repair_trigger,
+                            patch,
+                            validation_report,
+                        )
+                        if reconsidered is None or not reconsidered.approved:
+                            if reconsidered is not None:
+                                pending_source_review = reconsidered
+                            if pending_source_review_source is not None:
+                                generated = pending_source_review_source
+                            continue
+                        generated = pending_source_review_source or retry_base
+                        pending_source_review = None
+                        pending_source_review_source = None
+                        repair_history.append(
+                            _source_review_reconsideration_attempt(
+                                repair_history,
+                                reconsidered,
+                                validation_report,
+                            )
+                        )
+                        archive_path, checksum = self.source_archive.create(
+                            session_id,
+                            working_scenario,
+                            generated,
+                            repair_history,
+                            skill_snapshot,
+                        )
+                        prevalidated_review = reconsidered
+                    if patch_applied and prevalidated_review is None:
+                        source_changed_since_scenario = True
+                    if prevalidated_review is not None:
+                        review = prevalidated_review
+                    elif review_revalidation is not None:
+                        review = await self.generator.review_source(
+                            state.machine_information,
+                            working_scenario,
+                            generated,
+                            review_skills,
+                            reconsideration=review_revalidation,
+                        )
+                        review_revalidation = None
+                    else:
+                        review = await self.generator.review_source(
+                            state.machine_information,
+                            working_scenario,
+                            generated,
+                            review_skills,
+                        )
+                    if (
+                        pending_source_review is not None
+                        and not review.approved
+                        and _source_review_did_not_improve(pending_source_review, review)
+                    ):
+                        review = await reconsider_source_review(
+                            generated,
+                            review,
+                            {
+                                "kind": "source_semantic_review_nonprogress",
+                                "review_before_repair": _source_review_report(
+                                    pending_source_review
+                                ),
+                                "source_before_repair": _generated_source_checksum(
+                                    pending_source_review_source or retry_base
+                                ),
+                                "source_after_repair": _generated_source_checksum(generated),
+                                "attempted_change": (
+                                    {
+                                        "kind": "source_patch",
+                                        "patch": _serialized_source_patch(patch),
+                                    }
+                                    if patch_applied
+                                    else {"kind": "scenario_sync"}
+                                ),
+                                "reason": (
+                                    "an error finding remained after repair or the number of "
+                                    "error findings increased"
+                                ),
+                            },
+                        )
+
+                    error_targets = _source_review_error_targets(review)
                     review_report = _source_review_report(review)
                     checksum = self.source_archive.record_semantic_review(
                         archive_path,
                         review_report,
                         approved=review.approved,
                     )
-                    if review.approved:
-                        if patch_applied:
-                            scenario_feedback: dict | None = None
+                    scenario_text_only = bool(error_targets) and error_targets <= {"scenario_text"}
+                    if review.approved or scenario_text_only:
+                        pending_source_review = None
+                        pending_source_review_source = None
+                        if source_changed_since_scenario or scenario_text_only:
+                            scenario_before_sync = working_scenario
+                            scenario_feedback: dict | None = (
+                                review_report if scenario_text_only else None
+                            )
                             scenario_reviews: list[dict] = []
                             state.scenario_sync_attempt_limit = (
-                                state.scenario_sync_attempts
-                                + self.scenario_sync_attempts
+                                state.scenario_sync_attempts + self.scenario_sync_attempts
                             )
                             await self.repository.save(state)
                             for _ in range(self.scenario_sync_attempts):
@@ -390,10 +632,20 @@ class MachineWorkflow:
                                 scenario_reviews.append(scenario_feedback)
                                 if scenario_review.approved:
                                     break
-                            repair_history[-1]["scenario_sync_summary"] = revision.summary
-                            repair_history[-1]["scenario_sync_reviews"] = scenario_reviews
+                            if repair_history:
+                                sync_record = repair_history[-1]
+                            else:
+                                sync_record = {
+                                    "attempt": 1,
+                                    "trigger": _persistable_repair_trigger(review_report),
+                                    "changed_files": [],
+                                    "deleted_files": [],
+                                }
+                                repair_history.append(sync_record)
+                            sync_record["scenario_sync_summary"] = revision.summary
+                            sync_record["scenario_sync_reviews"] = scenario_reviews
                             if not scenario_review.approved:
-                                repair_history[-1]["scenario_sync_status"] = "rejected"
+                                sync_record["scenario_sync_status"] = "rejected"
                                 last_validation_error = InvalidSourceError(
                                     "synchronized scenario semantic review failed: "
                                     + scenario_review.summary,
@@ -404,19 +656,18 @@ class MachineWorkflow:
                                     and finding.repair_target == "source_code"
                                     for finding in scenario_review.findings
                                 ):
-                                    repair_history[-1]["scenario_sync_routed_to"] = (
-                                        "source_repair"
-                                    )
+                                    sync_record["scenario_sync_routed_to"] = "source_repair"
                                     failure_report = scenario_feedback
                                     archive_path = None
                                     checksum = None
-                                    working_scenario = retry_scenario
+                                    working_scenario = scenario_before_sync
                                     continue
+                                failure_report = scenario_feedback
                                 raise RuntimeError(
                                     "could not synchronize an approved scenario after source "
                                     "repair: " + scenario_review.summary
                                 )
-                            repair_history[-1]["scenario_sync_status"] = "approved"
+                            sync_record["scenario_sync_status"] = "approved"
                             archive_path, checksum = self.source_archive.create(
                                 session_id,
                                 working_scenario,
@@ -427,8 +678,18 @@ class MachineWorkflow:
                             checksum = self.source_archive.record_semantic_review(
                                 archive_path,
                                 review_report,
-                                approved=True,
+                                approved=review.approved,
                             )
+                            source_changed_since_scenario = False
+                            if scenario_text_only:
+                                # The source reviewer must judge the synchronized artifacts again;
+                                # an earlier rejection must never be reused as an approval.
+                                failure_report = None
+                                pending_source_review = review
+                                pending_source_review_source = generated
+                                archive_path = None
+                                checksum = None
+                                continue
                         logger.info(
                             "source semantic review approved",
                             extra={"session_id": session_id, "summary": review.summary},
@@ -437,7 +698,12 @@ class MachineWorkflow:
                     last_validation_error = InvalidSourceError(
                         f"source semantic review failed: {review.summary}", review_report
                     )
-                    failure_report = review_report
+                    failure_report = _source_review_report(
+                        review,
+                        repair_targets={"source_code"},
+                    )
+                    pending_source_review = review
+                    pending_source_review_source = generated
                     archive_path = None
                     checksum = None
                 build_slots_remaining -= 1
@@ -463,6 +729,8 @@ class MachineWorkflow:
             state.build_progress = 0
             state.machine_access = None
             state.error_message = None
+            state.repair_failure_report = None
+            failure_report = None
             await self.repository.save(state)
             build = await self.build_client.submit(
                 scenario_id=state.scenario.scenario_id,
@@ -485,6 +753,17 @@ class MachineWorkflow:
             state = await self.repository.get(session_id)
             state.status = SessionStatus.FAILED
             state.error_message = detail
+            if isinstance(failure_report, dict):
+                failure_to_persist = _persistable_repair_trigger(failure_report)
+            elif isinstance(persisted_failure_context, dict):
+                failure_to_persist = _persistable_repair_trigger(persisted_failure_context)
+            else:
+                failure_to_persist = {
+                    "kind": "machine_workflow",
+                    "status": "failed",
+                    "error_message": detail,
+                }
+            state.repair_failure_report = failure_to_persist
             await self.repository.save(state)
 
     async def _monitor_build(self, session_id: str, build_slots_remaining: int) -> None:
@@ -520,6 +799,7 @@ class MachineWorkflow:
                 return
             if build["status"] in {"failed", "cancelled"}:
                 state.error_message = build.get("error_message") or f"build {build['status']}"
+                state.repair_failure_report = None
                 if build_slots_remaining <= 0:
                     state.build_repair_attempt_limit = state.build_repair_attempts
                     state.status = SessionStatus.FAILED
@@ -614,7 +894,11 @@ def _invalid_source_report(error: InvalidSourceError, kind: str) -> dict:
     report = error.report
     checks = report.get("checks") if isinstance(report, dict) else None
     if isinstance(checks, list) and checks:
-        return report
+        return {
+            **report,
+            "kind": report.get("kind", kind),
+            "error_message": report.get("error_message", str(error)),
+        }
     return {
         "kind": kind,
         "status": "fail",
@@ -630,6 +914,102 @@ def _invalid_source_report(error: InvalidSourceError, kind: str) -> dict:
     }
 
 
+def _source_repair_failure_report(
+    trigger: dict,
+    patch: SourcePatch,
+    validation_report: dict,
+) -> dict:
+    return {
+        **validation_report,
+        "original_trigger": _root_repair_trigger(trigger),
+        "rejected_patch": _serialized_source_patch(patch),
+    }
+
+
+def _failed_source_repair_attempt(
+    repair_history: list[dict],
+    trigger: dict,
+    patch: SourcePatch,
+    validation_report: dict,
+) -> dict:
+    return {
+        "attempt": len(repair_history) + 1,
+        "trigger": _persistable_repair_trigger(trigger),
+        "changed_files": sorted(file.path for file in patch.files),
+        "deleted_files": sorted(patch.delete_paths),
+        "validation_status_after": "fail",
+        "validation_summary_after": validation_report.get("summary"),
+        "validation_report_after": validation_report,
+    }
+
+
+def _source_review_reconsideration_attempt(
+    repair_history: list[dict],
+    review: SourceReview,
+    validation_report: dict,
+) -> dict:
+    return {
+        "attempt": len(repair_history) + 1,
+        "trigger": {
+            "kind": "source_review_reconsideration",
+            "status": "pass" if review.approved else "fail",
+            "review": _source_review_report(review),
+            "repair_validation_failure": validation_report,
+        },
+        "changed_files": [],
+        "deleted_files": [],
+    }
+
+
+def _source_repair_failure_signature(
+    base_source: GeneratedSource,
+    trigger: dict,
+    patch: SourcePatch,
+    validation_report: dict,
+) -> str:
+    value = json.dumps(
+        {
+            "source": _generated_source_checksum(base_source),
+            "trigger": _root_repair_trigger(trigger),
+            "patch": patch.model_dump(mode="json"),
+            "validation": validation_report,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _generated_source_checksum(source: GeneratedSource) -> str:
+    value = source.model_dump_json()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _serialized_source_patch(patch: SourcePatch) -> str:
+    return patch.model_dump_json(indent=2)[:12_000]
+
+
+def _root_repair_trigger(trigger: dict) -> dict:
+    current = trigger
+    visited: set[int] = set()
+    while isinstance(current.get("original_trigger"), dict) and id(current) not in visited:
+        visited.add(id(current))
+        current = current["original_trigger"]
+    return _persistable_repair_trigger(current)
+
+
+def _persistable_repair_trigger(trigger: dict) -> dict:
+    persisted = {
+        key: value
+        for key, value in trigger.items()
+        if key not in {"rejected_patch", "rejected_model_output"}
+    }
+    original = persisted.get("original_trigger")
+    if isinstance(original, dict):
+        persisted["original_trigger"] = _persistable_repair_trigger(original)
+    return persisted
+
+
 def _validation_failed_count(report: dict) -> int | None:
     summary = report.get("summary")
     if not isinstance(summary, dict):
@@ -638,14 +1018,60 @@ def _validation_failed_count(report: dict) -> int | None:
     return failed if isinstance(failed, int) and not isinstance(failed, bool) else None
 
 
-def _source_review_report(review: SourceReview) -> dict:
+def _source_review_error_targets(review: SourceReview) -> set[str]:
+    return {finding.repair_target for finding in review.findings if finding.severity == "error"}
+
+
+def _source_review_report_has_unsupported_target(report: dict) -> bool:
+    if report.get("kind") != "source_semantic_review":
+        return False
+    checks = report.get("checks")
+    if not isinstance(checks, list):
+        return False
+    return any(
+        isinstance(check, dict)
+        and check.get("status") == "fail"
+        and check.get("repair_target") not in {"source_code", "scenario_text"}
+        for check in checks
+    )
+
+
+def _source_review_did_not_improve(
+    previous: SourceReview,
+    current: SourceReview,
+) -> bool:
+    def error_keys(review: SourceReview) -> set[tuple[str | None, str, str]]:
+        return {
+            (finding.step_id, finding.category, finding.repair_target)
+            for finding in review.findings
+            if finding.severity == "error"
+        }
+
+    previous_errors = error_keys(previous)
+    current_errors = error_keys(current)
+    return bool(previous_errors & current_errors) or len(current_errors) > len(previous_errors)
+
+
+def _source_review_report(
+    review: SourceReview,
+    repair_targets: set[str] | None = None,
+) -> dict:
     checks = [
         {
             "status": "fail" if finding.severity == "error" else "warn",
             "name": (f"semantic:{finding.category}:{finding.step_id or 'scenario'}"),
             "message": f"{finding.evidence} Remediation: {finding.remediation}",
+            "step_id": finding.step_id,
+            "severity": finding.severity,
+            "category": finding.category,
+            "repair_target": finding.repair_target,
+            "evidence": finding.evidence,
+            "remediation": finding.remediation,
         }
         for finding in review.findings
+        if repair_targets is None
+        or finding.severity != "error"
+        or finding.repair_target in repair_targets
     ]
     failed = sum(check["status"] == "fail" for check in checks)
     warnings = sum(check["status"] == "warn" for check in checks)

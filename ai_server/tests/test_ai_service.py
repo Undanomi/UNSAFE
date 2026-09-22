@@ -336,6 +336,112 @@ async def test_vm_source_review_uses_independent_structured_verdict() -> None:
 
 
 @pytest.mark.asyncio
+async def test_vm_source_review_reconsiders_failed_repair_validation() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The prior remediation conflicted with source validation.",
+                "findings": [],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/app/index.php", content="<?php echo 'test';")]
+    )
+    reconsideration = {
+        "kind": "source_repair_validation_failure",
+        "previous_review": {"status": "fail"},
+        "validation_failure": {
+            "kind": "source_patch_validation",
+            "error_message": "repair patch did not make any effective changes",
+        },
+        "attempted_patch": '{"files":[]}',
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            machine,
+            scenario,
+            current,
+            reconsideration=reconsideration,
+        )
+
+    assert review.approved is True
+    prompt = requests[0]["contents"][0]["parts"][0]["text"]
+    assert "前回レビューの再検討資料" in prompt
+    assert "source_repair_validation_failure" in prompt
+    assert "did not make any effective changes" in prompt
+    assert "元の指摘が" in prompt
+
+
+@pytest.mark.asyncio
+async def test_vm_source_review_regenerates_invalid_attack_graph_repair_target() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return gemini_response(
+                {
+                    "approved": False,
+                    "summary": "The attack graph allegedly needs to change.",
+                    "findings": [
+                        {
+                            "step_id": "enumerate-web",
+                            "severity": "error",
+                            "repair_target": "attack_graph",
+                            "category": "implementation_mismatch",
+                            "evidence": "The implementation and graph use different labels.",
+                            "remediation": "Change the attack graph.",
+                        }
+                    ],
+                }
+            )
+        return gemini_response(
+            {
+                "approved": True,
+                "summary": "The graph is immutable and the implementation is consistent.",
+                "findings": [],
+            }
+        )
+
+    machine = MachineInformation(name="Test", visibility="private", theme="Web", difficulty="Easy")
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        definition="# Test",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(
+        files=[SourceFile(path="contents/app/index.php", content="<?php echo 'test';")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        ).review_source(machine, scenario, current)
+
+    assert review.approved is True
+    assert len(requests) == 2
+    retry_prompt = requests[1]["contents"][0]["parts"][0]["text"]
+    assert "前回の出力は次の理由で受理できませんでした" in retry_prompt
+    assert "repair_target" in retry_prompt
+    assert "attack_graph" in retry_prompt
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    repair_target_schema = schema["$defs"]["SourceReviewFinding"]["properties"]["repair_target"]
+    assert set(repair_target_schema["enum"]) == {"source_code", "scenario_text"}
+
+
+@pytest.mark.asyncio
 async def test_scenario_review_uses_independent_permission_focused_verdict() -> None:
     requests: list[dict] = []
 
@@ -566,7 +672,7 @@ async def test_repeated_invalid_text_patch_is_returned_to_reviewer() -> None:
     assert len(requests) == 3
     retry_prompt = requests[1]["contents"][0]["parts"][0]["text"]
     reconsideration_prompt = requests[2]["contents"][0]["parts"][0]["text"]
-    assert "rejected old=\"This sentence does not exist" in retry_prompt
+    assert 'rejected old="This sentence does not exist' in retry_prompt
     assert "受理されなかった前回出力" in retry_prompt
     assert "scenario_correction_validation_failure" in reconsideration_prompt
     assert "This sentence does not exist" in reconsideration_prompt
@@ -784,9 +890,7 @@ async def test_attack_graph_revision_repairs_instructions_but_preserves_verified
                 evidence=(
                     "The attack graph implementation_steps says 1.20.1 and return 200 '$var'."
                 ),
-                remediation=(
-                    "Use 1.26.3-3 and the same return 200 configuration as the scenario."
-                ),
+                remediation=("Use 1.26.3-3 and the same return 200 configuration as the scenario."),
             )
         ],
     )
@@ -1570,16 +1674,12 @@ async def test_only_cve_steps_are_enriched_with_external_evidence() -> None:
                     "containers": {
                         "cna": {
                             "title": "Example application vulnerability",
-                            "descriptions": [
-                                {"lang": "en", "value": "Example application issue"}
-                            ],
-                            "problemTypes": [
-                                {"descriptions": [{"cweId": "CWE-79"}]}
-                            ],
+                            "descriptions": [{"lang": "en", "value": "Example application issue"}],
+                            "problemTypes": [{"descriptions": [{"cweId": "CWE-79"}]}],
                             "affected": [{"product": "Example service"}],
                             "references": [],
                         }
-                    }
+                    },
                 },
             )
         if request.url.host == "api.osv.dev":
@@ -1618,9 +1718,7 @@ async def test_only_cve_steps_are_enriched_with_external_evidence() -> None:
 
     assert verified.steps[0].software == "Example service"
     assert verified.steps[0].implementation_steps[0] == "download 1.2.3"
-    assert verified.steps[0].title == (
-        "CVE-2026-1234: Example application vulnerability"
-    )
+    assert verified.steps[0].title == ("CVE-2026-1234: Example application vulnerability")
     assert verified.steps[0].description == "Example application issue"
     assert verified.steps[0].cve_title == "Example application vulnerability"
     assert verified.steps[0].cve_description == "Example application issue"

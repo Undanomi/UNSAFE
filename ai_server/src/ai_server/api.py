@@ -112,8 +112,7 @@ def _stale_running_phases(
     return (
         state.status == SessionStatus.GENERATING_SCENARIO
         and not scenarios.is_running(state.session_id),
-        state.status in _RUNNING_WORKFLOW_STATUSES
-        and not workflow.is_running(state.session_id),
+        state.status in _RUNNING_WORKFLOW_STATUSES and not workflow.is_running(state.session_id),
     )
 
 
@@ -155,10 +154,15 @@ async def save_machine_information(
             status_code=status.HTTP_409_CONFLICT,
             detail="stopped machine generation was marked as cancelled; update again",
         )
-    if scenarios.is_running(session_id) or workflow.is_running(session_id) or state.status in {
-        SessionStatus.GENERATING_SCENARIO,
-        *_RUNNING_WORKFLOW_STATUSES,
-    }:
+    if (
+        scenarios.is_running(session_id)
+        or workflow.is_running(session_id)
+        or state.status
+        in {
+            SessionStatus.GENERATING_SCENARIO,
+            *_RUNNING_WORKFLOW_STATUSES,
+        }
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="machine generation already started"
         )
@@ -186,6 +190,7 @@ async def save_machine_information(
     state.build_progress = 0
     state.build_repair_attempts = 0
     state.build_repair_attempt_limit = 0
+    state.repair_failure_report = None
     state.machine_access = None
     state.artifact = None
     state.status = SessionStatus.READY

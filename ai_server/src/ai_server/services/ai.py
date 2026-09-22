@@ -222,6 +222,7 @@ class AIGenerator(Protocol):
         scenario: ScenarioDraft,
         current: GeneratedSource,
         skills: SkillContext | None = None,
+        reconsideration: dict | None = None,
     ) -> SourceReview: ...
 
 
@@ -1261,10 +1262,17 @@ JSONのみを返してください:
         scenario: ScenarioDraft,
         current: GeneratedSource,
         skills: SkillContext | None = None,
+        reconsideration: dict | None = None,
     ) -> SourceReview:
         last_error: Exception | None = None
         skill_context = SkillRenderer.render(skills or SkillContext(phase=SkillPhase.REVIEW))
-        prompt = source_review_prompt(machine, scenario, current, skill_context)
+        prompt = source_review_prompt(
+            machine,
+            scenario,
+            current,
+            skill_context,
+            reconsideration,
+        )
         for _ in range(self.settings.generation_retries):
             response: str | None = None
             try:
