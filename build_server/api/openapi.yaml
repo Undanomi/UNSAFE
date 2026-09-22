@@ -130,7 +130,7 @@ paths:
         "200":
           description: Artifact stream
           content:
-            application/zstd:
+            application/zip:
               schema: { type: string, format: binary }
         "404":
           $ref: "#/components/responses/Problem"

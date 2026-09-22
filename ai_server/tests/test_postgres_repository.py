@@ -124,8 +124,8 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         )
         persisted.artifact = Artifact(
             artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
-            artifact_type="tar.zst",
-            file_name="slsg-machine.tar.zst",
+            artifact_type="zip",
+            file_name="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
             file_size=4,
             checksum="checksum",
         )
@@ -147,7 +147,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             username="provisioner", password="generated-password"
         )
         assert completed.artifact is not None
-        assert completed.artifact.file_name == "slsg-machine.tar.zst"
+        assert completed.artifact.file_name == "3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"
         async with repository.session_factory() as session:
             generation_jobs = await session.scalar(
                 text("SELECT to_regclass('public.generation_jobs')")

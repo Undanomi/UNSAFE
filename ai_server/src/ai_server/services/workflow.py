@@ -30,7 +30,7 @@ from .source_validation import known_failed_resources
 
 logger = logging.getLogger(__name__)
 BUILD_POLL_INTERVAL_SECONDS = 5
-DISTRIBUTION_ARTIFACT_TYPE = "tar.zst"
+DISTRIBUTION_ARTIFACT_TYPE = "zip"
 MAX_SOURCE_REVIEW_RECONSIDERATIONS = 2
 
 
@@ -80,6 +80,25 @@ class MachineWorkflow:
         state = await self.repository.get(session_id)
         if state.build_id and state.build_status not in {"completed", "failed", "cancelled"}:
             await self.build_client.cancel(state.build_id)
+
+    async def refresh_distribution_artifact(self, state: SessionState) -> SessionState:
+        if state.status != SessionStatus.COMPLETED or not state.build_id:
+            return state
+        if (
+            state.artifact is not None
+            and state.artifact.artifact_type == DISTRIBUTION_ARTIFACT_TYPE
+            and state.artifact.file_name == f"{state.artifact.artifact_id}.zip"
+        ):
+            return state
+        artifacts = await self.build_client.artifacts(state.build_id)
+        artifact = next(
+            (item for item in artifacts if item.artifact_type == DISTRIBUTION_ARTIFACT_TYPE),
+            None,
+        )
+        if artifact is None or state.artifact == artifact:
+            return state
+        state.artifact = artifact
+        return await self.repository.save(state)
 
     async def start(self, session_id: str, scenario_id: str | None = None) -> SessionState:
         self.cancel_requests.discard(session_id)
@@ -839,7 +858,7 @@ class MachineWorkflow:
             None,
         )
         if artifact is None:
-            raise RuntimeError("build completed without a tar.zst distribution artifact")
+            raise RuntimeError("build completed without a zip distribution artifact")
         return artifact
 
     @staticmethod

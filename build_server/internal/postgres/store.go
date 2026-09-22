@@ -221,6 +221,27 @@ func (s *Store) AddArtifact(ctx context.Context, artifact domain.Artifact) error
 	return err
 }
 
+func (s *Store) LegacyDistributionArtifacts(ctx context.Context) ([]domain.Artifact, error) {
+	rows, err := s.pool.Query(ctx, `SELECT artifact_id::text,build_id::text,artifact_type,file_name,file_size,checksum,created_at
+		FROM build_artifacts WHERE artifact_type='tar.zst' ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[domain.Artifact])
+}
+
+func (s *Store) UpdateArtifactFile(ctx context.Context, artifact domain.Artifact) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE build_artifacts
+		SET artifact_type=$2,file_name=$3,file_size=$4,checksum=$5
+		WHERE artifact_id=$1::uuid`, artifact.ID, artifact.Type, artifact.FileName,
+		artifact.FileSize, artifact.Checksum)
+	if err == nil && tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (s *Store) Artifacts(ctx context.Context, buildID string) ([]domain.Artifact, error) {
 	rows, err := s.pool.Query(ctx, `SELECT artifact_id::text,build_id::text,artifact_type,file_name,file_size,checksum,created_at
 		FROM build_artifacts WHERE build_id=$1::uuid ORDER BY created_at`, buildID)

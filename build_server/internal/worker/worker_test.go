@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,8 +135,8 @@ func TestCopyTreeRejectsSymlink(t *testing.T) {
 }
 
 func TestArtifactType(t *testing.T) {
-	if got := artifactType("slsg-machine.tar.zst"); got != "tar.zst" {
-		t.Fatalf("artifactType() = %q, want tar.zst", got)
+	if got := artifactType("3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"); got != "zip" {
+		t.Fatalf("artifactType() = %q, want zip", got)
 	}
 	if got := artifactType("start-linux.sh"); got != "launcher" {
 		t.Fatalf("artifactType() = %q, want launcher", got)
@@ -144,15 +146,11 @@ func TestArtifactType(t *testing.T) {
 	}
 }
 
-func TestPackageArtifactsCreatesSingleTarZst(t *testing.T) {
-	if _, err := exec.LookPath("tar"); err != nil {
-		t.Skip("tar is not installed")
-	}
-	if _, err := exec.LookPath("zstd"); err != nil {
-		t.Skip("zstd is not installed")
-	}
+func TestPackageArtifactsCreatesSingleZip(t *testing.T) {
 	source := t.TempDir()
 	work := t.TempDir()
+	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
+	archiveName := distributionFileName(artifactID)
 	files := map[string]string{
 		"image.qcow2":     "disk",
 		"start-linux.sh":  "#!/bin/sh\n",
@@ -163,24 +161,102 @@ func TestPackageArtifactsCreatesSingleTarZst(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := packageArtifacts(context.Background(), source, work); err != nil {
+	if err := packageArtifacts(context.Background(), source, work, archiveName); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != distributionFileName {
-		t.Fatalf("packaged entries = %v, want only %s", entries, distributionFileName)
+	if len(entries) != 1 || entries[0].Name() != archiveName {
+		t.Fatalf("packaged entries = %v, want only %s", entries, archiveName)
 	}
-	command := exec.Command("tar", "--zstd", "-tf", filepath.Join(source, distributionFileName))
-	output, err := command.Output()
+	archive, err := zip.OpenReader(filepath.Join(source, archiveName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name := range files {
-		if !strings.Contains(string(output), "slsg-machine/"+name+"\n") {
-			t.Fatalf("archive listing does not contain %q: %s", name, output)
+	defer archive.Close()
+	archived := make(map[string]string, len(archive.File))
+	for _, file := range archive.File {
+		input, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, readErr := io.ReadAll(input)
+		closeErr := input.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		archived[file.Name] = string(contents)
+	}
+	if len(archived) != len(files) {
+		t.Fatalf("archive entries = %v, want %d files", archived, len(files))
+	}
+	for name, contents := range files {
+		archiveName := "slsg-machine/" + name
+		if archived[archiveName] != contents {
+			t.Fatalf("archive entry %q = %q, want %q", archiveName, archived[archiveName], contents)
+		}
+	}
+}
+
+func TestDistributionFileNameUsesArtifactID(t *testing.T) {
+	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
+	if got := distributionFileName(artifactID); got != artifactID+".zip" {
+		t.Fatalf("distributionFileName() = %q, want %q", got, artifactID+".zip")
+	}
+}
+
+func TestConvertLegacyTarZstCreatesArtifactIDZip(t *testing.T) {
+	if _, err := exec.LookPath("tar"); err != nil {
+		t.Skip("tar is not installed")
+	}
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd is not installed")
+	}
+	root := t.TempDir()
+	machineDir := filepath.Join(root, "slsg-machine")
+	if err := os.Mkdir(machineDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"image.qcow2":     "legacy disk",
+		"start-linux.sh":  "#!/bin/sh\n",
+		"README-Linux.md": "# Linux\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(machineDir, name), []byte(contents), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	legacyPath := filepath.Join(root, "slsg-machine.tar.zst")
+	command := exec.Command("tar", "--zstd", "-cf", legacyPath, "-C", root, "slsg-machine")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("create legacy archive: %v: %s", err, output)
+	}
+	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
+	zipPath := filepath.Join(root, distributionFileName(artifactID))
+	if err := convertLegacyTarZst(context.Background(), legacyPath, zipPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDistributionZip(zipPath); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if len(archive.File) != len(files) {
+		t.Fatalf("zip contains %d files, want %d", len(archive.File), len(files))
+	}
+	for _, file := range archive.File {
+		name := strings.TrimPrefix(file.Name, "slsg-machine/")
+		if _, ok := files[name]; !ok {
+			t.Fatalf("unexpected zip entry %q", file.Name)
 		}
 	}
 }

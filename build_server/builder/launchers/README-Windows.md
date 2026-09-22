@@ -2,11 +2,10 @@
 
 このマシンはNATやポート転送を使用しません。QEMUのTAPアダプターとKaliを同じL2セグメントへ接続するため、TCP/UDPを問わず、ターゲット上のすべてのポートをKaliから探索できます。
 
-ダウンロードした`slsg-machine.tar.zst`は、7-ZipでZstandard層とtar層を順に展開します。
+ダウンロードした`<artifact_id>.zip`を展開します。
 
 ```powershell
-7z x .\slsg-machine.tar.zst
-7z x .\slsg-machine.tar
+Expand-Archive .\ARTIFACT_ID.zip -DestinationPath .
 Set-Location .\slsg-machine
 ```
 

@@ -194,12 +194,12 @@ Packerビルド自体が失敗またはキャンセルされた場合は、ai_se
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
 HMAC署名され、既定では30分だけ有効です。build_server の内部 URL をブラウザへ露出せず、
-`image.qcow2`、OS別起動スクリプト、READMEを含む`slsg-machine.tar.zst`をストリーミングします。
+`image.qcow2`、OS別起動スクリプト、READMEを含む`<artifact_id>.zip`をストリーミングします。
 Rangeリクエスト、`ETag`（成果物のSHA256）、`If-Range`にも対応するため、中断後に同じ成果物の
 ダウンロードを再開できます。期限切れの場合は、認証が必要な
 `POST /v1/sessions/{session_id}/download-url` で新しいURLを取得してください。同時に、ランダム化
 された `provisioner` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
-ダウンロード応答には`application/zstd`と配信範囲に対応するサイズを設定します。
+ダウンロード応答には`application/zip`と配信範囲に対応するサイズを設定します。
 
 署名鍵は本番環境で必ずランダムな32文字以上の`DOWNLOAD_SIGNING_SECRET`へ変更してください。
 有効期間は`DOWNLOAD_URL_TTL_SECONDS`で変更でき、既定値は1800秒です。署名付きURLは認証情報と

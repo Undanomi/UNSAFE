@@ -118,8 +118,8 @@ class FakeBuildClient:
         return [
             Artifact(
                 artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
-                artifact_type="tar.zst",
-                file_name="slsg-machine.tar.zst",
+                artifact_type="zip",
+                file_name="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
                 file_size=7,
                 checksum="test-checksum",
             )
@@ -137,7 +137,7 @@ class FakeBuildClient:
         self.download_headers.append((range_header, if_range))
         request = httpx.Request("GET", "http://build.test/artifact")
         headers = {
-            "Content-Type": "application/zstd",
+            "Content-Type": "application/zip",
             "Accept-Ranges": "bytes",
         }
         if range_header == "bytes=2-" and if_range is None:
@@ -164,7 +164,7 @@ def test_distribution_artifact_does_not_fallback_to_qcow2() -> None:
         file_size=4,
         checksum="test-checksum",
     )
-    with pytest.raises(RuntimeError, match=r"without a tar\.zst"):
+    with pytest.raises(RuntimeError, match="without a zip"):
         MachineWorkflow._distribution_artifact([old_artifact])
 
 
@@ -260,7 +260,24 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     completed_state = await app.state.repository.get(session_id)
     assert completed_state.source_generation_attempts == 1
     assert completed_state.source_generation_attempt_limit == 12
-    download_url = completed.json()["download_url"]
+    completed_state.artifact = Artifact(
+        artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
+        artifact_type="tar.zst",
+        file_name="slsg-machine.tar.zst",
+        file_size=9,
+        checksum="legacy-checksum",
+    )
+    await app.state.repository.save(completed_state)
+    refreshed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["artifact"] == {
+        "artifact_id": "3a3c16bd-6d41-49e1-98c3-927138f8a271",
+        "artifact_type": "zip",
+        "file_name": "3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
+        "file_size": 7,
+        "checksum": "test-checksum",
+    }
+    download_url = refreshed.json()["download_url"]
     assert f"/v1/sessions/{session_id}/download?" in download_url
     assert "expires=" in download_url
     assert "signature=" in download_url
@@ -275,9 +292,9 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     download = await http.get(download_url)
     assert download.status_code == 200
     assert download.content == b"archive"
-    assert download.headers["content-type"] == "application/zstd"
+    assert download.headers["content-type"] == "application/zip"
     assert download.headers["content-disposition"] == (
-        'attachment; filename="slsg-machine.tar.zst"'
+        'attachment; filename="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"'
     )
     assert download.headers["content-length"] == "7"
     assert fake_build.download_requests == [

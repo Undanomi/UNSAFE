@@ -23,7 +23,11 @@ from .repository import SessionRepository
 from .services.download_signing import DownloadSigner, InvalidDownloadSignatureError
 from .services.events import ServerEvent
 from .services.scenarios import ScenarioCoordinator
-from .services.workflow import InvalidSessionStateError, MachineWorkflow
+from .services.workflow import (
+    DISTRIBUTION_ARTIFACT_TYPE,
+    InvalidSessionStateError,
+    MachineWorkflow,
+)
 
 router = APIRouter(prefix="/v1")
 UserHeader = Annotated[str | None, Header(alias="X-Authenticated-User-ID")]
@@ -130,10 +134,11 @@ async def get_session(
     response: Response,
     user_id: UserHeader = None,
 ) -> SessionResponse:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
     state = await _cancel_stale_running_state(request, state)
+    state = await workflow.refresh_distribution_artifact(state)
     response.headers["Cache-Control"] = "private, no-store"
     return _response(request, state)
 
@@ -203,9 +208,10 @@ async def save_machine_information(
 async def skill_selection_report(
     session_id: str, request: Request, user_id: UserHeader = None
 ) -> dict:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
+    state = await workflow.refresh_distribution_artifact(state)
     report = await request.app.state.skills.selection_report(session_id)
     if state.scenario is None:
         report["cve_usage"] = None
@@ -331,11 +337,17 @@ async def create_download_url(
     response: Response,
     user_id: UserHeader = None,
 ) -> DownloadURLResponse:
-    repository, _, _ = _services(request)
+    repository, _, workflow = _services(request)
     state = await repository.get(session_id)
     _authorize(state, user_id)
+    state = await workflow.refresh_distribution_artifact(state)
     if state.status != SessionStatus.COMPLETED or not state.artifact or not state.build_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
+    if state.artifact.artifact_type != DISTRIBUTION_ARTIFACT_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="zip artifact migration is not complete",
+        )
     download_url, expires_at = _signed_download_url(request, state)
     response.headers["Cache-Control"] = "private, no-store"
     return DownloadURLResponse(download_url=download_url, expires_at=expires_at)
@@ -378,6 +390,13 @@ async def download_machine(
     except InvalidDownloadSignatureError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
 
+    state = await workflow.refresh_distribution_artifact(state)
+    if not state.artifact or state.artifact.artifact_type != DISTRIBUTION_ARTIFACT_TYPE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="zip artifact migration is not complete",
+        )
+
     etag = _artifact_etag(state.artifact.checksum)
     upstream_range = range_header
     upstream_if_range = if_range
@@ -408,7 +427,7 @@ async def download_machine(
     return StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "application/zstd"),
+        media_type=upstream.headers.get("content-type", "application/zip"),
         headers=headers,
         background=BackgroundTask(upstream.aclose),
     )

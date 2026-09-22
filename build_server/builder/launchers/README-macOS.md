@@ -5,9 +5,8 @@
 ダウンロードした配布物を空の専用ディレクトリへ置き、展開します。
 
 ```sh
-brew install qemu zstd
-unzstd -k slsg-machine.tar.zst
-tar -xf slsg-machine.tar
+brew install qemu
+unzip ARTIFACT_ID.zip
 cd slsg-machine
 ```
 
