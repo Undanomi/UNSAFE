@@ -13,6 +13,8 @@ from starlette.background import BackgroundTask
 from .models import (
     CreateMachineRequest,
     DownloadURLResponse,
+    GuidancePlan,
+    GuidanceRequest,
     MachineInformation,
     SessionResponse,
     SessionState,
@@ -325,6 +327,45 @@ async def create_machine(
     except InvalidSessionStateError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
     return _response(request, state)
+
+
+@router.post(
+    "/sessions/{session_id}/guidance",
+    response_model=GuidancePlan,
+)
+async def create_guidance(
+    session_id: str,
+    body: GuidanceRequest,
+    request: Request,
+    response: Response,
+    user_id: UserHeader = None,
+) -> GuidancePlan:
+    repository, _, workflow = _services(request)
+    state = await repository.get(session_id)
+    _authorize(state, user_id)
+    if (
+        state.status != SessionStatus.COMPLETED
+        or not state.machine_information
+        or not state.scenario
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="machine is not ready")
+    if not state.source_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="machine source is unavailable"
+        )
+    generated = workflow.source_archive.load(state.source_path)
+    if generated is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="machine source is unavailable"
+        )
+    guidance = await workflow.generator.generate_guidance(
+        state.machine_information,
+        state.scenario,
+        generated,
+        body.acquired_flags,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return guidance
 
 
 @router.post(

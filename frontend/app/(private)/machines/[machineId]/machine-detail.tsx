@@ -12,8 +12,18 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { retryMachineBuildAction, verifyMachineFlagAction } from "@/app/actions/machines"
-import type { FlagDefinition, MachineBuildState, MachineDetail } from "@/stores/machine-detail"
+import {
+  generateMachineGuidanceAction,
+  retryMachineBuildAction,
+  verifyMachineFlagAction,
+} from "@/app/actions/machines"
+import { MarkdownContent } from "@/components/markdown-content"
+import type {
+  FlagDefinition,
+  MachineBuildState,
+  MachineDetail,
+  MachineGuidance,
+} from "@/stores/machine-detail"
 
 type MachineDetailProps = {
   machine: MachineDetail
@@ -21,11 +31,14 @@ type MachineDetailProps = {
 
 type FlagPanelProps = {
   flag: FlagDefinition
+  onCorrect: () => void
 }
 
-function FlagPanel({ flag }: FlagPanelProps) {
+function FlagPanel({ flag, onCorrect }: FlagPanelProps) {
   const [answer, setAnswer] = useState("")
-  const [result, setResult] = useState<"correct" | "incorrect" | null>(null)
+  const [result, setResult] = useState<"correct" | "incorrect" | null>(
+    flag.acquired ? "correct" : null,
+  )
   const [isChecking, setIsChecking] = useState(false)
 
   async function handleSubmit() {
@@ -36,6 +49,7 @@ function FlagPanel({ flag }: FlagPanelProps) {
       const verification = await verifyMachineFlagAction(flag.machineId, flag.kind, answer)
       if (verification.success) {
         setResult(verification.correct ? "correct" : "incorrect")
+        if (verification.correct) onCorrect()
       }
     } finally {
       setIsChecking(false)
@@ -82,6 +96,117 @@ function FlagPanel({ flag }: FlagPanelProps) {
   )
 }
 
+function GuidancePanel({
+  guidance,
+  locked,
+  showIntroduction,
+  target,
+}: {
+  guidance: MachineGuidance
+  locked?: boolean
+  showIntroduction: boolean
+  target: "user" | "system"
+}) {
+  const [visibleHints, setVisibleHints] = useState<Set<number>>(() => new Set())
+  const [confirmedCount, setConfirmedCount] = useState(0)
+  const items = guidance.items.filter((item) => item.target_flag === target)
+  if (items.length === 0) return null
+  const visibleItems = items.slice(0, Math.min(confirmedCount + 1, items.length))
+
+  return (
+    <section className="rounded-3xl border border-[#ded5a9] bg-[#fffdf4] p-6 shadow-sm max-sm:p-5">
+      <div className="flex items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#f2e9b7] text-[#655715]">
+          <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
+            {target === "user" ? "ユーザーフラグまでの誘導" : "システムフラグまでの誘導"}
+          </h2>
+          {showIntroduction ? (
+            <MarkdownContent
+              className="mt-2 leading-[1.7] text-[#61605b]"
+              content={guidance.introduction}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      {locked ? (
+        <p className="mt-5 rounded-2xl border border-[#e4ddbd] bg-white p-5 text-[0.9rem] font-bold text-[#61605b]">
+          ユーザーフラグを取得すると、この誘導を確認できます。
+        </p>
+      ) : (
+        <ol className="mt-5 grid gap-4">
+          {visibleItems.map((item, index) => {
+            const showHint = visibleHints.has(index)
+            const confirmed = index < confirmedCount
+            return (
+              <li
+                className="rounded-2xl border border-[#e4ddbd] bg-white p-5"
+                key={`${target}-${item.title}-${item.question}`}
+              >
+                <p className="text-[0.78rem] font-extrabold text-[#766825]">
+                  {index + 1} / {items.length}
+                </p>
+                <MarkdownContent
+                  className="mt-2 text-[1.05rem] font-extrabold"
+                  content={item.title}
+                />
+                <MarkdownContent
+                  className="mt-3 leading-[1.7] text-[#343431]"
+                  content={item.question}
+                />
+                {showHint ? (
+                  <div className="mt-4 rounded-xl bg-[#f8f6eb] p-4">
+                    <p className="text-[0.78rem] font-extrabold text-[#766825]">ヒント</p>
+                    <MarkdownContent
+                      className="mt-1 leading-[1.65] text-[#61605b]"
+                      content={item.hint}
+                    />
+                  </div>
+                ) : null}
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    className="inline-flex min-h-11 items-center justify-center rounded-xl border border-[#d6d6d2] bg-white px-4 text-[0.86rem] font-extrabold"
+                    onClick={() =>
+                      setVisibleHints((current) => {
+                        const next = new Set(current)
+                        if (next.has(index)) next.delete(index)
+                        else next.add(index)
+                        return next
+                      })
+                    }
+                    type="button"
+                  >
+                    {showHint ? "ヒントを閉じる" : "ヒントを表示"}
+                  </button>
+                  {confirmed ? (
+                    <span className="inline-flex min-h-11 items-center gap-2 px-2 text-[0.86rem] font-extrabold text-[#28633a]">
+                      <CheckCircle2 aria-hidden="true" size={17} />
+                      確認済み
+                    </span>
+                  ) : (
+                    <button
+                      className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.86rem] font-extrabold text-white"
+                      onClick={() =>
+                        setConfirmedCount((count) => Math.min(count + 1, items.length))
+                      }
+                      type="button"
+                    >
+                      {index + 1 < items.length ? "確認して次へ" : "確認する"}
+                    </button>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </section>
+  )
+}
+
 export function MachineDetailView({ machine }: MachineDetailProps) {
   const [buildState, setBuildState] = useState<MachineBuildState>({
     status: machine.status ?? "ready",
@@ -90,6 +215,13 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   const [description, setDescription] = useState(machine.description)
   const [isRetrying, setIsRetrying] = useState(false)
   const [retryError, setRetryError] = useState("")
+  const [guidance, setGuidance] = useState(machine.guidance)
+  const [isGuidanceGenerating, setIsGuidanceGenerating] = useState(false)
+  const [guidanceError, setGuidanceError] = useState("")
+  const [userFlagAcquired, setUserFlagAcquired] = useState(machine.userFlag?.acquired ?? false)
+  const [systemFlagAcquired, setSystemFlagAcquired] = useState(
+    machine.systemFlag?.acquired ?? false,
+  )
   const isBuilding = buildState.status === "building" || buildState.status === "preparing"
   const canDownload = machine.status !== undefined && buildState.status === "ready"
   const showFlags = machine.status !== undefined && buildState.status === "ready"
@@ -144,6 +276,24 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
     }
   }
 
+  async function handleGuidance() {
+    if (isGuidanceGenerating || buildState.status !== "ready") return
+    setIsGuidanceGenerating(true)
+    setGuidanceError("")
+    try {
+      const result = await generateMachineGuidanceAction(machine.id, guidance !== null)
+      if (!result.success) {
+        setGuidanceError(result.message)
+        return
+      }
+      setGuidance(result.guidance)
+    } catch {
+      setGuidanceError("誘導問題を作成できませんでした。もう一度お試しください。")
+    } finally {
+      setIsGuidanceGenerating(false)
+    }
+  }
+
   return (
     <section className="grid gap-6">
       <Link
@@ -185,14 +335,26 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
             </button>
           )}
           <button
-            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px max-sm:flex-1"
+            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-55 max-sm:flex-1"
+            disabled={isGuidanceGenerating || buildState.status !== "ready"}
+            onClick={() => void handleGuidance()}
             type="button"
           >
-            <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
-            誘導問題
+            {isGuidanceGenerating ? (
+              <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
+            ) : (
+              <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
+            )}
+            {isGuidanceGenerating ? "作成中…" : guidance ? "誘導問題を再生成する" : "誘導問題"}
           </button>
         </div>
       </header>
+
+      {guidanceError ? (
+        <p className="rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-4 text-[0.86rem] font-bold text-[#9a392d]">
+          {guidanceError}
+        </p>
+      ) : null}
 
       {machine.status !== undefined ? (
         <BuildStatusPanel
@@ -226,8 +388,36 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
 
       {showFlags && (machine.userFlag || machine.systemFlag) ? (
         <div className="grid gap-5">
-          {machine.userFlag ? <FlagPanel flag={machine.userFlag} /> : null}
-          {machine.systemFlag ? <FlagPanel flag={machine.systemFlag} /> : null}
+          {machine.userFlag ? (
+            <>
+              {guidance ? (
+                <GuidancePanel
+                  guidance={guidance}
+                  key={`user-${JSON.stringify(guidance)}`}
+                  showIntroduction
+                  target="user"
+                />
+              ) : null}
+              <FlagPanel flag={machine.userFlag} onCorrect={() => setUserFlagAcquired(true)} />
+            </>
+          ) : null}
+          {machine.systemFlag ? (
+            <>
+              {guidance ? (
+                <GuidancePanel
+                  guidance={guidance}
+                  key={`system-${JSON.stringify(guidance)}`}
+                  locked={machine.userFlag !== null && !userFlagAcquired}
+                  showIntroduction={!guidance.items.some((item) => item.target_flag === "user")}
+                  target="system"
+                />
+              ) : null}
+              <FlagPanel
+                flag={{ ...machine.systemFlag, acquired: systemFlagAcquired }}
+                onCorrect={() => setSystemFlagAcquired(true)}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>

@@ -1,6 +1,7 @@
 import "server-only"
 
 import type { ChatAnswers } from "@/stores/chat"
+import type { MachineGuidance } from "@/stores/machine-detail"
 
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -138,6 +139,28 @@ export async function getAiSessionService(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   return parseAiResponse(response)
+}
+
+export async function generateAiGuidanceService(
+  ownerUserId: string,
+  sessionId: string,
+  acquiredFlags: Array<"user" | "system">,
+): Promise<MachineGuidance> {
+  const response = await fetch(
+    `${getAiServerUrl()}/v1/sessions/${encodeURIComponent(sessionId)}/guidance`,
+    {
+      method: "POST",
+      headers: { ...userHeaders(ownerUserId), "Content-Type": "application/json" },
+      body: JSON.stringify({ acquired_flags: acquiredFlags }),
+      cache: "no-store",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    },
+  )
+  if (!response.ok) {
+    const body = await response.text()
+    throw new Error(`AI server returned ${response.status}: ${body.slice(0, 500)}`)
+  }
+  return (await response.json()) as MachineGuidance
 }
 
 export async function cancelAiSessionService(

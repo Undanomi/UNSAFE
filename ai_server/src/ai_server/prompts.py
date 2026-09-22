@@ -4,6 +4,98 @@ import json
 
 from .models import AttackGraph, GeneratedSource, MachineInformation, ScenarioDraft
 
+GUIDANCE_SOURCE_MAX_CHARS = 40_000
+
+
+def _guidance_source(current: GeneratedSource, secrets: tuple[str | None, ...]) -> str:
+    priorities = (
+        "scenario_manifest.json",
+        "README",
+        "provision",
+        "build.sh",
+        "sudoers",
+        "systemd",
+    )
+    ordered = sorted(
+        current.files,
+        key=lambda item: (
+            min(
+                (index for index, marker in enumerate(priorities) if marker in item.path),
+                default=len(priorities),
+            ),
+            item.path,
+        ),
+    )
+    sections: list[str] = []
+    used = 0
+    for source_file in ordered:
+        header = f"\n--- {source_file.path} ---\n"
+        remaining = GUIDANCE_SOURCE_MAX_CHARS - used - len(header)
+        if remaining <= 0:
+            break
+        content = source_file.content
+        for secret in secrets:
+            if secret:
+                content = content.replace(secret, "[REDACTED FLAG]")
+        content = content[:remaining]
+        sections.append(header + content)
+        used += len(header) + len(content)
+    return "".join(sections)
+
+
+def guidance_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    current: GeneratedSource,
+    acquired_flags: list[str],
+) -> str:
+    acquired = "、".join(acquired_flags) if acquired_flags else "なし"
+    return f"""あなたはCTF学習者を支援するメンターです。以下の確定済みシナリオと、実際にVMへ
+投入されたプロビジョニング用コードを照合し、攻略を段階的に進める日本語の誘導問題を作成してください。
+
+マシン名: {machine.name}
+難易度: {machine.difficulty}
+取得済みフラグ: {acquired}
+
+攻撃グラフ:
+```json
+{scenario.attack_graph.model_dump_json(indent=2)}
+```
+
+シナリオ設計書:
+```markdown
+{scenario.definition}
+```
+
+生成コード（関連度順、最大{GUIDANCE_SOURCE_MAX_CHARS}文字）:
+```
+{_guidance_source(current, (scenario.user_flag, scenario.system_flag))}
+```
+
+JSONだけを返してください。形式:
+{{"introduction":"...","items":[{{"target_flag":"user","title":"...","question":"...","hint":"..."}}]}}
+
+規則:
+- シナリオの説明だけを要約せず、生成コードで実装を確認できる事実に基づく
+- 攻撃グラフの順番に沿った1〜8個の項目にする。ただし取得済みフラグそのものを目標とする項目は省き、
+  後続攻略に必要な既取得の足場として扱う
+- 全フラグを取得済みならitemsを空配列にする
+- 各項目のtarget_flagは、その調査過程の直後に到達するフラグを指定する。User flag取得までの列挙・
+  初期侵入はuser、User flag取得後からSystem flag取得までの権限昇格はsystemにする
+- User flagが存在しない場合は、System flag取得までの全項目をsystemにする
+- questionは次に観察・調査すべきことを問いかけ、hintは行き詰まった時に試す方向性を1〜3文で示す
+- introduction、title、question、hintではGitHub Flavored Markdownを使用できる。コマンド、パス、
+  オプション、コードはバッククォートまたはコードブロックで表し、生のHTMLは使用しない
+- 後続項目は画面上で順番に開示される。後続項目のtitleやquestionが、先行項目の直接的な答えに
+  ならないようにし、具体性は段階的に上げる
+- ツール名や一般的な調査コマンドは提示してよいが、完成したexploit payloadやフラグ取得コマンドを
+  そのまま答えとして渡さない
+- 正解フラグ値、秘密鍵、生成時だけの認証情報、プロビジョニング内部の絶対的な答えを開示しない
+- 実装に存在しないポート、パス、脆弱性、認証情報を推測で追加しない
+- introductionで、自動正誤判定ではなく各項目を確認しながら進める形式だと短く説明する
+"""
+
+
 HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - rockyou.txtはハッシュの一覧ではなく、攻撃者が自分のマシンで辞書攻撃に使う平文パスワード候補の
   wordlistである。ターゲットVMへインストールする教材コンポーネントや、ハッシュの保存先として

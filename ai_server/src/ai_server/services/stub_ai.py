@@ -10,6 +10,8 @@ from ..models import (
     AttackObjective,
     AttackStep,
     GeneratedSource,
+    GuidanceItem,
+    GuidancePlan,
     MachineInformation,
     ScenarioDraft,
     ScenarioReview,
@@ -164,6 +166,57 @@ class StubGenerator:
         review = await self.review_scenario(machine, scenario)
         await _record_scenario_draft(on_attempt, scenario, review)
         return scenario
+
+    async def generate_guidance(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        acquired_flags: list[str],
+    ) -> GuidancePlan:
+        del current
+        initial_target = (
+            "user"
+            if scenario.user_flag and "user" not in acquired_flags
+            else "system"
+            if scenario.system_flag and "system" not in acquired_flags
+            else None
+        )
+        items = []
+        if initial_target:
+            items.append(
+                GuidanceItem(
+                    target_flag=initial_target,
+                    title="公開サービスを整理する",
+                    question="対象ホストでは、どのサービスとバージョン情報を観察できますか？",
+                    hint="まずポートとサービスを列挙し、Webがあればトップページやレスポンスも確認してください。",
+                )
+            )
+        if "user" not in acquired_flags and scenario.user_flag:
+            items.append(
+                GuidanceItem(
+                    target_flag="user",
+                    title="初期侵入の手掛かりを探す",
+                    question="公開サービスの設定や入力から、一般ユーザー権限へつながる不備はありませんか？",
+                    hint="列挙結果を攻撃グラフの初期アクセス段階と照らし合わせてください。",
+                )
+            )
+        if "system" not in acquired_flags and scenario.system_flag:
+            items.append(
+                GuidanceItem(
+                    target_flag="system",
+                    title="権限境界を調べる",
+                    question="現在のユーザーから管理者権限へ進むために、どのローカル設定を確認すべきですか？",
+                    hint="sudo権限、実行ファイルの所有権、サービス設定などを順に調査してください。",
+                )
+            )
+        return GuidancePlan(
+            introduction=(
+                f"{machine.name}の攻略経路を段階的に確認します。"
+                "回答の自動判定は行わず、調査できたら次の項目へ進んでください。"
+            ),
+            items=items,
+        )
 
     async def review_scenario(
         self,

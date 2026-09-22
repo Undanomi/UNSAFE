@@ -114,6 +114,69 @@ async def test_vm_source_generation_uses_large_output_budget() -> None:
 
 
 @pytest.mark.asyncio
+async def test_guidance_retries_when_model_exposes_flag() -> None:
+    requests: list[dict] = []
+    flag = "flag{user_0123456789abcdef0123456789abcdef}"
+    responses = [
+        {
+            "introduction": "確認します。",
+            "items": [
+                {
+                    "target_flag": "user",
+                    "title": "漏えい",
+                    "question": flag,
+                    "hint": "答えです。",
+                }
+            ],
+        },
+        {
+            "introduction": "段階的に確認します。",
+            "items": [
+                {
+                    "target_flag": "user",
+                    "title": "列挙",
+                    "question": "どのサービスが公開されていますか？",
+                    "hint": "ポートを調査してください。",
+                }
+            ],
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(responses.pop(0))
+
+    scenario = ScenarioDraft(
+        scenario_id="scenario-guidance",
+        title="Guidance",
+        definition="# Guidance",
+        attack_graph=graph_without_objectives(),
+        user_flag=flag,
+    )
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/scripts/provision.sh", content="#!/bin/bash\n")]
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        guidance = await GeminiGenerator(
+            Settings(gemini_api_key="test-key", generation_retries=2), client
+        ).generate_guidance(
+            MachineInformation(
+                name="Guidance", visibility="private", theme="Web", difficulty="Easy"
+            ),
+            scenario,
+            source,
+            [],
+        )
+
+    assert guidance.items[0].title == "列挙"
+    assert len(requests) == 2
+    assert (
+        "guidance must not expose a correct flag value"
+        in requests[1]["contents"][0]["parts"][0]["text"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch) -> None:
     overlong_definition = "# Scenario\n\n" + ("Repeated detail. " * 800)
     compacted_definition = "# Scenario\n\n" + ("Required detail. " * 500)

@@ -17,6 +17,7 @@ from ..models import (
     AttackObjective,
     AttackStep,
     GeneratedSource,
+    GuidancePlan,
     MachineInformation,
     ScenarioCorrection,
     ScenarioDraft,
@@ -31,6 +32,7 @@ from ..prompts import (
     attack_graph_prompt,
     attack_graph_revision_prompt,
     code_prompt,
+    guidance_prompt,
     repair_prompt,
     scenario_compaction_prompt,
     scenario_correction_prompt,
@@ -177,6 +179,14 @@ class CVEVerification(BaseModel):
 
 
 class AIGenerator(Protocol):
+    async def generate_guidance(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        acquired_flags: list[str],
+    ) -> GuidancePlan: ...
+
     async def generate_scenario(
         self,
         machine: MachineInformation,
@@ -1172,6 +1182,53 @@ JSONのみを返してください:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not generate valid VM source: {last_error}")
+
+    async def generate_guidance(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        acquired_flags: list[str],
+    ) -> GuidancePlan:
+        last_error: Exception | None = None
+        prompt = guidance_prompt(machine, scenario, current, acquired_flags)
+        for _ in range(self.settings.generation_retries):
+            response: str | None = None
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=GuidancePlan,
+                    max_output_tokens=min(self.settings.gemini_max_output_tokens, 4096),
+                )
+                guidance = GuidancePlan.model_validate_json(response)
+                serialized = guidance.model_dump_json().casefold()
+                if any(
+                    flag and flag.casefold() in serialized
+                    for flag in (scenario.user_flag, scenario.system_flag)
+                ):
+                    raise ValueError("guidance must not expose a correct flag value")
+                allowed_targets = {
+                    kind
+                    for kind, flag in (
+                        ("user", scenario.user_flag),
+                        ("system", scenario.system_flag),
+                    )
+                    if flag and kind not in acquired_flags
+                }
+                actual_targets = {item.target_flag for item in guidance.items}
+                if not actual_targets <= allowed_targets:
+                    raise ValueError("guidance targets a missing or acquired flag")
+                if missing_targets := allowed_targets - actual_targets:
+                    raise ValueError(
+                        "guidance is missing items for unsolved flags: "
+                        + ", ".join(sorted(missing_targets))
+                    )
+                return guidance
+            except (httpx.HTTPError, RuntimeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error, response)
+        raise RuntimeError(f"Could not generate safe guidance: {last_error}")
 
     async def repair_source(
         self,
