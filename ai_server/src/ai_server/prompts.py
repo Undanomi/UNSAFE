@@ -417,6 +417,8 @@ JSON以外は返さないでください。
   compatibility_reason、installation_artifact、artifact_source、source_build_reason、
   installation_method、referencesは公式検証済み情報なので変更しない
 - レビューが指摘したstepのtitle、description、implementation_stepsだけを必要最小限修正する
+- レビュー指示がAttackGraphのモデル制約または上記の変更禁止フィールドと衝突する場合は、その指示に
+  従って禁止フィールドを変更せず、現在の攻撃グラフをそのまま返す
 - Markdown側だけの問題を攻撃グラフへ持ち込まず、新しいstep、CVE、攻撃経路、到達目標を追加しない
 - remediationをコピーするだけでなく、矛盾する旧バージョン、旧設定例、曖昧な表現を実際に置換する
 """
@@ -512,7 +514,20 @@ def scenario_review_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
     review_context: str = "generation",
+    reconsideration: dict | None = None,
 ) -> str:
+    reconsideration_section = ""
+    if reconsideration is not None:
+        reconsideration_section = f"""
+前回レビューの再検討資料:
+```json
+{json.dumps(reconsideration, ensure_ascii=False, indent=2)}
+```
+攻撃グラフ修正案がサーバー検証に失敗しました。修正案だけでなく、前回レビューの前提や修正先が
+誤っていた可能性も検討してください。検証エラーを回避する値を捏造せず、指摘が誤りなら撤回し、
+限定修正で扱えない構造問題ならattack_graph_regeneration、入力条件の問題ならuser_inputへ変更して
+シナリオ全体を改めて判定してください。同じ根拠のない修正要求を繰り返さないでください。
+"""
     return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
 作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
 前提を飛ばす近道がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
@@ -541,10 +556,11 @@ System flag取得要件（正解値ではない）: {machine.needs_system_flag},
 ```markdown
 {scenario.definition}
 ```
+{reconsideration_section}
 
 JSONのみを返してください:
 {{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
-"category":"permission_blocker","repair_target":"scenario_text",
+"category":"permission_blocker","repair_target":"scenario_text","repair_fields":[],
 "evidence":"成立しない権限遷移とその理由",
 "remediation":"所有者・group・mode・実行主体を含む具体的な設計修正"}}]}}
 
@@ -559,8 +575,8 @@ JSONのみを返してください:
   errorにする
 - 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
   semantic_mismatchのerrorにする
-- CVEステップではcve_title、cve_description、cwe_idsを公式事実として扱い、設計書が別の脆弱性、
-  単なる同製品の設定不備、模擬実装へ置き換えている場合はsemantic_mismatchのerrorにする
+- CVEステップのcve_title、cve_description、cwe_idsは公式事実。設計書が別の脆弱性、設定不備、
+  模擬実装へ置き換えていればsemantic_mismatchのerrorにする
 - installation_artifactとartifact_sourceが示すビルド済み配布経路を設計書が維持しているか確認する。
   source_buildの場合はsource_build_reasonに、先行するパッケージ・公式バイナリ経路を利用できない
   具体的根拠がなければunsupported_assumptionのerrorにする
@@ -572,8 +588,9 @@ JSONのみを返してください:
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
   記載する。単なる一般論や推測だけで不合格にしない
-- repair_targetは修正先を明示する: 本文=scenario_text、グラフ=attack_graph、実装=source_code、
-  入力条件=user_input。文言から推測しない。source_codeはreview_context=source_syncでのみ使う
+- repair_target: scenario_text=本文、attack_graph=限定修正、attack_graph_regeneration=再作成、
+  source_code=実装(source_sync時のみ)、user_input=入力
+- attack_graphはtitle、description、implementation_stepsのみ。repair_fieldsに列挙し、他は再作成とする
 
 パーミッションは最重点項目として、各ステップで次を明示的に反証する:
 - 重要パスのowner・group・mode・ACL・sudoers・capabilityと各主体の可否を時系列の権限表で検証する

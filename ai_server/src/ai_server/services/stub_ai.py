@@ -170,6 +170,7 @@ class StubGenerator:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview:
         return ScenarioReview(
             approved=True,

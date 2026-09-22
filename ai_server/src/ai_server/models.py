@@ -291,9 +291,11 @@ class ScenarioReviewFinding(BaseModel):
     repair_target: Literal[
         "scenario_text",
         "attack_graph",
+        "attack_graph_regeneration",
         "source_code",
         "user_input",
     ] = "scenario_text"
+    repair_fields: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 

@@ -47,6 +47,8 @@ from .errors import ScenarioInputRevisionRequiredError
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 SCENARIO_DEFINITION_TARGET_CHARS = 10_500
+ATTACK_GRAPH_REVISION_FIELDS = frozenset({"title", "description", "implementation_steps"})
+MAX_REVIEW_RECONSIDERATIONS = 2
 GEMINI_JSON_SCHEMA_KEYS = {
     "$anchor",
     "$defs",
@@ -69,6 +71,23 @@ GEMINI_JSON_SCHEMA_KEYS = {
     "title",
     "type",
 }
+
+
+class _AttackGraphRevisionValidationFailure(ValueError):
+    """A syntactically complete graph revision failed semantic validation."""
+
+    def __init__(self, error: Exception, attempted_revision) -> None:
+        self.validation_error = str(error)
+        try:
+            serialized = json.dumps(attempted_revision, ensure_ascii=False, indent=2)
+        except (TypeError, ValueError):
+            serialized = repr(attempted_revision)
+        self.attempted_revision = serialized[:12_000]
+        super().__init__(f"attack graph revision validation failed: {error}")
+
+
+class _ReviewReconsiderationExhausted(RuntimeError):
+    """The reviewer repeated a repair request that cannot pass validation."""
 
 
 def _gemini_json_schema(value):
@@ -169,6 +188,7 @@ class AIGenerator(Protocol):
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview: ...
 
     async def generate_source(
@@ -319,6 +339,7 @@ class GeminiGenerator:
         review: ScenarioReview,
     ) -> AttackGraph:
         last_error: Exception | None = None
+        last_attempted_revision = None
         prompt = attack_graph_revision_prompt(
             machine,
             graph,
@@ -334,10 +355,27 @@ class GeminiGenerator:
                 )
                 value = json.loads(response)
                 raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
-                revised = AttackGraph.model_validate(raw_graph)
-                self._validate_attack_graph_revision(graph, revised)
-                self._validate_objectives(machine, revised)
+                last_attempted_revision = raw_graph
+                try:
+                    revised = AttackGraph.model_validate(raw_graph)
+                except ValidationError as error:
+                    if any(item["type"] == "value_error" for item in error.errors()):
+                        raise _AttackGraphRevisionValidationFailure(
+                            error, raw_graph
+                        ) from error
+                    raise
+                try:
+                    self._validate_attack_graph_revision(graph, revised)
+                    if revised == graph:
+                        raise ValueError("attack graph revision made no change")
+                    self._validate_objectives(machine, revised)
+                except ValueError as error:
+                    raise _AttackGraphRevisionValidationFailure(
+                        error, raw_graph
+                    ) from error
                 return revised
+            except _AttackGraphRevisionValidationFailure:
+                raise
             except (
                 httpx.HTTPError,
                 RuntimeError,
@@ -349,6 +387,10 @@ class GeminiGenerator:
             ) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error)
+        if isinstance(last_error, ValidationError):
+            raise _AttackGraphRevisionValidationFailure(
+                last_error, last_attempted_revision
+            ) from last_error
         raise RuntimeError(f"Could not revise attack graph safely: {last_error}")
 
     async def _parse_or_compact_scenario_generation(
@@ -481,14 +523,13 @@ class GeminiGenerator:
         if len(revised.steps) != len(original.steps):
             raise ValueError("attack graph revision must not add or remove steps")
 
-        mutable_fields = {"title", "description", "implementation_steps"}
         for original_step, revised_step in zip(original.steps, revised.steps, strict=True):
             original_data = original_step.model_dump(mode="json")
             revised_data = revised_step.model_dump(mode="json")
             changed_immutable = [
                 field_name
                 for field_name, original_value in original_data.items()
-                if field_name not in mutable_fields
+                if field_name not in ATTACK_GRAPH_REVISION_FIELDS
                 and revised_data.get(field_name) != original_value
             ]
             if changed_immutable:
@@ -503,6 +544,27 @@ class GeminiGenerator:
             finding.severity == "error" and finding.repair_target == "attack_graph"
             for finding in review.findings
         )
+
+    @staticmethod
+    def _review_requires_graph_regeneration(review: ScenarioReview) -> bool:
+        return any(
+            finding.severity == "error"
+            and (
+                finding.category == "broken_chain"
+                or finding.repair_target == "attack_graph_regeneration"
+            )
+            for finding in review.findings
+        )
+
+    @staticmethod
+    def _raise_for_user_input(review: ScenarioReview) -> None:
+        findings = [
+            finding.model_dump(mode="json")
+            for finding in review.findings
+            if finding.severity == "error" and finding.repair_target == "user_input"
+        ]
+        if findings:
+            raise ScenarioInputRevisionRequiredError(review.summary, findings)
 
     @staticmethod
     def _expected_objectives(machine: MachineInformation) -> list[AttackObjective]:
@@ -781,7 +843,8 @@ JSONのみを返してください:
             previous_scenario.attack_graph if previous_scenario is not None else None
         )
         pending_graph_review: ScenarioReview | None = None
-        terminal_review: ScenarioReview | None = None
+        reconsideration_signatures: set[str] = set()
+        review_reconsiderations = 0
         if graph is not None:
             try:
                 self._validate_objectives(machine, graph)
@@ -795,6 +858,7 @@ JSONのみを返してください:
             previous_review = await self.review_scenario(machine, previous_scenario)
             await _record_scenario_draft(on_attempt, previous_scenario, previous_review)
         if previous_scenario is not None and previous_review is not None:
+            self._raise_for_user_input(previous_review)
             if previous_review.approved:
                 return previous_scenario
             review_report = _compact_scenario_review(previous_review)
@@ -804,11 +868,7 @@ JSONのみを返してください:
             last_error = ValueError(
                 f"scenario semantic review failed: {previous_review.summary}"
             )
-            terminal_review = previous_review
-            if any(
-                finding.severity == "error" and finding.category == "broken_chain"
-                for finding in previous_review.findings
-            ):
+            if self._review_requires_graph_regeneration(previous_review):
                 graph = None
             elif graph is not None and self._review_requires_graph_revision(previous_review):
                 pending_graph_review = previous_review
@@ -816,7 +876,6 @@ JSONのみを返してください:
             if on_attempt is not None:
                 await on_attempt()
             attempt_phase = "attack_graph_generation"
-            terminal_review = None
             try:
                 if graph is None:
                     candidate = await self._draft_attack_graph(
@@ -826,11 +885,64 @@ JSONのみを返してください:
                     graph = await self._verify_attack_graph(machine, candidate)
                     pending_graph_review = None
                 elif pending_graph_review is not None:
-                    graph = await self._revise_attack_graph(
-                        machine,
-                        graph,
-                        pending_graph_review,
-                    )
+                    try:
+                        graph = await self._revise_attack_graph(
+                            machine,
+                            graph,
+                            pending_graph_review,
+                        )
+                    except _AttackGraphRevisionValidationFailure as error:
+                        if previous_scenario is None:
+                            raise
+                        signature = json.dumps(
+                            {
+                                "review": _compact_scenario_review(pending_graph_review),
+                                "validation_error": error.validation_error,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                        if (
+                            signature in reconsideration_signatures
+                            or review_reconsiderations >= MAX_REVIEW_RECONSIDERATIONS
+                        ):
+                            raise _ReviewReconsiderationExhausted(
+                                "review reconsideration repeated the same invalid repair"
+                            ) from error
+                        reconsideration_signatures.add(signature)
+                        review_reconsiderations += 1
+                        reconsidered = await self.review_scenario(
+                            machine,
+                            previous_scenario,
+                            reconsideration={
+                                "kind": "attack_graph_revision_validation_failure",
+                                "previous_review": _compact_scenario_review(
+                                    pending_graph_review
+                                ),
+                                "validation_error": error.validation_error[:4_000],
+                                "attempted_revision": error.attempted_revision,
+                            },
+                        )
+                        await _record_scenario_draft(
+                            on_attempt, previous_scenario, reconsidered
+                        )
+                        self._raise_for_user_input(reconsidered)
+                        if reconsidered.approved:
+                            return previous_scenario
+                        review_report = _compact_scenario_review(reconsidered)
+                        rejected.append(
+                            "scenario_review_reconsideration: "
+                            + json.dumps(review_report, ensure_ascii=False)
+                        )
+                        last_error = error
+                        if self._review_requires_graph_regeneration(reconsidered):
+                            graph = None
+                            pending_graph_review = None
+                        elif self._review_requires_graph_revision(reconsidered):
+                            pending_graph_review = reconsidered
+                        else:
+                            pending_graph_review = None
+                        continue
                     self._validate_skill_cves(graph, resolved_skills, machine)
                     if previous_scenario is not None:
                         previous_scenario = previous_scenario.model_copy(
@@ -880,22 +992,27 @@ JSONのみを返してください:
                 attempt_phase = "scenario_review"
                 review = await self.review_scenario(machine, scenario)
                 await _record_scenario_draft(on_attempt, scenario, review)
+                self._raise_for_user_input(review)
                 if review.approved:
                     return scenario
                 review_report = _compact_scenario_review(review)
                 last_error = ValueError(f"scenario semantic review failed: {review.summary}")
-                terminal_review = review
                 rejected.append(
                     "scenario_semantic_review: " + json.dumps(review_report, ensure_ascii=False)
                 )
-                if any(
-                    finding.severity == "error" and finding.category == "broken_chain"
-                    for finding in review.findings
-                ):
+                if self._review_requires_graph_regeneration(review):
                     graph = None
                     pending_graph_review = None
                 elif self._review_requires_graph_revision(review):
                     pending_graph_review = review
+            except ScenarioInputRevisionRequiredError:
+                raise
+            except _ReviewReconsiderationExhausted as error:
+                await _record_scenario_failure(on_attempt, attempt_phase, error)
+                raise RuntimeError(
+                    "Scenario review repeated a repair that could not pass "
+                    "attack-graph validation"
+                ) from error
             except (
                 httpx.HTTPError,
                 RuntimeError,
@@ -906,21 +1023,8 @@ JSONのみを返してください:
                 ValidationError,
             ) as error:
                 last_error = error
-                terminal_review = None
                 rejected.append(str(error))
                 await _record_scenario_failure(on_attempt, attempt_phase, error)
-        if terminal_review is not None and any(
-            finding.severity == "error" and finding.repair_target == "user_input"
-            for finding in terminal_review.findings
-        ):
-            raise ScenarioInputRevisionRequiredError(
-                terminal_review.summary,
-                [
-                    finding.model_dump(mode="json")
-                    for finding in terminal_review.findings
-                    if finding.severity == "error"
-                ],
-            )
         raise RuntimeError(f"Could not generate an approved scenario: {last_error}")
 
     async def review_scenario(
@@ -928,9 +1032,15 @@ JSONのみを返してください:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         review_context: str = "generation",
+        reconsideration: dict | None = None,
     ) -> ScenarioReview:
         last_error: Exception | None = None
-        prompt = scenario_review_prompt(machine, scenario, review_context)
+        prompt = scenario_review_prompt(
+            machine,
+            scenario,
+            review_context,
+            reconsideration,
+        )
         for _ in range(self.settings.generation_retries):
             try:
                 response = await self._generate(
@@ -1124,6 +1234,7 @@ def _compact_scenario_review(review: ScenarioReview) -> dict:
                 "severity": finding.severity,
                 "category": finding.category,
                 "repair_target": finding.repair_target,
+                "repair_fields": finding.repair_fields,
                 "evidence": finding.evidence[:500],
                 "remediation": finding.remediation[:500],
             }

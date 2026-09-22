@@ -99,6 +99,24 @@ def test_records_pending_draft_before_review_finishes(tmp_path) -> None:
     assert resumed is not None and resumed[1] is None
 
 
+def test_ignores_review_saved_under_an_older_review_policy(tmp_path) -> None:
+    archive = ScenarioDraftArchive(tmp_path)
+    approved = ScenarioReview(approved=True, summary="Approved", findings=[])
+    archive.record("session-1", 1, scenario(), approved, machine())
+
+    version_root = tmp_path / "session-1" / "v1"
+    metadata_path = version_root / "scenario_metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.pop("review_policy_version")
+    metadata_path.write_text(json.dumps(metadata))
+
+    resumed = archive.load_latest("session-1", machine())
+
+    assert resumed is not None
+    assert resumed[0].scenario_id == "scenario-test"
+    assert resumed[1] is None
+
+
 def test_migrates_legacy_flat_attempt_files_on_next_record(tmp_path) -> None:
     version_root = tmp_path / "session-1" / "v1"
     version_root.mkdir(parents=True)
