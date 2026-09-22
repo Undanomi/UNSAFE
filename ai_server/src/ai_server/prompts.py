@@ -185,9 +185,21 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
   同じランタイムおよび同じハッシュAPIから生成する。PHPアプリならそのPHP実装の`password_hash`等、
   PythonアプリならそのPython実装が検証に使うライブラリまたはヘルパーを実行し、別言語の近似実装、
   shell上の別アルゴリズム、AIが予測したダイジェストを埋め込まない
+- DB等へ保存したハッシュは説明用の飾りにせず、攻略者が実際に利用する主認証入口で必ず消費する。
+  決定的ハッシュなら送信された平文へ同じhash_apiを適用して保存値と比較し、`password_hash`系なら
+  対応する`password_verify`等で検証する。送信された平文を保存ハッシュへ直接比較してはならない
+- HTML formのmethod/action/field名から実際に到達するHTTP branch、認証関数、DB columnまで追跡し、
+  その経路全体で同じ方式を使う。formがGETなのにGET branchは生値比較、未使用のPOST branchだけ
+  ハッシュ化する、といった経路別の不一致を作らない。不要な別methodの認証経路は削除または拒否する
+- クラックで得た平文を使わず、保存されたダイジェスト自体をpassword欄へ入力して通るpass-the-hashや、
+  生パスワードとの直接比較で通る別経路を作らない。ハッシュクラック後の平文が後続ステップの認証で
+  必須となるようにし、保存ハッシュが攻略経路と無関係な状態を完成扱いにしない
 - saltを使う方式ではプロビジョニング時に正規APIへsalt生成も任せる。受け入れテストは固定ハッシュの
   文字列一致ではなく、対象アプリと同じ検証APIで選択済み平文が成功し、誤った平文が失敗すること、
   さらに実際の認証入口で選択済み平文だけが通ることを確認する
+- 受け入れテストはDBやhash helperの直接呼出しだけで済ませず、実際のform/APIと同じmethod、path、
+  field名で、選択済み平文は認証成功、誤った平文は失敗、保存ダイジェストをpasswordとして送った場合も
+  失敗することを、それぞれ認証成功時だけ現れる応答またはセッション状態で確認する
 - 実装する認証情報はサーバーが後から確定する値と一致させ、受け入れテストでも検証できるようにする
 - 通常、rockyou.txtの用意とHashcatまたはJohnの実行は攻撃者側の準備・操作として扱う。
   「選んだ平文がrockyou.txtに含まれる」という要件だけを理由に、ターゲットVMへ辞書を導入したり、
@@ -1122,6 +1134,11 @@ JSONのみを返してください:
   ビルド済み成果物を選択済みなのにソースをコンパイルしている、またはパッケージ・公式バイナリを
   調査した根拠なしにsource_buildへ変更している場合はimplementation_mismatchのerrorにする
 - requiresを飛ばせる、または前段の成果物が後段で実際に使われない場合はbroken_chainのerrorにする
+- password_cracking stepでは、provisionが生成してDB等へ保存する値から、ユーザーが操作するform/APIの
+  method・action・field、到達するhandler branch、hash/verify API、比較対象column、認証成功後の成果物まで
+  データフローを追跡する。実際の入口が生パスワードを保存値へ直接比較する、保存ハッシュ自体で通る、
+  または正しいハッシュ処理が未使用の別branchにしかない場合はimplementation_mismatchかbroken_chainの
+  errorにする。別ファイルや別methodにhash_apiの呼出しが存在するだけでは合格にしない
 - コメントや名前にSQLi等と書いてあること、expected_vulnerabilitiesの宣言、READMEの攻略説明だけを
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする

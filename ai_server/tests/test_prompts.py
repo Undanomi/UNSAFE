@@ -208,6 +208,10 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "hash_runtime" in prompt
         assert "hash_api" in prompt
         assert "誤った平文が失敗" in prompt
+        assert "攻略者が実際に利用する主認証入口で必ず消費" in prompt
+        assert "formがGETなのにGET branchは生値比較" in prompt
+        assert "保存ダイジェストをpasswordとして送った場合も" in prompt
+        assert "DBやhash helperの直接呼出しだけで済ませず" in prompt
         assert "ソースコードからのコンパイルを既定にしない" in prompt
         assert "snapshot APTリポジトリ" in prompt
         assert "ベンダー公式releaseのビルド済みバイナリ" in prompt
@@ -320,6 +324,10 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
     assert "実際のデータフロー" in review_prompt
+    assert "provisionが生成してDB等へ保存する値" in review_prompt
+    assert "method・action・field" in review_prompt
+    assert "未使用の別branch" in review_prompt
+    assert "別ファイルや別methodにhash_api" in review_prompt
     assert "シナリオ設計書" in review_prompt
     assert scenario.definition in review_prompt
     assert "ビルド済み成果物を選択済みなのにソースをコンパイル" in review_prompt
