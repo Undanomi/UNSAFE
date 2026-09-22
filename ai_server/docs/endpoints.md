@@ -28,6 +28,7 @@ GET /v1/sessions/{session_id}/download?expires=...&signature=...
 | `PUT` | `/v1/sessions/{session_id}/machine-information` | マシン名や難易度などの生成条件を保存する |
 | `GET` | `/v1/sessions/{session_id}/scenarios/events` | シナリオを生成し、結果をSSEで受信する |
 | `POST` | `/v1/sessions/{session_id}/machines` | VMコード生成とbuild_serverへのビルド依頼を開始する |
+| `POST` | `/v1/sessions/{session_id}/guidance` | シナリオと生成コードからフラグ別の誘導問題を作る |
 | `POST` | `/v1/sessions/{session_id}/download-url` | 一時的な署名付きダウンロードURLを発行する |
 | `GET` | `/v1/sessions/{session_id}/download?expires=...&signature=...` | 完成したマシンイメージをダウンロードする |
 | `GET` | `/v1/health/live` | ai_serverプロセスの生存を確認する |
@@ -281,6 +282,36 @@ validationを使い切っても次のBuild枠が残っていれば停止せず�
 エンドポイントへのアクセスに関係なく継続します。
 
 ## セッションとビルド状態を取得する
+
+### `POST /v1/sessions/{session_id}/guidance`
+
+ビルド済みマシンの確定シナリオ、攻撃グラフ、実際の生成コードを照合し、誘導問題を生成します。
+フラグ正解値はモデル入力前にマスクし、出力にも含まれていないことを検査します。
+
+```json
+{"acquired_flags":["user"]}
+```
+
+`acquired_flags` は現在のユーザーが取得済みのフラグ種別です。取得済みまたは存在しないフラグを
+対象とする項目は拒否します。各項目の `target_flag` は、その項目群の直後に置くフラグ入力欄を
+表します。
+
+```json
+{
+  "introduction": "各項目を順に調査してください。",
+  "items": [
+    {
+      "target_flag": "system",
+      "title": "権限境界を調べる",
+      "question": "現在の権限で利用できる管理コマンドはありますか？",
+      "hint": "sudo権限やローカルサービス設定を確認してください。"
+    }
+  ]
+}
+```
+
+このAPI自体は結果を保存しません。BFFがユーザーとマシンの組み合わせごとに保存し、明示的な
+再生成操作までは同じ内容を返します。未完成のマシンや生成ソースがない場合は `409` です。
 
 ### `GET /v1/sessions/{session_id}`
 

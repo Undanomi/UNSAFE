@@ -3,6 +3,7 @@ import "server-only"
 import { createHash, timingSafeEqual } from "node:crypto"
 import {
   type AiSessionResponse,
+  generateAiGuidanceService,
   getAiSessionService,
   openAiMachineDownloadService,
   startMachineBuildService,
@@ -12,7 +13,7 @@ import {
   BUILDING_MACHINE_DESCRIPTION,
   completedMachineDescription,
 } from "@/lib/machines/description"
-import type { MachineBuildState, MachineDetail } from "@/stores/machine-detail"
+import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/stores/machine-detail"
 import type { MachineRecord } from "@/types/postgres"
 
 function formatCreatedAt(value: Date | string) {
@@ -111,6 +112,18 @@ export async function getMachineDetailService(
   const isOwner = ownerUserId === viewerUserId
   if (!machine.published && !isOwner) return null
 
+  const [guidanceResult, acquiredResult] = await Promise.all([
+    queryDatabase<{ content: MachineGuidance }>(
+      "SELECT content FROM machine_guidance WHERE user_id = $1 AND machine_id = $2",
+      [viewerUserId, machineId],
+    ),
+    queryDatabase<{ flag_kind: "user" | "system" }>(
+      "SELECT flag_kind FROM machine_flag_solutions WHERE user_id = $1 AND machine_id = $2",
+      [viewerUserId, machineId],
+    ),
+  ])
+  const acquiredFlags = new Set(acquiredResult.rows.map((row) => row.flag_kind))
+
   let description = machine.description
   if (
     machine.status === "ready" &&
@@ -147,13 +160,81 @@ export async function getMachineDetailService(
     buildProgress: machine.build_progress ?? 0,
     canRetry: isOwner,
     status: machine.status,
+    guidance: guidanceResult.rows[0]?.content ?? null,
     userFlag: machine.user_flag
-      ? { kind: "user", label: "ユーザーフラグ", machineId: machine.id }
+      ? {
+          acquired: acquiredFlags.has("user"),
+          kind: "user",
+          label: "ユーザーフラグ",
+          machineId: machine.id,
+        }
       : null,
     systemFlag: machine.system_flag
-      ? { kind: "system", label: "システムフラグ", machineId: machine.id }
+      ? {
+          acquired: acquiredFlags.has("system"),
+          kind: "system",
+          label: "システムフラグ",
+          machineId: machine.id,
+        }
       : null,
   }
+}
+
+export async function generateMachineGuidanceService(
+  viewerUserId: string,
+  machineId: string,
+  regenerate: boolean,
+): Promise<MachineGuidance | null> {
+  const machine = await getMachineDocument(machineId)
+  if (!machine?.ai_session_id || machine.status !== "ready") return null
+  if (!machine.published && machine.created_by !== viewerUserId) return null
+
+  if (!regenerate) {
+    const existing = await queryDatabase<{ content: MachineGuidance }>(
+      "SELECT content FROM machine_guidance WHERE user_id = $1 AND machine_id = $2",
+      [viewerUserId, machineId],
+    )
+    if (existing.rows[0]) return existing.rows[0].content
+  }
+
+  const acquired = await queryDatabase<{ flag_kind: "user" | "system" }>(
+    `SELECT flag_kind FROM machine_flag_solutions
+     WHERE user_id = $1 AND machine_id = $2
+     ORDER BY flag_kind`,
+    [viewerUserId, machineId],
+  )
+  const guidance = await generateAiGuidanceService(
+    machine.created_by,
+    machine.ai_session_id,
+    acquired.rows.map((row) => row.flag_kind),
+  )
+
+  if (regenerate) {
+    await queryDatabase(
+      `INSERT INTO machine_guidance (user_id, machine_id, content)
+       VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (user_id, machine_id) DO UPDATE SET
+         content = EXCLUDED.content,
+         generation = machine_guidance.generation + 1,
+         updated_at = now()`,
+      [viewerUserId, machineId, JSON.stringify(guidance)],
+    )
+    return guidance
+  }
+
+  const inserted = await queryDatabase<{ content: MachineGuidance }>(
+    `INSERT INTO machine_guidance (user_id, machine_id, content)
+     VALUES ($1, $2, $3::jsonb)
+     ON CONFLICT (user_id, machine_id) DO NOTHING
+     RETURNING content`,
+    [viewerUserId, machineId, JSON.stringify(guidance)],
+  )
+  if (inserted.rows[0]) return inserted.rows[0].content
+  const existing = await queryDatabase<{ content: MachineGuidance }>(
+    "SELECT content FROM machine_guidance WHERE user_id = $1 AND machine_id = $2",
+    [viewerUserId, machineId],
+  )
+  return existing.rows[0]?.content ?? null
 }
 
 export async function getMachineBuildStateService(
@@ -245,12 +326,20 @@ export async function verifyMachineFlagService(
   const answerDigest = createHash("sha256").update(answer.trim(), "utf8").digest()
   const correct = timingSafeEqual(expectedDigest, answerDigest)
   if (correct) {
-    await queryDatabase(
-      `INSERT INTO machine_solutions (user_id, machine_id)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id, machine_id) DO NOTHING`,
-      [viewerUserId, machineId],
-    )
+    await withDatabaseTransaction(async (client) => {
+      await client.query(
+        `INSERT INTO machine_flag_solutions (user_id, machine_id, flag_kind)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, machine_id, flag_kind) DO NOTHING`,
+        [viewerUserId, machineId, kind],
+      )
+      await client.query(
+        `INSERT INTO machine_solutions (user_id, machine_id)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id, machine_id) DO NOTHING`,
+        [viewerUserId, machineId],
+      )
+    })
   }
   return correct
 }

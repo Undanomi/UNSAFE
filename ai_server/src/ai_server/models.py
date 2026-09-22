@@ -382,6 +382,29 @@ class GeneratedSource(BaseModel):
     files: list[SourceFile] = Field(min_length=1, max_length=100)
 
 
+class GuidanceItem(BaseModel):
+    target_flag: Literal["user", "system"]
+    title: str = Field(min_length=1, max_length=120)
+    question: str = Field(min_length=1, max_length=500)
+    hint: str = Field(min_length=1, max_length=1000)
+
+
+class GuidancePlan(BaseModel):
+    introduction: str = Field(min_length=1, max_length=1000)
+    items: list[GuidanceItem] = Field(max_length=8)
+
+
+class GuidanceRequest(BaseModel):
+    acquired_flags: list[Literal["user", "system"]] = Field(default_factory=list, max_length=2)
+
+    @field_validator("acquired_flags")
+    @classmethod
+    def acquired_flags_are_unique(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("acquired flags must not contain duplicates")
+        return values
+
+
 class SourcePatch(BaseModel):
     files: list[SourceFile] = Field(min_length=1, max_length=50)
     delete_paths: list[str] = Field(default_factory=list, max_length=50)

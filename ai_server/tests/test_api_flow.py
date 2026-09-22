@@ -260,6 +260,25 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     completed_state = await app.state.repository.get(session_id)
     assert completed_state.source_generation_attempts == 1
     assert completed_state.source_generation_attempt_limit == 12
+
+    guidance = await http.post(
+        f"/v1/sessions/{session_id}/guidance",
+        json={"acquired_flags": []},
+        headers=headers,
+    )
+    assert guidance.status_code == 200
+    assert guidance.headers["cache-control"] == "private, no-store"
+    assert guidance.json()["items"]
+    assert {item["target_flag"] for item in guidance.json()["items"]} == {"user"}
+    assert scenario.user_flag not in guidance.text
+
+    denied_guidance = await http.post(
+        f"/v1/sessions/{session_id}/guidance",
+        json={"acquired_flags": []},
+        headers={"X-Authenticated-User-ID": "other"},
+    )
+    assert denied_guidance.status_code == 404
+
     completed_state.artifact = Artifact(
         artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
         artifact_type="tar.zst",
