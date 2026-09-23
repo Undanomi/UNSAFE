@@ -13,6 +13,12 @@ SCENARIO_DEFINITION_MAX_CHARS = 12_000
 ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
 
 
+def rockyou_password_placeholder(step_id: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", step_id):
+        raise ValueError(f"invalid attack step ID for rockyou placeholder: {step_id}")
+    return f"__SLSG_ROCKYOU_PASSWORD_{step_id}__"
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 

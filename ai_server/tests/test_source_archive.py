@@ -15,6 +15,7 @@ from ai_server.models import (
     PasswordCrackingSpec,
     ScenarioDraft,
     SourceFile,
+    rockyou_password_placeholder,
 )
 from ai_server.services.source_archive import InvalidSourceError, SourceArchive
 
@@ -334,6 +335,68 @@ def test_accepts_runtime_generated_selected_password_hash(tmp_path: Path) -> Non
         provision = archive.read("contents/scripts/provision.sh").decode()
     assert ROCKYOU_PASSWORD_PLACEHOLDER not in provision
     assert "22062531" in provision
+
+
+def test_rejects_placeholder_for_unknown_password_step(tmp_path: Path) -> None:
+    generated = password_cracking_source(
+        f"PASSWORD='{rockyou_password_placeholder('unknown-step')}'"
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session-unknown-password-step",
+            password_cracking_scenario(),
+            generated,
+        )
+
+    failure = captured.value.report["checks"][0]
+    assert failure["name"].startswith("password_cracking:placeholder:")
+    assert "unknown password steps" in failure["message"]
+
+
+def test_rejects_rockyou_placeholder_comparison_and_unsupported_injection(
+    tmp_path: Path,
+) -> None:
+    generated = password_cracking_source(
+        f"ROCKYOU_PASSWORD='{ROCKYOU_PASSWORD_PLACEHOLDER}'\n"
+        'ROCKYOU_PASSWORD="${SLSG_ROCKYOU_PASSWORD:-$ROCKYOU_PASSWORD}"\n'
+        f"if [[ \"$ROCKYOU_PASSWORD\" == '{ROCKYOU_PASSWORD_PLACEHOLDER}' ]]; then exit 1; fi"
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session-invalid-placeholder-guard",
+            password_cracking_scenario(),
+            generated,
+        )
+
+    failures = {
+        check["name"]: check["message"]
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    }
+    assert "password_cracking:unsupported_password_injection" in failures
+    assert "password_cracking:materialized_secret_comparison" in failures
+    assert "22062531" not in json.dumps(failures)
+
+
+def test_accepts_rockyou_placeholder_as_input_without_substitution_guard(
+    tmp_path: Path,
+) -> None:
+    generated = password_cracking_source(
+        f"ROCKYOU_PASSWORD='{ROCKYOU_PASSWORD_PLACEHOLDER}'\n"
+        'test -n "$ROCKYOU_PASSWORD"\n'
+        'PASSWORD_HASH=$(php -r "echo md5($argv[1]);" "$ROCKYOU_PASSWORD")\n'
+        f"sshpass -p '{ROCKYOU_PASSWORD_PLACEHOLDER}' ssh alice@127.0.0.1 test -f /home/alice/user.txt"
+    )
+
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-valid-placeholder-input",
+        password_cracking_scenario(),
+        generated,
+    )
+
+    assert archive_path.is_file()
 
 
 def test_does_not_statically_parse_runtime_hash_generation(tmp_path: Path) -> None:

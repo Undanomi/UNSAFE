@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from ai_server.models import (
-    ROCKYOU_PASSWORD_PLACEHOLDER,
     AttackGraph,
     AttackStep,
     GeneratedSource,
@@ -9,6 +8,7 @@ from ai_server.models import (
     PasswordCrackingSpec,
     ScenarioDraft,
     SourceFile,
+    rockyou_password_placeholder,
 )
 from ai_server.prompts import (
     attack_graph_prompt,
@@ -131,7 +131,7 @@ def test_ai_prompts_redact_late_bound_rockyou_password() -> None:
     )
     for prompt in prompts:
         assert password not in prompt
-        assert ROCKYOU_PASSWORD_PLACEHOLDER in prompt
+        assert rockyou_password_placeholder("crack-password") in prompt
 
 
 def test_all_generation_prompts_include_shared_constraints() -> None:

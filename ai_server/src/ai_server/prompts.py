@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 from .models import (
-    ROCKYOU_PASSWORD_PLACEHOLDER,
     AttackGraph,
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    rockyou_password_placeholder,
 )
 from .scenario_manifest import scenario_manifest_json_schema
 
@@ -49,11 +49,27 @@ def attack_graph_json_for_ai(
 
 
 def _redact_passwords(text: str, graph: AttackGraph) -> str:
-    for step in graph.steps:
-        spec = step.password_cracking
-        if spec is not None and spec.password is not None:
-            text = text.replace(spec.password, ROCKYOU_PASSWORD_PLACEHOLDER)
+    password_placeholders = [
+        (spec.password, rockyou_password_placeholder(step.step_id))
+        for step in graph.steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    ]
+    for password, placeholder in sorted(
+        password_placeholders, key=lambda item: len(item[0]), reverse=True
+    ):
+        text = text.replace(password, placeholder)
     return text
+
+
+def _rockyou_placeholder_map(graph: AttackGraph) -> str:
+    entries = [
+        f"- `{step.step_id}`: `{rockyou_password_placeholder(step.step_id)}`"
+        for step in graph.steps
+        if step.password_cracking is not None
+    ]
+    if not entries:
+        return ""
+    return "ステップ別rockyouプレースホルダー:\n" + "\n".join(entries)
 
 
 def source_json_for_ai(current: GeneratedSource, scenario: ScenarioDraft) -> str:
@@ -185,9 +201,17 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
   開発用PC上のHashcatまたはJohn the Ripperで約2〜3分となる現実的なハッシュ方式とwork factorを
   選ぶ。極端に高速または低速な方式を選ばない。この選択条件のハードウェア、実行環境、ベンチマークを
   シナリオ設計へ記載させたり、シナリオレビューで再検証させたりしない
-- ソース内で平文が必要な箇所には必ずリテラル`__SLSG_ROCKYOU_PASSWORD__`だけを使用する。
-  別の平文を推測・創作せず、この値を最終ダイジェスト、seed済みハッシュ、期待ハッシュとして扱わない
-- SQLへ格納する値は、プロビジョニング時に`__SLSG_ROCKYOU_PASSWORD__`を入力として対象
+- ソース内で平文が必要な箇所には、対象ステップ専用の
+  `__SLSG_ROCKYOU_PASSWORD_<step_id>__`だけを使用する。別ステップのプレースホルダーや旧形式の
+  `__SLSG_ROCKYOU_PASSWORD__`を使わず、平文を推測・創作しない。この値を最終ダイジェスト、
+  seed済みハッシュ、期待ハッシュとして扱わない
+- 各`__SLSG_ROCKYOU_PASSWORD_<step_id>__`は、サーバーが同じステップ用の全出現箇所を、その
+  ステップ専用の選択値へ置換する。
+  未置換確認、比較条件、case、grep、assert、期待値には使用せず、資格情報またはハッシュ生成APIへの
+  入力値としてだけ使う。置換確認用の分岐や自己比較を作らない
+- ビルド基盤は`SLSG_ROCKYOU_PASSWORD`等の環境変数を注入しない。存在しない注入値をfallbackとして
+  参照せず、割り当てられたステップ専用プレースホルダーを直接変数へ代入して使用する
+- SQLへ格納する値は、プロビジョニング時にステップ専用プレースホルダーを入力として対象
   アプリのハッシュ生成APIを実行した結果にする。固定ダイジェストを設計書、README、manifest、SQL、
   アプリ設定、provision scriptへ例示・seed・期待値として埋め込まない
 - 実際に格納するハッシュ値は、原則としてcontents/scripts/provision.shの実行中に、対象実装と
@@ -864,6 +888,8 @@ def code_prompt(
 検証済みの攻撃グラフ:
 {attack_graph_json_for_ai(scenario.attack_graph)}
 
+{_rockyou_placeholder_map(scenario.attack_graph)}
+
 配置する正解フラグ（未設定は配置しない）:
 - User flag: {scenario.user_flag or "未設定"}
 - System flag: {scenario.system_flag or "未設定"}
@@ -961,6 +987,8 @@ System flag正解値: {scenario.system_flag or "未設定"}
 ```json
 {attack_graph_json_for_ai(scenario.attack_graph)}
 ```
+
+{_rockyou_placeholder_map(scenario.attack_graph)}
 
 失敗内容:
 ```json

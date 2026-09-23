@@ -63,6 +63,7 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
             _validate_attack_graph(manifest, scenario.attack_graph, add)
             _validate_cve_grounding(manifest, scenario.attack_graph, add)
     _validate_password_selection(scenario.attack_graph, add)
+    _validate_materialized_password_usage(root, scenario.attack_graph, add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
             try:
@@ -166,6 +167,87 @@ def _validate_password_selection(attack_graph: AttackGraph, add) -> None:
                 else "rockyou password must be selected after source generation"
             ),
         )
+    selected_passwords = [
+        spec.password
+        for step in cracking_steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    ]
+    if len(selected_passwords) == len(cracking_steps):
+        unique = len(selected_passwords) == len(set(selected_passwords))
+        add(
+            "pass" if unique else "fail",
+            "password_cracking:selection_unique",
+            "each password cracking step must have a distinct server-selected password",
+        )
+
+
+def _validate_materialized_password_usage(root: Path, attack_graph: AttackGraph, add) -> None:
+    passwords = {
+        spec.password
+        for step in attack_graph.steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    }
+    if not passwords:
+        return
+
+    invalid_comparisons: list[str] = []
+    unsupported_injections: list[str] = []
+    for path in sorted((root / "contents").rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if "SLSG_ROCKYOU_PASSWORD" in content:
+            unsupported_injections.append(relative)
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            if any(
+                password in line and _looks_like_password_comparison(line, password)
+                for password in passwords
+            ):
+                invalid_comparisons.append(f"{relative}:{line_number}")
+
+    if unsupported_injections:
+        add(
+            "fail",
+            "password_cracking:unsupported_password_injection",
+            (
+                "SLSG_ROCKYOU_PASSWORD is not injected by the build platform; use only the "
+                "server-managed placeholder as credential or hash input in: "
+                + ", ".join(unsupported_injections)
+            ),
+        )
+    if invalid_comparisons:
+        add(
+            "fail",
+            "password_cracking:materialized_secret_comparison",
+            (
+                "the server-selected password must not be used in a comparison, placeholder "
+                "guard, grep, case, or assertion; use it only as credential or hash input in: "
+                + ", ".join(invalid_comparisons)
+            ),
+        )
+    if not unsupported_injections and not invalid_comparisons:
+        add(
+            "pass",
+            "password_cracking:materialized_secret_usage",
+            "server-selected password is not used as a placeholder guard or injected variable",
+        )
+
+
+def _looks_like_password_comparison(line: str, password: str) -> bool:
+    if any(operator in line for operator in ("==", "!=", "=~")):
+        return True
+    prefix = line[: line.find(password)]
+    return bool(
+        re.search(
+            r"(?:^|[;&\s])(?:if|elif|while|until|test|case|grep|assert)\b",
+            prefix,
+        )
+        or re.search(r"(?:^|\s)\[\[?(?:\s|$)", prefix)
+    )
 
 
 def _validate_cve_grounding(manifest: dict, attack_graph: AttackGraph, add) -> None:

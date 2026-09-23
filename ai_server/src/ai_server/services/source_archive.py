@@ -51,7 +51,23 @@ class SourceArchive:
             if normalized in paths:
                 raise InvalidSourceError(f"duplicate generated path: {normalized}")
             paths.add(normalized)
-            content = materialize_rockyou_placeholders(source_file.content, scenario)
+            try:
+                content = materialize_rockyou_placeholders(source_file.content, scenario)
+            except ValueError as error:
+                report = {
+                    "status": "fail",
+                    "summary": {"passed": 0, "failed": 1, "warnings": 0},
+                    "checks": [
+                        {
+                            "status": "fail",
+                            "name": f"password_cracking:placeholder:{normalized}",
+                            "message": str(error),
+                        }
+                    ],
+                }
+                raise InvalidSourceError(
+                    f"generated source validation failed: {error}", report
+                ) from error
             total_size += len(content.encode("utf-8"))
             if total_size > 5 * 1024 * 1024:
                 raise InvalidSourceError("generated source exceeds 5 MiB")
