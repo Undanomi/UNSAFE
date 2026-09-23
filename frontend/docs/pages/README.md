@@ -42,7 +42,7 @@
 
 ## 実装済み機能とモックの範囲
 
-Google SSO、Firebase Session Cookie、認証必須ルートの保護、ログアウト、PostgreSQLへの初回ユーザー作成、プロフィール、マシン、チャット、AI・ビルドサービスとの通信およびファイルダウンロードは実装済みとする。公開プロフィール画面のマシン・回答履歴には一部モックデータが残る。
+Google SSO、Firebase Session Cookie、認証必須ルートの保護、ログアウト、PostgreSQLへの初回ユーザー作成、プロフィール、マシン、チャット、AI・ビルドサービスとの通信およびファイルダウンロードは実装済みとする。プロフィール画面の作成・解答履歴はPostgreSQLから取得し、固定モックデータは使用しない。
 
 動的ルートの `/machines/[machineId]`、`/machines/chat/[sessionId]`、`/users/[userId]` は `loading.tsx` を置き、遷移中は共通の読み込み表示を出す。
 

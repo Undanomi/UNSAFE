@@ -1,6 +1,10 @@
+import { cookies } from "next/headers"
+import { redirect } from "next/navigation"
 import { ProfileEditor } from "@/app/(private)/profile/profile-editor"
 import { AppShell } from "@/components/app-shell"
-import { USER_PROFILES } from "@/stores/profile"
+import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
+import { verifySessionCookieService } from "@/lib/auth/service"
+import { getUserProfileService } from "@/lib/users/service"
 
 type UserPageProps = {
   params: Promise<{ userId: string }>
@@ -8,8 +12,13 @@ type UserPageProps = {
 
 export default async function UserPage({ params }: UserPageProps) {
   const { userId } = await params
-  const profile = USER_PROFILES[userId]
 
+  const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
+  const authenticatedUser = await verifySessionCookieService(sessionCookie)
+
+  if (!authenticatedUser) redirect("/login")
+
+  const profile = await getUserProfileService(authenticatedUser.uid, userId)
   return (
     <AppShell>
       {profile ? (

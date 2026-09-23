@@ -23,7 +23,7 @@ import type {
   MachineBuildState,
   MachineDetail,
   MachineGuidance,
-} from "@/stores/machine-detail"
+} from "@/types/machine-detail"
 
 type MachineDetailProps = {
   machine: MachineDetail

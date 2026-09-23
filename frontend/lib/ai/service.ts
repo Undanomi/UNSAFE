@@ -1,7 +1,7 @@
 import "server-only"
 
 import type { ChatAnswers } from "@/stores/chat"
-import type { MachineGuidance } from "@/stores/machine-detail"
+import type { MachineGuidance } from "@/types/machine-detail"
 
 const REQUEST_TIMEOUT_MS = 30_000
 

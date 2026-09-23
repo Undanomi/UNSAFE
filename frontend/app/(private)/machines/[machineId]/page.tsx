@@ -1,4 +1,5 @@
 import { cookies } from "next/headers"
+import { redirect } from "next/navigation"
 import {
   MachineDetailView,
   MissingMachine,
@@ -16,7 +17,10 @@ export default async function MachineDetailPage({ params }: MachineDetailPagePro
   const { machineId } = await params
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const user = await verifySessionCookieService(sessionCookie)
-  const machine = user ? await getMachineDetailService(user.uid, machineId) : null
+
+  if (!user) redirect("/login")
+
+  const machine = await getMachineDetailService(user.uid, machineId)
 
   return (
     <AppShell>{machine ? <MachineDetailView machine={machine} /> : <MissingMachine />}</AppShell>
