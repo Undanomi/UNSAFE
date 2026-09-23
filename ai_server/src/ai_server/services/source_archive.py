@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from ..models import GeneratedSource, ScenarioDraft, SourceFile
+from .rockyou import materialize_rockyou_placeholders
 from .source_validation import validate_source
+
+VERIFICATION_SCRIPT = PurePosixPath("contents/scripts/verify.sh")
 
 
 class InvalidSourceError(ValueError):
@@ -42,18 +46,27 @@ class SourceArchive:
         for source_file in generated.files:
             relative = self._validate_path(source_file.path)
             normalized = relative.as_posix()
+            if relative == VERIFICATION_SCRIPT:
+                continue
             if normalized in paths:
                 raise InvalidSourceError(f"duplicate generated path: {normalized}")
             paths.add(normalized)
-            total_size += len(source_file.content.encode("utf-8"))
+            content = materialize_rockyou_placeholders(source_file.content, scenario)
+            total_size += len(content.encode("utf-8"))
             if total_size > 5 * 1024 * 1024:
                 raise InvalidSourceError("generated source exceeds 5 MiB")
             destination = candidate_root.joinpath(*relative.parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(source_file.content, encoding="utf-8")
+            destination.write_text(content, encoding="utf-8")
             destination.chmod(int(source_file.mode, 8))
+        verification_size = self._write_verification_script(candidate_root)
+        if verification_size:
+            paths.add(VERIFICATION_SCRIPT.as_posix())
+            total_size += verification_size
+        if total_size > 5 * 1024 * 1024:
+            raise InvalidSourceError("generated source exceeds 5 MiB")
         history = repair_history or []
-        validation = validate_source(candidate_root, scenario, history)
+        validation = validate_source(candidate_root, scenario)
         (candidate_root / "validation_report.json").write_text(
             json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -88,6 +101,34 @@ class SourceArchive:
         self._promote_candidate(candidate_root, source_root)
         archive_path = version_root / "source.zip"
         return archive_path, self._write_archive(source_root, archive_path)
+
+    @staticmethod
+    def _write_verification_script(candidate_root: Path) -> int:
+        manifest_path = candidate_root / "contents/scenario_manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return 0
+        if not isinstance(manifest, dict):
+            return 0
+        commands: list[str] = []
+        for field in ("health_checks", "acceptance_tests"):
+            checks = manifest.get(field)
+            if not isinstance(checks, list):
+                return 0
+            for check in checks:
+                command = check.get("command") if isinstance(check, dict) else None
+                if not isinstance(command, str) or not command.strip():
+                    return 0
+                commands.append(command)
+        script = "#!/bin/bash\nset -euo pipefail\n" + "".join(
+            f"bash -o pipefail -c {shlex.quote(command)}\n" for command in commands
+        )
+        destination = candidate_root.joinpath(*VERIFICATION_SCRIPT.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(script, encoding="utf-8")
+        destination.chmod(0o755)
+        return len(script.encode("utf-8"))
 
     def record_semantic_review(
         self,

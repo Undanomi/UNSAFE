@@ -74,6 +74,8 @@ build {
       "cd \"$(dirname \"$BUILD_SH\")\"",
       "find . -type f -name '*.sh' -exec chmod +x {} \\;",
       "./build.sh",
+      "test -f ./scripts/verify.sh || { echo 'missing scripts/verify.sh in scenario source'; exit 1; }",
+      "./scripts/verify.sh",
       "bash /tmp/slsg-configure-login-ip.sh",
       "rm -f /tmp/slsg-configure-login-ip.sh",
       "printf '%s:%s\\n' provisioner '${var.machine_password}' | chpasswd",

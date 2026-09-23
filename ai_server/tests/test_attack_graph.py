@@ -8,6 +8,7 @@ from ai_server.models import (
     AttackObjective,
     AttackStep,
     MachineInformation,
+    PasswordCrackingSpec,
     ScenarioDraft,
 )
 
@@ -84,6 +85,64 @@ def test_non_cve_step_rejects_cve_id() -> None:
             description="training step",
             cve_id="CVE-2026-1234",
             implementation_steps=["provision"],
+        )
+
+
+def test_password_cracking_step_requires_structured_metadata() -> None:
+    with pytest.raises(ValidationError, match="requires password_cracking metadata"):
+        AttackStep(
+            step_id="crack-password",
+            title="Crack password",
+            kind="password_cracking",
+            phase="initial_access",
+            description="Crack the stored credential.",
+            implementation_steps=["Provision the hash"],
+        )
+
+    spec = PasswordCrackingSpec(
+        wordlist="rockyou.txt",
+        password="password01",
+        line_number=123_456,
+        search_space_lines=200_000,
+        hash_algorithm="bcrypt",
+        hash_runtime="php",
+        hash_api="password_hash",
+        hashcat_mode=3200,
+        target_crack_seconds=150,
+    )
+    parsed = AttackStep(
+        step_id="crack-password",
+        title="Crack password",
+        kind="password_cracking",
+        phase="initial_access",
+        description="Crack the stored credential.",
+        implementation_steps=["Provision the hash"],
+        password_cracking=spec,
+    )
+    assert parsed.password_cracking == spec
+
+    unbound = spec.model_copy(
+        update={"password": None, "line_number": None, "search_space_lines": None}
+    )
+    assert PasswordCrackingSpec.model_validate(unbound.model_dump()).selection_bound is False
+
+    with pytest.raises(ValidationError, match="all unset or all populated"):
+        PasswordCrackingSpec.model_validate(
+            {
+                **unbound.model_dump(),
+                "password": "password01",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="only valid when kind is password_cracking"):
+        AttackStep(
+            step_id="web-entry",
+            title="Web entry",
+            kind="web_vulnerability",
+            phase="initial_access",
+            description="Enter through the web app.",
+            implementation_steps=["Provision the app"],
+            password_cracking=spec,
         )
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from ai_server.models import (
+    ROCKYOU_PASSWORD_PLACEHOLDER,
     AttackGraph,
     AttackStep,
     GeneratedSource,
     MachineInformation,
+    PasswordCrackingSpec,
     ScenarioDraft,
     SourceFile,
 )
@@ -71,6 +73,67 @@ def test_guidance_prompt_uses_scenario_source_and_acquired_flags() -> None:
     assert "生のHTMLは使用しない" in prompt
 
 
+def test_ai_prompts_redact_late_bound_rockyou_password() -> None:
+    password = "password123"
+    machine = MachineInformation(
+        name="Hash target",
+        visibility="private",
+        theme="Password cracking",
+        difficulty="Easy",
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-hash",
+        title="Hash target",
+        definition=f"Provision the credential for {password}.",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="crack-password",
+                    title="Crack password",
+                    kind="password_cracking",
+                    phase="initial_access",
+                    description="Crack the stored credential.",
+                    implementation_steps=["Hash the late-bound password"],
+                    password_cracking=PasswordCrackingSpec(
+                        wordlist="rockyou.txt",
+                        password=password,
+                        line_number=1,
+                        search_space_lines=1,
+                        hash_algorithm="bcrypt",
+                        hash_runtime="php",
+                        hash_api="password_hash",
+                        hashcat_mode=3200,
+                        target_crack_seconds=150,
+                    ),
+                )
+            ]
+        ),
+    )
+    source = GeneratedSource(
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=f"php -r 'password_hash(\"{password}\", PASSWORD_DEFAULT);'",
+            )
+        ]
+    )
+
+    prompts = (
+        code_prompt(machine, scenario),
+        repair_prompt(machine, scenario, source, {"build_log": password}),
+        source_review_prompt(
+            machine, scenario, source, reconsideration={"evidence": password}
+        ),
+        scenario_sync_prompt(
+            machine, scenario, source, review_feedback={"evidence": password}
+        ),
+        guidance_prompt(machine, scenario, source, []),
+    )
+    for prompt in prompts:
+        assert password not in prompt
+        assert ROCKYOU_PASSWORD_PLACEHOLDER in prompt
+
+
 def test_all_generation_prompts_include_shared_constraints() -> None:
     machine = MachineInformation(
         name="Test",
@@ -112,24 +175,43 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "標準的な構文・設定検査と実行時検査" in prompt
         assert "完全なスクリプトや全コマンドはコード生成段階へ委ねる" in prompt
         assert "全親ディレクトリのowner/group/mode" in prompt
+        assert "ソース生成後のサーバー選択" in prompt
+        assert "`password_cracking`" in prompt
+        assert "password_cracking" in prompt
+        assert "対象アプリと同じ" in prompt
+        assert "固定ハッシュは設計書へ書かず" in prompt
 
     assert "対象マシンを調査すること" in design_prompts[1]
     assert "フラグを獲得すること" in design_prompts[1]
     assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
+    assert "正確なstep_idとtitle" in design_prompts[1]
+    assert "複数stepへ分割・統合" in design_prompts[1]
 
-    assert len(design_prompts[0]) < 3000
-    assert len(design_prompts[1]) < 3500
+    assert len(design_prompts[0]) < 3200
+    assert len(design_prompts[1]) < 3800
 
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt
-        assert "約3分以内" in prompt
+        assert "約2〜3分" in prompt
         assert "平文パスワード" in prompt
-        assert "HashcatのモードまたはJohnの形式" in prompt
+        assert "Hashcat modeまたはJohn format" in prompt
         assert "ハッシュクラックを攻略の必須ステップにしない" in prompt
         assert "rockyou.txtはハッシュの一覧ではなく" in prompt
         assert "ターゲットVMへ辞書を導入" in prompt
         assert "使用してよい" in prompt
         assert "単一の未検証URLへ無条件に依存せず" in prompt
+        assert "contents/scripts/provision.shの実行中" in prompt
+        assert "`password_hash`" in prompt
+        assert "AIが予測したダイジェストを埋め込まない" in prompt
+        assert "固定ダイジェストを設計書" in prompt
+        assert "__SLSG_ROCKYOU_PASSWORD__" in prompt
+        assert "hash_runtime" in prompt
+        assert "hash_api" in prompt
+        assert "誤った平文が失敗" in prompt
+        assert "攻略者が実際に利用する主認証入口で必ず消費" in prompt
+        assert "formがGETなのにGET branchは生値比較" in prompt
+        assert "保存ダイジェストをpasswordとして送った場合も" in prompt
+        assert "DBやhash helperの直接呼出しだけで済ませず" in prompt
         assert "ソースコードからのコンパイルを既定にしない" in prompt
         assert "snapshot APTリポジトリ" in prompt
         assert "ベンダー公式releaseのビルド済みバイナリ" in prompt
@@ -162,6 +244,17 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "対応する攻撃グラフの" in prompt
         assert "同じフラグ内容を取得できる場所が指定パスの1か所だけ" in prompt
         assert "指定パス以外に同じ内容があることを理由" in prompt
+        assert "scripts/verify.sh" in prompt
+        assert "サーバー生成のscripts/verify.sh" in prompt
+        assert "scenario_manifest.jsonのJSON Schema" in prompt
+        assert '"ManifestService"' in prompt
+        assert '"protocol"' in prompt
+        assert '"http"' in prompt
+        assert '"expected_vulnerabilities"' in prompt
+        assert '"minItems": 1' in prompt
+        assert '"additionalProperties": false' in prompt
+        assert "実装した脆弱性を最低1件" in prompt
+        assert '`"training-only"`のような文字列だけの要素は禁止' in prompt
 
 
 def test_generation_and_review_prompts_require_exploit_specific_controls() -> None:
@@ -231,6 +324,10 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
     assert "実際のデータフロー" in review_prompt
+    assert "provisionが生成してDB等へ保存する値" in review_prompt
+    assert "method・action・field" in review_prompt
+    assert "未使用の別branch" in review_prompt
+    assert "別ファイルや別methodにhash_api" in review_prompt
     assert "シナリオ設計書" in review_prompt
     assert scenario.definition in review_prompt
     assert "ビルド済み成果物を選択済みなのにソースをコンパイル" in review_prompt
@@ -250,6 +347,9 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "description_spoiler" in scenario_review
     assert "特定の定型句や表記の完全一致は要求しない" in scenario_review
     assert "source_build_reason" in scenario_review
+    assert "implementation_stepsはその攻撃を成立させるVM側" in scenario_review
+    assert "自作PHP等の非CVE step" in scenario_review
+    assert "本文へ合わせるために" in scenario_review
 
     sync_prompt = scenario_sync_prompt(machine, scenario, source)
     assert "実装とシナリオを同期" in sync_prompt
