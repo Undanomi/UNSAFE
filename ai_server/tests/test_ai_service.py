@@ -829,6 +829,167 @@ async def test_scenario_review_uses_independent_permission_focused_verdict() -> 
 
 
 @pytest.mark.asyncio
+async def test_scenario_review_discards_framework_owned_rockyou_findings() -> None:
+    graph = AttackGraph(
+        steps=[
+            AttackStep(
+                step_id="crack-user-hash",
+                title="Crack user hash",
+                kind="password_cracking",
+                phase="credential_access",
+                description="Crack the leaked password hash.",
+                implementation_steps=["Store a runtime-generated password hash."],
+                password_cracking=PasswordCrackingSpec(
+                    wordlist="rockyou.txt",
+                    hash_algorithm="SHA-256",
+                    hash_runtime="php",
+                    hash_api="hash",
+                    hashcat_mode=1400,
+                    target_crack_seconds=150,
+                ),
+            )
+        ]
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-rockyou-review",
+        title="Rockyou review",
+        definition="# Scenario",
+        attack_graph=graph,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The reviewer mixed framework and implementation responsibilities.",
+                "findings": [
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "implementation_gap",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "rockyou.txtの取得元、プロビジョニングへの受け渡し、配置先が"
+                            "定義されていません。"
+                        ),
+                        "remediation": "固定した取得元とchecksumを設計書へ記載してください。",
+                    },
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "warning",
+                        "category": "implementation_gap",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "約150秒の測定に使うHashcat CPU実行環境とハードウェアが"
+                            "特定されていません。"
+                        ),
+                        "remediation": "ベンチマーク条件を記録してください。",
+                    },
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "broken_chain",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "The login handler compares the submitted plaintext directly to the "
+                            "stored digest, so the cracked plaintext cannot authenticate."
+                        ),
+                        "remediation": "Use the declared hash verification API in the login path.",
+                    },
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_scenario(
+            MachineInformation(
+                name="Rockyou boundary",
+                visibility="private",
+                theme="Hash cracking",
+                difficulty="Medium",
+            ),
+            scenario,
+        )
+
+    assert review.approved is False
+    assert len(review.findings) == 1
+    assert review.findings[0].category == "broken_chain"
+    assert "Removed 2 finding(s)" in review.summary
+
+
+@pytest.mark.asyncio
+async def test_source_review_discards_framework_owned_rockyou_test_request() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-rockyou-source-review",
+        title="Rockyou source review",
+        definition="# Scenario",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="crack-user-hash",
+                    title="Crack user hash",
+                    kind="password_cracking",
+                    phase="credential_access",
+                    description="Crack the leaked password hash.",
+                    implementation_steps=["Store a runtime-generated password hash."],
+                    password_cracking=PasswordCrackingSpec(
+                        wordlist="rockyou.txt",
+                        hash_algorithm="SHA-256",
+                        hash_runtime="php",
+                        hash_api="hash",
+                        hashcat_mode=1400,
+                        target_crack_seconds=150,
+                    ),
+                )
+            ]
+        ),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The generated test does not inspect the server wordlist.",
+                "findings": [
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": ["contents/scenario_manifest.json"],
+                        "evidence": (
+                            "No acceptance test proves that the selected password is contained "
+                            "in rockyou.txt or checks its line_number."
+                        ),
+                        "remediation": "Add a test that reads the wordlist and verifies membership.",
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="Rockyou boundary",
+                visibility="private",
+                theme="Hash cracking",
+                difficulty="Medium",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n")]
+            ),
+        )
+
+    assert review.approved is True
+    assert review.findings == []
+    assert "Removed 1 finding(s)" in review.summary
+
+
+@pytest.mark.asyncio
 async def test_invalid_non_cve_cwe_review_is_rejected_before_routing() -> None:
     requests: list[dict] = []
     scenario = ScenarioDraft(

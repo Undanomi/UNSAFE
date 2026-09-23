@@ -172,6 +172,10 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - 攻略経路にハッシュクラックを含める場合、AIは実際の平文パスワードを選択・推測しない。
   password、line_number、search_space_linesはnullのまま設計し、最初のソース生成が終わった後に
   サーバーがrockyou.txtから選択して構造化フィールドへ確定する
+- rockyou.txtの実体、取得元、配置先、checksum、選択処理への受け渡し、候補が辞書に含まれること、
+  line_number、search_space_lines、および選択時の速度測定はサーバー基盤の責務であり、この生成・レビュー
+  工程では利用可能かつ検証済みとして扱う。これらをシナリオ本文、ターゲットVM、provision、manifest、
+  acceptance testへ重複実装・記載させず、不足事項として指摘しない
 - 該当ステップはkindを`password_cracking`にし、password_cracking objectへハッシュ方式、実装の
   hash_runtimeとhash_api、Hashcat modeまたはJohn format、120〜180秒のtarget_crack_secondsを
   構造化して記録する
@@ -179,7 +183,8 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
   マスク攻撃、総当たり、外部サービスを必須にしない
 - サーバーが後から確定するline_numberとsearch_space_linesを探索量の根拠にできるよう、一般的な
   開発用PC上のHashcatまたはJohn the Ripperで約2〜3分となる現実的なハッシュ方式とwork factorを
-  選ぶ。極端に高速または低速な方式を選ばない
+  選ぶ。極端に高速または低速な方式を選ばない。この選択条件のハードウェア、実行環境、ベンチマークを
+  シナリオ設計へ記載させたり、シナリオレビューで再検証させたりしない
 - ソース内で平文が必要な箇所には必ずリテラル`__SLSG_ROCKYOU_PASSWORD__`だけを使用する。
   別の平文を推測・創作せず、この値を最終ダイジェスト、seed済みハッシュ、期待ハッシュとして扱わない
 - SQLへ格納する値は、プロビジョニング時に`__SLSG_ROCKYOU_PASSWORD__`を入力として対象
@@ -363,7 +368,8 @@ DESIGN_CONSTRAINTS = """設計段階の共通制約:
 - ハッシュクラック: rockyou.txtは平文wordlistで通常は攻撃者側で使う。kindは
   `password_cracking`とし、password、line_number、search_space_linesはソース生成後のサーバー選択
   までnullにする。方式・mode/format・120〜180秒を記録し、固定ハッシュは設計書へ書かず、
-  provision時に対象アプリと同じAPIで生成する
+  provision時に対象アプリと同じAPIで生成する。rockyou.txtの実体、取得元、配置先、checksum、
+  選択処理への受け渡しと速度測定はサーバー基盤で保証し、設計の不足事項として指摘しない
 - 使用する言語とソフトウェアに応じ、標準的な構文・設定検査と実行時検査を計画する。ここでは
   検査対象と目的だけを簡潔に示し、完全なスクリプトや全コマンドはコード生成段階へ委ねる
 """
@@ -719,6 +725,18 @@ def scenario_review_prompt(
     review_context: str = "generation",
     reconsideration: dict | None = None,
 ) -> str:
+    source_sync_scope = ""
+    if review_context == "source_sync":
+        source_sync_scope = """
+同期レビュー固有の責務:
+- この工程は、ソース修正後のシナリオ本文を攻撃グラフと実装へ同期できたかだけを確認する。
+  独立した2回目のソース監査ではない。新しい実装要件、追加テスト、別の修正方針を持ち込まない
+- errorにできるのは、提示された本文と攻撃グラフまたは生成物の間に、引用可能な直接の矛盾が残る場合だけ。
+  repair_targetはscenario_textに限定し、source_code、attack_graph、attack_graph_regeneration、user_inputを
+  返さない。実装への懸念はソースレビューまたは実ビルドの責務であり、この工程から差し戻さない
+- パッケージ、サービス、DB、権限等の実環境での挙動を実行せずに推測した懸念や、より網羅的な
+  acceptance testの提案はビルド阻止理由にしない。同期で変更した箇所と、その直接の波及だけを見る
+"""
     reconsideration_section = ""
     if reconsideration is not None:
         reconsideration_section = f"""
@@ -763,6 +781,7 @@ System flag取得要件（正解値ではない）: {machine.needs_system_flag},
 ```markdown
 {_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
+{source_sync_scope}
 {reconsideration_section}
 
 JSONのみを返してください:
@@ -798,7 +817,8 @@ JSONのみを返してください:
 - 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
   攻略成立性を保証できない場合はimplementation_gapまたはunsupported_assumptionのerrorにする
 - acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
-  飛ばした失敗を観測可能な形で確認できない場合はacceptance_test_gapのerrorにする
+  飛ばした失敗を全く観測できない場合はacceptance_test_gapのerrorにする。ただし、同じ性質の追加ケースや
+  網羅性向上だけを要求せず、実ビルドで判定する環境依存の懸念はwarningにする
 - warningは成立性を損なわない改善提案だけに使い、成立可否が不明な点をwarningへ弱めない
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
@@ -1091,7 +1111,33 @@ def source_review_prompt(
 ) -> str:
     reconsideration_section = ""
     if reconsideration is not None:
-        reconsideration_section = f"""
+        if reconsideration.get("kind") == "source_repair_verification":
+            reconsideration_section = f"""
+修正後レビューの固定スコープ:
+```json
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+```
+これは新しいフル監査ではない。blocking_reviewに列挙された各errorが解消したかを確認し、加えて
+changed_filesの変更が直接引き起こした回帰だけを探す。以前のerrorを再掲する場合は同じstep_id、category、
+repair_targetを使う。新しいerrorはaffected_filesにchanged_filesとの共通パスを必ず含め、変更との因果を
+evidenceで説明する。変更されていない箇所の新規指摘、追加の改善案、前回見落としただけの指摘はwarningに
+留める。修正候補が不合格でも、その候補へさらに修正を積み重ねず、呼び出し側が修正前ソースへ戻して
+置換パッチを作り直す。repair_originがbuild_failureの場合、元の候補は既に意味レビュー済みであり、
+ビルド失敗そのものの解消は次の実ビルドが判定する。このレビューでは変更箇所からの回帰だけを判定する。
+"""
+        elif reconsideration.get("kind") == "source_full_reaudit":
+            reconsideration_section = f"""
+修正によるレビュー契約の変更:
+```json
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+```
+manifestが表す攻撃ステップ・サービス・脆弱性・目的の契約、実装ファイル構成、または初回レビューが
+宣言した修正範囲が変わったため、固定スコープを破棄して現在の候補を最初からフル監査する。以前の指摘
+だけに限定せず、ビルドを止めるfindingを今回の応答へ一度に全件列挙する。ただし、レビュー契約が変化
+したという事実だけをerrorにせず、現在の生成物に残る具体的な不整合を根拠に判定する。
+"""
+        else:
+            reconsideration_section = f"""
 前回レビューの再検討資料:
 ```json
 {_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
@@ -1132,18 +1178,34 @@ System flag正解値: {scenario.system_flag or "未設定"}
 JSONのみを返してください:
 {{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
 "repair_target":"source_code","category":"unintended_shortcut",
+"affected_files":["contents/app/index.php"],
 "evidence":"ファイルと具体的挙動","remediation":"必要な修正"}}]}}
 
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
+- 固定スコープが提示されていない最初のレビューでは、ビルドを止めるfindingを一度に全件列挙する。
+  修正を1件ずつ小出しにしたり、次回レビューのために既知の指摘を保留したりしない
+- このレビューはビルド前ゲートである。errorは、提示されたファイルから直接証明でき、修正しなければ
+  意図した経路が成立しない、別手法になる、または保護対象が直接漏れる致命的不整合だけに限定する。
+  パッケージ、デーモン、DB、権限、ネットワーク等の実環境での挙動を実行しないと確定できない懸念は
+  warningとし、Packerビルドとacceptance testへ委ねる。「失敗する可能性がある」だけでerrorにしない
+- 既存テストが中核の攻撃成功と必要な前提を検査しているなら、追加の境界値、重複するnegative control、
+  実装詳細の再証明を要求しない。改善用の追加テストはwarningとし、テストが皆無・実行不能・常に成功・
+  攻撃を迂回していることをファイルから直接証明できる場合だけacceptance_test_gapのerrorにする
+- サーバー制約に「サーバーが選択・検証・生成する」と明記された値やファイルは信頼境界の外側で保証済み
+  として扱い、生成ソースに同じ検証や生成を重複実装させない。モデルへ渡されていない外部データの内容を
+  推測して、その確認テストを要求しない。特にrockyou.txtからの選択範囲・所属・行番号・探索時間は基盤側、
+  contents/scripts/verify.shはmanifestからのサーバー生成であり、filesに無いことを欠陥にしない
+- 再検討資料がある場合は、前回指摘と変更ファイルの直接の回帰を優先する。無関係な箇所を新規に精査して
+  細粒度のブロッカーを後出しせず、新しいerrorは明白な致命的不整合を変更箇所から直接証明できる場合に限る
 - 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
 - flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
   攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
   より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
-- 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
-  acceptance_test_gapのerrorにする
+- 中核の攻撃について、攻撃固有の効果を全く証明せず、通常入力、エラー、接続成功だけを確認するテストは
+  unproven_exploitまたはacceptance_test_gapのerrorにする
 - 実装された主脆弱性が攻撃グラフの種類と異なる場合はwrong_techniqueのerrorにする
 - CVEステップではcve_title、cve_description、cwe_idsを公式事実として、実装コードと設定が同じ
   発火条件と影響を実現しているか確認する。同製品の別脆弱性、一般的な設定不備、模擬エンドポイント、
@@ -1162,15 +1224,16 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+- affected_filesにはfindingの根拠となる生成ファイルだけを列挙する。一般論だけのfindingや、実際には
+  変更されていないファイルを回帰の根拠にするため列挙したfindingをerrorにしない
 - 各findingのrepair_targetを必ず指定する。実装ファイル、provision、manifest、acceptance_testsの
   修正はsource_code、実装が正しく本文だけが古い場合はscenario_textにする。このレビュー工程では
   検証済み攻撃グラフを不変の入力として扱い、attack_graphやuser_inputをrepair_targetに返さない
 - 実装を攻撃グラフへ合わせられる不一致を別の生成物へ転嫁しない。特にinstallation_method、
   installation_artifact、artifact_source、source_build_reasonの値を取り違えず、存在しないフィールドの
   追加を要求しない。攻撃グラフの不変条件と衝突する修正要求をsource_code向けに出さない
-- 生成物で利用可能な構文・設定検査が省略されている、対象ファイルの一部しか検査していない、
-  または検査失敗を無視する実装はacceptance_test_gapのerrorにする。言語・ソフトウェアに適した
-  実際のparser、compiler、interpreter、config testを使っていることを確認する
+- 必須の構文・設定検査が全く無い、または検査失敗を意図的に無視することが直接確認できる場合は
+  acceptance_test_gapのerrorにする。一部ファイルの追加検査や別ツールによる重複検査はwarningに留める
 - rockyou.txtをハッシュ集やターゲット用コンポーネントと誤認していないか確認する。ターゲット側で
   取得または使用していても一律に不合格にはせず、シナリオ上の目的がなく追加されている場合や、
   未検証の単一URLへの依存によってビルド再現性を損なう場合だけ、影響に応じてwarningまたは

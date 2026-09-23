@@ -176,6 +176,9 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
         assert "完全なスクリプトや全コマンドはコード生成段階へ委ねる" in prompt
         assert "全親ディレクトリのowner/group/mode" in prompt
         assert "ソース生成後のサーバー選択" in prompt
+        assert "rockyou.txtの実体、取得元、配置先、checksum" in prompt
+        assert "選択処理への受け渡し" in prompt
+        assert "不足事項として指摘しない" in prompt
         assert "`password_cracking`" in prompt
         assert "password_cracking" in prompt
         assert "対象アプリと同じ" in prompt
@@ -193,6 +196,7 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt
         assert "約2〜3分" in prompt
+        assert "シナリオレビューで再検証させたりしない" in prompt
         assert "平文パスワード" in prompt
         assert "Hashcat modeまたはJohn format" in prompt
         assert "ハッシュクラックを攻略の必須ステップにしない" in prompt
@@ -334,6 +338,36 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert scenario.definition in review_prompt
     assert "ビルド済み成果物を選択済みなのにソースをコンパイル" in review_prompt
     assert "ソースコードからのコンパイルを既定にしない" in review_prompt
+    assert "実環境での挙動を実行しないと確定できない懸念" in review_prompt
+    assert "追加の境界値、重複するnegative control" in review_prompt
+    assert "サーバーが選択・検証・生成する" in review_prompt
+    assert "contents/scripts/verify.shはmanifestからのサーバー生成" in review_prompt
+    assert "細粒度のブロッカーを後出しせず" in review_prompt
+    assert "ビルドを止めるfindingを一度に全件列挙" in review_prompt
+
+    scoped_review_prompt = source_review_prompt(
+        machine,
+        scenario,
+        source,
+        reconsideration={
+            "kind": "source_repair_verification",
+            "blocking_review": {"checks": []},
+            "changed_files": ["contents/scripts/provision.sh"],
+        },
+    )
+    assert "これは新しいフル監査ではない" in scoped_review_prompt
+    assert "変更されていない箇所の新規指摘" in scoped_review_prompt
+
+    full_review_prompt = source_review_prompt(
+        machine,
+        scenario,
+        source,
+        reconsideration={
+            "kind": "source_full_reaudit",
+            "full_review_reasons": ["the scenario manifest's review contract changed"],
+        },
+    )
+    assert "固定スコープを破棄して現在の候補を最初からフル監査" in full_review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
     assert "独立した敵対的レビュー担当" in scenario_review
@@ -352,6 +386,11 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "implementation_stepsはその攻撃を成立させるVM側" in scenario_review
     assert "自作PHP等の非CVE step" in scenario_review
     assert "本文へ合わせるために" in scenario_review
+
+    source_sync_review = scenario_review_prompt(machine, scenario, "source_sync")
+    assert "独立した2回目のソース監査ではない" in source_sync_review
+    assert "repair_targetはscenario_textに限定" in source_sync_review
+    assert "実ビルドの責務" in source_sync_review
 
     sync_prompt = scenario_sync_prompt(machine, scenario, source)
     assert "実装とシナリオを同期" in sync_prompt

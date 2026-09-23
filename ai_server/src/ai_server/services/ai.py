@@ -1180,7 +1180,7 @@ JSONのみを返してください:
                 )
                 review = ScenarioReview.model_validate_json(response)
                 self._validate_scenario_review(review, scenario, review_context)
-                return review
+                return _discard_framework_owned_scenario_findings(review, scenario)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
@@ -1445,11 +1445,138 @@ JSONのみを返してください:
                     response_schema=SourceReview,
                     max_output_tokens=self.max_output_tokens,
                 )
-                return SourceReview.model_validate_json(response)
+                review = SourceReview.model_validate_json(response)
+                return _discard_framework_owned_source_findings(review, scenario)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review VM source: {last_error}")
+
+
+def _is_framework_owned_password_selection_finding(
+    finding,
+    password_step_ids: set[str],
+) -> bool:
+    if finding.step_id not in password_step_ids:
+        return False
+    text = f"{finding.evidence}\n{finding.remediation}".casefold()
+    wordlist_terms = (
+        "rockyou",
+        "wordlist",
+        "ワードリスト",
+        "辞書ファイル",
+    )
+    selection_infrastructure_terms = (
+        "取得",
+        "入手",
+        "配置",
+        "配置先",
+        "受け渡し",
+        "存在",
+        "ファイルパス",
+        "参照先",
+        "checksum",
+        "整合性",
+        "含まれ",
+        "line_number",
+        "search_space_lines",
+        "download",
+        "location",
+        "provisioning input",
+    )
+    benchmark_terms = (
+        "測定",
+        "ベンチマーク",
+        "ハードウェア",
+        "実行環境",
+        "探索時間",
+        "クラック時間",
+        "target_crack_seconds",
+        "benchmark",
+        "hardware",
+        "cpu",
+        "gpu",
+    )
+    benchmark_context_terms = (
+        "hashcat",
+        "john",
+        "秒",
+        "探索時間",
+        "クラック時間",
+        "速度",
+        "候補選定",
+        "crack",
+    )
+    requests_wordlist_infrastructure = any(term in text for term in wordlist_terms) and any(
+        term in text for term in selection_infrastructure_terms
+    )
+    requests_selection_benchmark = any(term in text for term in benchmark_terms) and any(
+        term in text for term in benchmark_context_terms
+    )
+    return requests_wordlist_infrastructure or requests_selection_benchmark
+
+
+def _password_cracking_step_ids(scenario: ScenarioDraft) -> set[str]:
+    return {
+        step.step_id
+        for step in scenario.attack_graph.steps
+        if step.password_cracking is not None
+    }
+
+
+def _discard_framework_owned_scenario_findings(
+    review: ScenarioReview,
+    scenario: ScenarioDraft,
+) -> ScenarioReview:
+    """Remove findings that ask generated artifacts to revalidate server-owned secrets."""
+
+    password_step_ids = _password_cracking_step_ids(scenario)
+    retained = []
+    discarded = 0
+    for finding in review.findings:
+        if _is_framework_owned_password_selection_finding(finding, password_step_ids):
+            discarded += 1
+            continue
+        retained.append(finding)
+
+    if not discarded:
+        return review
+    has_error = any(finding.severity == "error" for finding in retained)
+    return ScenarioReview(
+        approved=not has_error,
+        summary=(
+            review.summary
+            + f" Removed {discarded} finding(s) about framework-owned password selection."
+        ),
+        findings=retained,
+    )
+
+
+def _discard_framework_owned_source_findings(
+    review: SourceReview,
+    scenario: ScenarioDraft,
+) -> SourceReview:
+    password_step_ids = _password_cracking_step_ids(scenario)
+    retained = [
+        finding
+        for finding in review.findings
+        if not _is_framework_owned_password_selection_finding(
+            finding,
+            password_step_ids,
+        )
+    ]
+    discarded = len(review.findings) - len(retained)
+    if not discarded:
+        return review
+    has_error = any(finding.severity == "error" for finding in retained)
+    return SourceReview(
+        approved=not has_error,
+        summary=(
+            review.summary
+            + f" Removed {discarded} finding(s) about framework-owned password selection."
+        ),
+        findings=retained,
+    )
 
 
 class GeminiGenerator(_BaseGenerator):

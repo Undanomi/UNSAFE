@@ -268,6 +268,12 @@ class MachineWorkflow:
                 ),
                 "previous_review": repair_report,
             }
+        if archive_path is not None:
+            previous_semantic_review = self.source_archive.load_semantic_review_from_archive(
+                archive_path
+            )
+            if previous_semantic_review is not None:
+                repair_report["previous_semantic_review"] = previous_semantic_review
         repair_history = (
             self.source_archive.load_repair_history_from_archive(archive_path)
             if archive_path is not None
@@ -318,6 +324,12 @@ class MachineWorkflow:
         usage_token = begin_token_usage_session(session_id)
         try:
             is_build_repair = failure_report is not None
+            build_repair_has_approved_semantic_review = bool(
+                isinstance(failure_report, dict)
+                and isinstance(failure_report.get("previous_semantic_review"), dict)
+                and failure_report["previous_semantic_review"].get("status")
+                in {"approved", "resolved_by_scenario_sync"}
+            )
             persisted_failure_context = failure_report
             review_revalidation = (
                 failure_report
@@ -586,8 +598,6 @@ class MachineWorkflow:
                             skill_snapshot,
                         )
                         prevalidated_review = reconsidered
-                    if patch_applied and prevalidated_review is None:
-                        source_changed_since_scenario = True
                     if prevalidated_review is not None:
                         review = prevalidated_review
                     elif review_revalidation is not None:
@@ -599,6 +609,62 @@ class MachineWorkflow:
                             reconsideration=review_revalidation,
                         )
                         review_revalidation = None
+                    elif patch_applied and (
+                        pending_source_review is not None
+                        or build_repair_has_approved_semantic_review
+                    ):
+                        changed_files = {
+                            *(file.path for file in patch.files),
+                            *patch.delete_paths,
+                        }
+                        blocking_review = pending_source_review or SourceReview(
+                            approved=True,
+                            summary=(
+                                "The source passed semantic review before the concrete build "
+                                "failure repair."
+                            ),
+                        )
+                        full_review_reasons = _source_review_scope_invalidation_reasons(
+                            retry_base,
+                            generated,
+                            blocking_review,
+                            changed_files,
+                            declared_repair_surface=(
+                                changed_files if pending_source_review is None else None
+                            ),
+                        )
+                        review = await self.generator.review_source(
+                            state.machine_information,
+                            working_scenario,
+                            generated,
+                            review_skills,
+                            reconsideration={
+                                "kind": (
+                                    "source_full_reaudit"
+                                    if full_review_reasons
+                                    else "source_repair_verification"
+                                ),
+                                "blocking_review": _source_review_report(blocking_review),
+                                "changed_files": sorted(changed_files),
+                                "full_review_reasons": full_review_reasons,
+                                "repair_origin": (
+                                    "build_failure"
+                                    if pending_source_review is None
+                                    else "semantic_review"
+                                ),
+                            },
+                        )
+                        if not full_review_reasons:
+                            review = _scope_source_repair_review(
+                                blocking_review,
+                                review,
+                                changed_files,
+                            )
+                        repair_history[-1]["semantic_review_scope"] = (
+                            "full" if full_review_reasons else "fixed_findings_and_regressions"
+                        )
+                        if full_review_reasons:
+                            repair_history[-1]["full_review_reasons"] = full_review_reasons
                     else:
                         review = await self.generator.review_source(
                             state.machine_information,
@@ -606,60 +672,31 @@ class MachineWorkflow:
                             generated,
                             review_skills,
                         )
-                    if (
-                        pending_source_review is not None
-                        and not review.approved
-                        and _source_review_did_not_improve(pending_source_review, review)
-                    ):
-                        review = await reconsider_source_review(
-                            generated,
-                            review,
-                            {
-                                "kind": "source_semantic_review_nonprogress",
-                                "review_before_repair": _source_review_report(
-                                    pending_source_review
-                                ),
-                                "source_before_repair": _generated_source_checksum(
-                                    pending_source_review_source or retry_base
-                                ),
-                                "source_after_repair": _generated_source_checksum(generated),
-                                "attempted_change": (
-                                    {
-                                        "kind": "source_patch",
-                                        "patch": _serialized_source_patch(patch),
-                                    }
-                                    if patch_applied
-                                    else {"kind": "scenario_sync"}
-                                ),
-                                "reason": (
-                                    "an error finding remained after repair or the number of "
-                                    "error findings increased"
-                                ),
-                            },
-                        )
-
                     error_targets = _source_review_error_targets(review)
                     review_report = _source_review_report(review)
+                    scenario_text_only = bool(error_targets) and error_targets <= {"scenario_text"}
                     checksum = self.source_archive.record_semantic_review(
                         archive_path,
                         review_report,
                         approved=review.approved,
                     )
-                    scenario_text_only = bool(error_targets) and error_targets <= {"scenario_text"}
                     if review.approved or scenario_text_only:
+                        if patch_applied:
+                            source_changed_since_scenario = True
                         pending_source_review = None
                         pending_source_review_source = None
                         if source_changed_since_scenario or scenario_text_only:
-                            scenario_before_sync = working_scenario
                             scenario_feedback: dict | None = (
                                 review_report if scenario_text_only else None
                             )
                             scenario_reviews: list[dict] = []
+                            previous_scenario_review_signature: str | None = None
+                            scenario_sync_limit = self.scenario_sync_attempts
                             state.scenario_sync_attempt_limit = (
-                                state.scenario_sync_attempts + self.scenario_sync_attempts
+                                state.scenario_sync_attempts + scenario_sync_limit
                             )
                             await self.repository.save(state)
-                            for _ in range(self.scenario_sync_attempts):
+                            for _ in range(scenario_sync_limit):
                                 state.scenario_sync_attempts += 1
                                 await self.repository.save(state)
                                 if scenario_feedback is None:
@@ -687,10 +724,17 @@ class MachineWorkflow:
                                     working_scenario,
                                     review_context="source_sync",
                                 )
+                                scenario_review = _scope_scenario_sync_review(scenario_review)
                                 scenario_feedback = _scenario_review_report(scenario_review)
                                 scenario_reviews.append(scenario_feedback)
                                 if scenario_review.approved:
                                     break
+                                scenario_review_signature = _scenario_review_error_signature(
+                                    scenario_review
+                                )
+                                if scenario_review_signature == previous_scenario_review_signature:
+                                    break
+                                previous_scenario_review_signature = scenario_review_signature
                             if repair_history:
                                 sync_record = repair_history[-1]
                             else:
@@ -710,17 +754,6 @@ class MachineWorkflow:
                                     + scenario_review.summary,
                                     scenario_feedback,
                                 )
-                                if any(
-                                    finding.severity == "error"
-                                    and finding.repair_target == "source_code"
-                                    for finding in scenario_review.findings
-                                ):
-                                    sync_record["scenario_sync_routed_to"] = "source_repair"
-                                    failure_report = scenario_feedback
-                                    archive_path = None
-                                    checksum = None
-                                    working_scenario = scenario_before_sync
-                                    continue
                                 failure_report = scenario_feedback
                                 raise RuntimeError(
                                     "could not synchronize an approved scenario after source "
@@ -737,32 +770,66 @@ class MachineWorkflow:
                             checksum = self.source_archive.record_semantic_review(
                                 archive_path,
                                 review_report,
-                                approved=review.approved,
+                                approved=review.approved or scenario_text_only,
+                                status=(
+                                    "resolved_by_scenario_sync" if scenario_text_only else None
+                                ),
                             )
                             source_changed_since_scenario = False
-                            if scenario_text_only:
-                                # The source reviewer must judge the synchronized artifacts again;
-                                # an earlier rejection must never be reused as an approval.
-                                failure_report = None
-                                pending_source_review = review
-                                pending_source_review_source = generated
-                                archive_path = None
-                                checksum = None
-                                continue
                         logger.info(
-                            "source semantic review approved",
-                            extra={"session_id": session_id, "summary": review.summary},
+                            "source candidate cleared for build",
+                            extra={
+                                "session_id": session_id,
+                                "summary": review.summary,
+                            },
                         )
                         break
                     last_validation_error = InvalidSourceError(
                         f"source semantic review failed: {review.summary}", review_report
                     )
-                    failure_report = _source_review_report(
-                        review,
-                        repair_targets={"source_code"},
-                    )
-                    pending_source_review = review
-                    pending_source_review_source = generated
+                    candidate_report = _source_review_report(review, repair_targets={"source_code"})
+                    if (
+                        pending_source_review is not None
+                        and pending_source_review_source is not None
+                    ):
+                        failure_report = {
+                            "kind": "source_semantic_repair_retry",
+                            "status": "fail",
+                            "error_message": (
+                                "The replacement patch did not clear the fixed review scope or "
+                                "introduced a regression in a changed file. Rebuild one replacement "
+                                "patch from the unchanged base; do not layer another patch on the "
+                                "rejected candidate."
+                            ),
+                            "blocking_review": _source_review_report(pending_source_review),
+                            "candidate_review": candidate_report,
+                            "rejected_patch": _serialized_source_patch(patch),
+                        }
+                        repair_history[-1]["semantic_review_after"] = candidate_report
+                        repair_history[-1]["candidate_status"] = "rejected_rolled_back"
+                        generated = pending_source_review_source
+                    elif patch_applied and build_repair_has_approved_semantic_review:
+                        failure_report = {
+                            "kind": "build_repair_semantic_retry",
+                            "status": "fail",
+                            "error_message": (
+                                "The build-failure repair introduced a semantic regression. "
+                                "Create one replacement patch from the pre-repair source that "
+                                "addresses both the build failure and this regression."
+                            ),
+                            "original_trigger": _persistable_repair_trigger(repair_trigger),
+                            "candidate_review": candidate_report,
+                            "rejected_patch": _serialized_source_patch(patch),
+                        }
+                        repair_history[-1]["semantic_review_after"] = candidate_report
+                        repair_history[-1]["candidate_status"] = "rejected_rolled_back"
+                        pending_source_review = review
+                        pending_source_review_source = retry_base
+                        generated = retry_base
+                    else:
+                        failure_report = candidate_report
+                        pending_source_review = review
+                        pending_source_review_source = generated
                     archive_path = None
                     checksum = None
                 build_slots_remaining -= 1
@@ -1097,20 +1164,153 @@ def _source_review_report_has_unsupported_target(report: dict) -> bool:
     )
 
 
-def _source_review_did_not_improve(
-    previous: SourceReview,
-    current: SourceReview,
-) -> bool:
-    def error_keys(review: SourceReview) -> set[tuple[str | None, str, str]]:
-        return {
-            (finding.step_id, finding.category, finding.repair_target)
-            for finding in review.findings
-            if finding.severity == "error"
-        }
+def _source_review_finding_key(finding) -> tuple[str | None, str, str]:
+    return finding.step_id, finding.category, finding.repair_target
 
-    previous_errors = error_keys(previous)
-    current_errors = error_keys(current)
-    return bool(previous_errors & current_errors) or len(current_errors) > len(previous_errors)
+
+def _source_review_contract(source: GeneratedSource) -> dict | None:
+    manifest_file = next(
+        (file for file in source.files if file.path == "contents/scenario_manifest.json"),
+        None,
+    )
+    if manifest_file is None:
+        return None
+    try:
+        manifest = json.loads(manifest_file.content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(manifest, dict):
+        return None
+
+    def sorted_values(field: str, *identity_fields: str):
+        values = manifest.get(field)
+        if not isinstance(values, list):
+            return values
+        return sorted(
+            values,
+            key=lambda value: tuple(
+                str(value.get(identity, "")) if isinstance(value, dict) else str(value)
+                for identity in identity_fields
+            ),
+        )
+
+    return {
+        "target_os": manifest.get("target_os"),
+        "required_files": sorted_values("required_files"),
+        "services": sorted_values("services", "name", "protocol", "port"),
+        "expected_vulnerabilities": sorted_values("expected_vulnerabilities", "cve_id", "name"),
+        # Attack-step order is part of the intended chain and must remain significant.
+        "attack_steps": manifest.get("attack_steps"),
+        "objectives": sorted_values("objectives", "objective_id", "objective_type"),
+    }
+
+
+def _source_review_scope_invalidation_reasons(
+    base_source: GeneratedSource,
+    candidate_source: GeneratedSource,
+    blocking_review: SourceReview,
+    changed_files: set[str],
+    declared_repair_surface: set[str] | None = None,
+) -> list[str]:
+    """Detect semantic contract changes that require a new full source review."""
+
+    reasons: list[str] = []
+    if _source_review_contract(base_source) != _source_review_contract(candidate_source):
+        reasons.append("the scenario manifest's review contract changed")
+
+    ignored_inventory_paths = {"contents/README.md"}
+    base_inventory = {
+        file.path for file in base_source.files if file.path not in ignored_inventory_paths
+    }
+    candidate_inventory = {
+        file.path for file in candidate_source.files if file.path not in ignored_inventory_paths
+    }
+    if base_inventory != candidate_inventory:
+        reasons.append("the generated implementation file inventory changed")
+
+    if declared_repair_surface is None:
+        declared_repair_surface = {
+            path
+            for finding in blocking_review.findings
+            if finding.severity == "error"
+            for path in finding.affected_files
+        }
+    material_changed_files = changed_files - ignored_inventory_paths
+    if material_changed_files and not declared_repair_surface:
+        reasons.append("the blocking review did not declare a bounded repair surface")
+    elif not material_changed_files <= declared_repair_surface:
+        outside_scope = sorted(material_changed_files - declared_repair_surface)
+        reasons.append(
+            "the patch expanded beyond the declared repair surface: " + ", ".join(outside_scope)
+        )
+    return reasons
+
+
+def _scope_source_repair_review(
+    blocking_review: SourceReview,
+    candidate_review: SourceReview,
+    changed_files: set[str],
+) -> SourceReview:
+    """Keep follow-up review focused on fixed findings and patch-caused regressions."""
+
+    blocking_keys = {
+        _source_review_finding_key(finding)
+        for finding in blocking_review.findings
+        if finding.severity == "error"
+    }
+    scoped_findings = []
+    deferred = 0
+    for finding in candidate_review.findings:
+        in_fixed_scope = _source_review_finding_key(finding) in blocking_keys
+        is_patch_regression = bool(changed_files.intersection(finding.affected_files))
+        if finding.severity == "error" and not (in_fixed_scope or is_patch_regression):
+            deferred += 1
+            finding = finding.model_copy(update={"severity": "warning"})
+        scoped_findings.append(finding)
+    has_error = any(finding.severity == "error" for finding in scoped_findings)
+    summary = candidate_review.summary
+    if deferred:
+        summary += (
+            f" {deferred} out-of-scope late finding(s) were retained as warnings because they "
+            "were neither part of the fixed review nor caused by a changed file."
+        )
+    return SourceReview(
+        approved=not has_error,
+        summary=summary,
+        findings=scoped_findings,
+    )
+
+
+def _scope_scenario_sync_review(review: ScenarioReview) -> ScenarioReview:
+    """Scenario synchronization may correct prose, but must not reopen source design."""
+
+    findings = [
+        finding
+        if finding.severity != "error" or finding.repair_target == "scenario_text"
+        else finding.model_copy(update={"severity": "warning"})
+        for finding in review.findings
+    ]
+    return ScenarioReview(
+        approved=not any(finding.severity == "error" for finding in findings),
+        summary=review.summary,
+        findings=findings,
+    )
+
+
+def _scenario_review_error_signature(review: ScenarioReview) -> str:
+    """Identify repeated sync blockers without depending on prose wording."""
+
+    findings = sorted(
+        (
+            finding.step_id or "",
+            finding.category,
+            finding.repair_target,
+            tuple(sorted(finding.repair_fields)),
+        )
+        for finding in review.findings
+        if finding.severity == "error"
+    )
+    return json.dumps(findings, ensure_ascii=False)
 
 
 def _source_review_report(
@@ -1126,6 +1326,7 @@ def _source_review_report(
             "severity": finding.severity,
             "category": finding.category,
             "repair_target": finding.repair_target,
+            "affected_files": finding.affected_files,
             "evidence": finding.evidence,
             "remediation": finding.remediation,
         }

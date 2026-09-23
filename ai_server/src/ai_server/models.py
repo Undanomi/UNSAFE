@@ -453,6 +453,7 @@ class SourceReviewFinding(BaseModel):
         "acceptance_test_gap",
         "implementation_mismatch",
     ]
+    affected_files: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 

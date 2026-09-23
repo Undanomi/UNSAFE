@@ -136,6 +136,7 @@ class SourceArchive:
         review_report: dict,
         *,
         approved: bool,
+        status: str | None = None,
     ) -> str:
         """Persist the final semantic verdict and refresh the submitted archive checksum."""
 
@@ -148,7 +149,7 @@ class SourceArchive:
         if not isinstance(report, dict):
             report = {"attempts": []}
         report["source_semantic_review"] = {
-            "status": "approved" if approved else "rejected",
+            "status": status or ("approved" if approved else "rejected"),
             "recorded_at": datetime.now(UTC).isoformat(),
             "report": review_report,
         }
@@ -237,6 +238,16 @@ class SourceArchive:
         except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile):
             return []
         return SourceArchive._repair_attempts(report)
+
+    @staticmethod
+    def load_semantic_review_from_archive(archive_path: Path) -> dict | None:
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                report = json.loads(archive.read("repair_report.json"))
+        except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile):
+            return None
+        semantic_review = report.get("source_semantic_review")
+        return semantic_review if isinstance(semantic_review, dict) else None
 
     @staticmethod
     def load_repair_history(source_path: str) -> list[dict]:

@@ -784,4 +784,7 @@ def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) 
     with zipfile.ZipFile(archive_path) as zipped:
         archived_report = json.loads(zipped.read("repair_report.json"))
     assert archived_report["source_semantic_review"]["status"] == "rejected"
+    assert archive.load_semantic_review_from_archive(archive_path) == archived_report[
+        "source_semantic_review"
+    ]
     assert updated_checksum != original_checksum
