@@ -1,10 +1,10 @@
 # SLSG
 
-![タイトル](docs/images/title.png)
+[![公開デモサイト Live](https://img.shields.io/badge/%E5%85%AC%E9%96%8B%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
 
-デモサイトは[こちら](https://sls-g.github.io/)です。
-
-SLSGの動画紹介は[こちら](https://www.youtube.com/watch?v=0g1k5J6X8xM)です。
+<a href="https://www.youtube.com">
+  <img src="docs/images/title.png" alt="タイトル" width="640">
+</a>
 
 ## 目次
 
@@ -45,7 +45,7 @@ SLSG（Security Learning Scenario Generator）は、この負担を減らし、�
 
 ### リポジトリ構成
 
-このリポジトリはモノレポ構成です。
+フロントエンド、AIサーバー、ビルドサーバーを1つのリポジトリで管理しています。
 
 | ディレクトリ | 役割 |
 | --- | --- |
@@ -57,11 +57,11 @@ SLSG（Security Learning Scenario Generator）は、この負担を減らし、�
 
 | 領域 | 主な技術 |
 | --- | --- |
-| フロントエンド | ![Next.js](https://img.shields.io/badge/Next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB) ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white) |
-| AIサーバー | ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white) ![Gemini](https://img.shields.io/badge/Gemini-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white) |
-| ビルドサーバー | ![Go](https://img.shields.io/badge/Go-00ADD8?style=for-the-badge&logo=go&logoColor=white) ![Packer](https://img.shields.io/badge/Packer-02A8EF?style=for-the-badge&logo=packer&logoColor=white) ![QEMU](https://img.shields.io/badge/QEMU-FF6600?style=for-the-badge&logo=qemu&logoColor=white) |
-| 認証 | ![Firebase Authentication](https://img.shields.io/badge/Firebase_Auth-FFCA28?style=for-the-badge&logo=firebase&logoColor=black) |
-| データベース | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white) |
+| フロントエンド | ![Framework: Next.js](https://img.shields.io/badge/Framework-Next.js-000000?style=flat&logo=nextdotjs&logoColor=white) ![UI: React](https://img.shields.io/badge/UI-React-20232A?style=flat&logo=react&logoColor=61DAFB) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6?style=flat&logo=typescript&logoColor=white) ![CSS: Tailwind CSS](https://img.shields.io/badge/CSS-Tailwind_CSS-06B6D4?style=flat&logo=tailwindcss&logoColor=white) |
+| AIサーバー | ![Language: Python](https://img.shields.io/badge/Language-Python-3776AB?style=flat&logo=python&logoColor=white) ![API: FastAPI](https://img.shields.io/badge/API-FastAPI-009688?style=flat&logo=fastapi&logoColor=white) ![AI: Gemini](https://img.shields.io/badge/AI-Gemini-8E75B2?style=flat&logo=googlegemini&logoColor=white) |
+| ビルドサーバー | ![Language: Go](https://img.shields.io/badge/Language-Go-00ADD8?style=flat&logo=go&logoColor=white) ![Build: Packer](https://img.shields.io/badge/Build-Packer-02A8EF?style=flat&logo=packer&logoColor=white) ![VM: QEMU](https://img.shields.io/badge/VM-QEMU-FF6600?style=flat&logo=qemu&logoColor=white) |
+| 認証 | ![Auth: Firebase](https://img.shields.io/badge/Auth-Firebase-FFCA28?style=flat&logo=firebase&logoColor=black) |
+| データベース | ![DB: PostgreSQL](https://img.shields.io/badge/DB-PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white) |
 
 ### アーキテクチャ
 
@@ -69,9 +69,9 @@ SLSG（Security Learning Scenario Generator）は、この負担を減らし、�
 
 ## 使い方
 
-1. [公開デモ](https://sls-g.github.io/)にアクセスし、Googleアカウントでログインします。
+1. [公開デモ](https://slsg.konekotech.com)にアクセスし、Googleアカウントでログインします。
 2. 公開されているマシンを選ぶか、チャット画面で学びたいテーマや難易度を指定して新しいマシンを作成します。
-3. マシンのビルドが完了したら、詳細画面からダウンロードします。同梱の起動手順に沿ってマシンを起動し、演習を始めます。
+3. マシンのビルドが完了したら、詳細画面からダウンロードします。同梱の起動手順書に沿ってマシンを起動し、演習を始めます。
 4. 必要に応じて、詳細画面のヒントや誘導問題を確認します。
 
 ## 審査基準について
