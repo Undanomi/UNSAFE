@@ -64,13 +64,21 @@ uv sync --dev
 AI_PROVIDER=stub uv run uvicorn ai_server.main:app --reload --port 8000
 ```
 
-実際に Gemini を使う場合は `.env` の `AI_PROVIDER=gemini` と
-`GEMINI_API_KEY` を設定します。スタブモードは API と build_server の結合確認用で、
-安全な最小ソースを決定的に生成します。
+実際のAIプロバイダーは `.env` の `AI_PROVIDER` で選択します。
 
-VMコード生成はシナリオ生成より応答が大きくなるため、Gemini用HTTPクライアントには
+- Gemini 2.5 Flash: `AI_PROVIDER=gemini` と `GEMINI_API_KEY` を設定
+- GPT-5.6 Luna: `AI_PROVIDER=openai` と `OPENAI_API_KEY` を設定
+- スタブ: `AI_PROVIDER=stub`（APIとbuild_serverの結合確認用）
+
+OpenAIでは既定で `OPENAI_MODEL=gpt-5.6-luna`、
+`OPENAI_REASONING_EFFORT=medium` を使用します。APIキーはフロントエンドへ渡さず、
+ai_serverの環境変数またはデプロイ基盤のSecret Managerへ設定してください。
+
+VMコード生成はシナリオ生成より応答が大きくなるため、AIプロバイダー用HTTPクライアントには
 `AI_TIMEOUT_SECONDS`（既定値600秒）を使用します。出力上限は
-`GEMINI_MAX_OUTPUT_TOKENS`（既定値65536）で変更できます。build_serverとの内部通信には
+Geminiでは`GEMINI_MAX_OUTPUT_TOKENS`（既定値65536）、OpenAIでは
+`OPENAI_MAX_OUTPUT_TOKENS`（既定値65536）で変更できます。OpenAIの値には
+推論トークンと表示される出力トークンの両方が含まれます。build_serverとの内部通信には
 別の `BUILD_TIMEOUT_SECONDS` を使用します。
 攻撃グラフの生成失敗またはシナリオの敵対的AIレビュー不合格時の再試行回数は
 `SCENARIO_GENERATION_ATTEMPTS`（既定値5）、
@@ -142,7 +150,8 @@ docker compose --profile frontend up --build
 
 本番では `.env` を配布せず、デプロイ基盤のSecret Managerから
 `AI_POSTGRES_PASSWORD`、`BUILD_POSTGRES_PASSWORD`、`INTERNAL_API_TOKEN`、
-`BUILD_SERVER_TOKEN` を注入してください。既存のPostgreSQLボリュームがある場合、
+`BUILD_SERVER_TOKEN`、選択したプロバイダーの`GEMINI_API_KEY`または`OPENAI_API_KEY`を
+注入してください。既存のPostgreSQLボリュームがある場合、
 `POSTGRES_PASSWORD` の変更だけではDB内のパスワードは更新されません。先に対象ロールの
 パスワードを変更してから接続側の環境変数を切り替える必要があります。
 

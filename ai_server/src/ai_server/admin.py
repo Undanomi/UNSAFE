@@ -54,6 +54,13 @@ RUNTIME_LIMITS = (
         "Maximum output tokens requested from Gemini.",
     ),
     RuntimeLimit(
+        "openai_max_output_tokens",
+        "OPENAI_MAX_OUTPUT_TOKENS",
+        "OpenAI output tokens",
+        "1,024–128,000",
+        "Maximum reasoning and visible output tokens requested from OpenAI.",
+    ),
+    RuntimeLimit(
         "generation_retries",
         "GENERATION_RETRIES",
         "AI structured-output retries",
@@ -272,6 +279,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_status,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
@@ -291,6 +301,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
         AISessionRecord.build_repair_attempt_limit,
@@ -299,7 +312,12 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
     )
     column_default_sort = (AISessionRecord.updated_at, True)
     column_details_list = "__all__"
-    form_excluded_columns = (AISessionRecord.created_at,)
+    form_excluded_columns = (
+        AISessionRecord.created_at,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
+        AISessionRecord.ai_total_tokens,
+    )
     form_overrides: ClassVar = {"status": SelectField}
     form_args: ClassVar = {
         "status": {"choices": _choices(SessionStatus)},

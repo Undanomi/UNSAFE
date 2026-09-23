@@ -51,7 +51,23 @@ class SourceArchive:
             if normalized in paths:
                 raise InvalidSourceError(f"duplicate generated path: {normalized}")
             paths.add(normalized)
-            content = materialize_rockyou_placeholders(source_file.content, scenario)
+            try:
+                content = materialize_rockyou_placeholders(source_file.content, scenario)
+            except ValueError as error:
+                report = {
+                    "status": "fail",
+                    "summary": {"passed": 0, "failed": 1, "warnings": 0},
+                    "checks": [
+                        {
+                            "status": "fail",
+                            "name": f"password_cracking:placeholder:{normalized}",
+                            "message": str(error),
+                        }
+                    ],
+                }
+                raise InvalidSourceError(
+                    f"generated source validation failed: {error}", report
+                ) from error
             total_size += len(content.encode("utf-8"))
             if total_size > 5 * 1024 * 1024:
                 raise InvalidSourceError("generated source exceeds 5 MiB")
@@ -111,18 +127,37 @@ class SourceArchive:
             return 0
         if not isinstance(manifest, dict):
             return 0
-        commands: list[str] = []
+        commands: list[tuple[str, str]] = []
         for field in ("health_checks", "acceptance_tests"):
             checks = manifest.get(field)
             if not isinstance(checks, list):
                 return 0
-            for check in checks:
+            for index, check in enumerate(checks):
                 command = check.get("command") if isinstance(check, dict) else None
                 if not isinstance(command, str) or not command.strip():
                     return 0
-                commands.append(command)
-        script = "#!/bin/bash\nset -euo pipefail\n" + "".join(
-            f"bash -o pipefail -c {shlex.quote(command)}\n" for command in commands
+                commands.append((f"{field}[{index}]", command))
+        script = """#!/bin/bash
+set -euo pipefail
+
+run_check() {
+    local check_id="$1"
+    local check_command="$2"
+    local status
+
+    printf 'SLSG_CHECK_START %s\n' "$check_id"
+    if bash -o pipefail -c "$check_command"; then
+        printf 'SLSG_CHECK_PASS %s\n' "$check_id"
+    else
+        status=$?
+        printf 'SLSG_CHECK_FAIL %s exit=%s\n' "$check_id" "$status" >&2
+        return "$status"
+    fi
+}
+
+""" + "".join(
+            f"run_check {shlex.quote(check_id)} {shlex.quote(command)}\n"
+            for check_id, command in commands
         )
         destination = candidate_root.joinpath(*VERIFICATION_SCRIPT.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -136,6 +171,7 @@ class SourceArchive:
         review_report: dict,
         *,
         approved: bool,
+        status: str | None = None,
     ) -> str:
         """Persist the final semantic verdict and refresh the submitted archive checksum."""
 
@@ -148,7 +184,7 @@ class SourceArchive:
         if not isinstance(report, dict):
             report = {"attempts": []}
         report["source_semantic_review"] = {
-            "status": "approved" if approved else "rejected",
+            "status": status or ("approved" if approved else "rejected"),
             "recorded_at": datetime.now(UTC).isoformat(),
             "report": review_report,
         }
@@ -237,6 +273,16 @@ class SourceArchive:
         except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile):
             return []
         return SourceArchive._repair_attempts(report)
+
+    @staticmethod
+    def load_semantic_review_from_archive(archive_path: Path) -> dict | None:
+        try:
+            with zipfile.ZipFile(archive_path) as archive:
+                report = json.loads(archive.read("repair_report.json"))
+        except (OSError, KeyError, UnicodeDecodeError, json.JSONDecodeError, zipfile.BadZipFile):
+            return None
+        semantic_review = report.get("source_semantic_review")
+        return semantic_review if isinstance(semantic_review, dict) else None
 
     @staticmethod
     def load_repair_history(source_path: str) -> list[dict]:

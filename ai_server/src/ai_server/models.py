@@ -13,6 +13,12 @@ SCENARIO_DEFINITION_MAX_CHARS = 12_000
 ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
 
 
+def rockyou_password_placeholder(step_id: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", step_id):
+        raise ValueError(f"invalid attack step ID for rockyou placeholder: {step_id}")
+    return f"__SLSG_ROCKYOU_PASSWORD_{step_id}__"
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -332,6 +338,7 @@ class ScenarioReviewFinding(BaseModel):
         "acceptance_test_gap",
         "unsupported_assumption",
         "description_spoiler",
+        "input_contradiction",
     ]
     repair_target: Literal[
         "scenario_text",
@@ -356,6 +363,13 @@ class ScenarioReviewFinding(BaseModel):
             "cve_id",
             "password_cracking",
         }
+        allowed_input_fields = {
+            "theme",
+            "user_flag_details",
+            "system_flag_details",
+            "skill_names",
+            "cve_ids",
+        }
         fields = set(self.repair_fields)
         if self.repair_target == "attack_graph":
             if not fields or not fields <= allowed_graph_fields:
@@ -364,14 +378,28 @@ class ScenarioReviewFinding(BaseModel):
                     "or implementation_steps"
                 )
         elif self.repair_target == "attack_graph_regeneration":
-            if not fields <= allowed_regeneration_fields:
+            if not fields or not fields <= allowed_regeneration_fields:
                 raise ValueError(
-                    "attack_graph_regeneration repair_fields contain non-structural fields"
+                    "attack_graph_regeneration repair_fields must contain structural fields"
+                )
+        elif self.repair_target == "user_input":
+            if not fields or not fields <= allowed_input_fields:
+                raise ValueError(
+                    "user_input repair_fields must identify contradictory machine input fields"
                 )
         elif fields:
             raise ValueError(
                 f"repair_fields must be empty for repair_target={self.repair_target}"
             )
+        if self.repair_target == "user_input" and (
+            self.category != "input_contradiction" or self.step_id is not None
+        ):
+            raise ValueError(
+                "user_input is only valid for an explicit input_contradiction without "
+                "a generated attack-graph step_id"
+            )
+        if self.category == "input_contradiction" and self.repair_target != "user_input":
+            raise ValueError("input_contradiction findings must target user_input")
         return self
 
 
@@ -392,6 +420,12 @@ class ScenarioRevision(BaseModel):
     scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     attack_graph: AttackGraph
+    summary: str = Field(min_length=1, max_length=4000)
+
+
+class ScenarioTextRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     summary: str = Field(min_length=1, max_length=4000)
 
 
@@ -431,6 +465,7 @@ class SourceReviewFinding(BaseModel):
         "acceptance_test_gap",
         "implementation_mismatch",
     ]
+    affected_files: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 

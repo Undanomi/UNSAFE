@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 from .models import (
-    ROCKYOU_PASSWORD_PLACEHOLDER,
     AttackGraph,
     GeneratedSource,
     MachineInformation,
     ScenarioDraft,
+    rockyou_password_placeholder,
 )
 from .scenario_manifest import scenario_manifest_json_schema
 
@@ -31,25 +31,45 @@ SCENARIO_MANIFEST_CONSTRAINTS = f"""scenario_manifest.jsonのJSON Schema:
 """
 
 
-def attack_graph_json_for_ai(graph: AttackGraph, *, indent: int | None = 2) -> str:
-    """Serialize a graph without revealing late-bound password material to the model."""
+def attack_graph_json_for_ai(
+    graph: AttackGraph,
+    *,
+    indent: int | None = 2,
+) -> str:
+    """Serialize a design graph without revealing late-bound password material."""
     value = graph.model_dump(mode="json")
     for step in value["steps"]:
         spec = step.get("password_cracking")
         if spec is None:
             continue
-        spec["password"] = ROCKYOU_PASSWORD_PLACEHOLDER
+        spec["password"] = None
         spec["line_number"] = None
         spec["search_space_lines"] = None
     return json.dumps(value, ensure_ascii=False, indent=indent)
 
 
 def _redact_passwords(text: str, graph: AttackGraph) -> str:
-    for step in graph.steps:
-        spec = step.password_cracking
-        if spec is not None and spec.password is not None:
-            text = text.replace(spec.password, ROCKYOU_PASSWORD_PLACEHOLDER)
+    password_placeholders = [
+        (spec.password, rockyou_password_placeholder(step.step_id))
+        for step in graph.steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    ]
+    for password, placeholder in sorted(
+        password_placeholders, key=lambda item: len(item[0]), reverse=True
+    ):
+        text = text.replace(password, placeholder)
     return text
+
+
+def _rockyou_placeholder_map(graph: AttackGraph) -> str:
+    entries = [
+        f"- `{step.step_id}`: `{rockyou_password_placeholder(step.step_id)}`"
+        for step in graph.steps
+        if step.password_cracking is not None
+    ]
+    if not entries:
+        return ""
+    return "ステップ別rockyouプレースホルダー:\n" + "\n".join(entries)
 
 
 def source_json_for_ai(current: GeneratedSource, scenario: ScenarioDraft) -> str:
@@ -168,6 +188,10 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
 - 攻略経路にハッシュクラックを含める場合、AIは実際の平文パスワードを選択・推測しない。
   password、line_number、search_space_linesはnullのまま設計し、最初のソース生成が終わった後に
   サーバーがrockyou.txtから選択して構造化フィールドへ確定する
+- rockyou.txtの実体、取得元、配置先、checksum、選択処理への受け渡し、候補が辞書に含まれること、
+  line_number、search_space_lines、および選択時の速度測定はサーバー基盤の責務であり、この生成・レビュー
+  工程では利用可能かつ検証済みとして扱う。これらをシナリオ本文、ターゲットVM、provision、manifest、
+  acceptance testへ重複実装・記載させず、不足事項として指摘しない
 - 該当ステップはkindを`password_cracking`にし、password_cracking objectへハッシュ方式、実装の
   hash_runtimeとhash_api、Hashcat modeまたはJohn format、120〜180秒のtarget_crack_secondsを
   構造化して記録する
@@ -175,10 +199,19 @@ HASH_CRACKING_CONSTRAINTS = """ハッシュクラックに関する共通制約:
   マスク攻撃、総当たり、外部サービスを必須にしない
 - サーバーが後から確定するline_numberとsearch_space_linesを探索量の根拠にできるよう、一般的な
   開発用PC上のHashcatまたはJohn the Ripperで約2〜3分となる現実的なハッシュ方式とwork factorを
-  選ぶ。極端に高速または低速な方式を選ばない
-- ソース内で平文が必要な箇所には必ずリテラル`__SLSG_ROCKYOU_PASSWORD__`だけを使用する。
-  別の平文を推測・創作せず、この値を最終ダイジェスト、seed済みハッシュ、期待ハッシュとして扱わない
-- SQLへ格納する値は、プロビジョニング時に`__SLSG_ROCKYOU_PASSWORD__`を入力として対象
+  選ぶ。極端に高速または低速な方式を選ばない。この選択条件のハードウェア、実行環境、ベンチマークを
+  シナリオ設計へ記載させたり、シナリオレビューで再検証させたりしない
+- ソース内で平文が必要な箇所には、対象ステップ専用の
+  `__SLSG_ROCKYOU_PASSWORD_<step_id>__`だけを使用する。別ステップのプレースホルダーや旧形式の
+  `__SLSG_ROCKYOU_PASSWORD__`を使わず、平文を推測・創作しない。この値を最終ダイジェスト、
+  seed済みハッシュ、期待ハッシュとして扱わない
+- 各`__SLSG_ROCKYOU_PASSWORD_<step_id>__`は、サーバーが同じステップ用の全出現箇所を、その
+  ステップ専用の選択値へ置換する。
+  未置換確認、比較条件、case、grep、assert、期待値には使用せず、資格情報またはハッシュ生成APIへの
+  入力値としてだけ使う。置換確認用の分岐や自己比較を作らない
+- ビルド基盤は`SLSG_ROCKYOU_PASSWORD`等の環境変数を注入しない。存在しない注入値をfallbackとして
+  参照せず、割り当てられたステップ専用プレースホルダーを直接変数へ代入して使用する
+- SQLへ格納する値は、プロビジョニング時にステップ専用プレースホルダーを入力として対象
   アプリのハッシュ生成APIを実行した結果にする。固定ダイジェストを設計書、README、manifest、SQL、
   アプリ設定、provision scriptへ例示・seed・期待値として埋め込まない
 - 実際に格納するハッシュ値は、原則としてcontents/scripts/provision.shの実行中に、対象実装と
@@ -326,8 +359,11 @@ FLAG_PLACEMENT_CONSTRAINTS = """フラグ配置と到達性の共通制約:
 EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない近道の共通制約:
 - 各攻撃ステップについて、前提状態、攻撃者が外部から行う具体的操作、成功時だけ得られる観測可能な
   証拠、次ステップへ渡す成果物を明確にし、単なるサービス起動やエラー発生を攻略成功とみなさない
-- 意図した脆弱性が「存在する」だけでなく「攻略に必要」であることを保証する。通常入力、通常機能、
-  初期画面、公開ファイル、バナー、コメント、既定認証情報から同じ成果物を先に取得できる近道を作らない
+- ここでいう「意図しない近道」は、生成物が保護対象そのものを攻略前に直接開示する実装欠陥に限定する。
+  例はflagや次工程の秘密を通常レスポンス、初期画面、公開ファイル、バナー、コメント、ログ、過剰な
+  permission、テスト専用分岐からそのまま取得できる場合である
+- 別の攻撃手法、オンライン認証試行、より短い攻略経路が理論上存在することだけを「近道」としない。
+  意図した経路が成立して各成果物を後段で利用できるなら、経路の一意性や最短性を要求しない
 - 正常系のbenign controlでは秘密・認証情報・flag・次工程の成果物を取得できず、意図したexploitでは
   それを取得でき、似ているが成立しないnegative controlでは取得できないことを対にして検証する
 - exploitの検証は脆弱性種別に固有の効果を証明する。SQLiなら通常検索や単なるSQLエラーではなく、
@@ -342,8 +378,8 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   成功時のファイル作成や応答を直接発生させる分岐を実装しない
 - sudo、runuser、su等で攻略後のユーザーへ直接切り替えてflagを読む操作をexploitの証明に使わない。
   攻撃者入口から実際のpayloadを送り、その結果として得た能力または出力でflag到達を証明する
-- 実装または修復の完了前に、より短い別経路、情報の先出し、意図しない別種の脆弱性、前提を飛ばせる
-  権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
+- 実装または修復の完了前に、保護対象の直接的な情報漏えい、攻略前に読める権限、検証用backdoorが
+  ないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
 """
 
 DESIGN_CONSTRAINTS = """設計段階の共通制約:
@@ -356,7 +392,8 @@ DESIGN_CONSTRAINTS = """設計段階の共通制約:
 - ハッシュクラック: rockyou.txtは平文wordlistで通常は攻撃者側で使う。kindは
   `password_cracking`とし、password、line_number、search_space_linesはソース生成後のサーバー選択
   までnullにする。方式・mode/format・120〜180秒を記録し、固定ハッシュは設計書へ書かず、
-  provision時に対象アプリと同じAPIで生成する
+  provision時に対象アプリと同じAPIで生成する。rockyou.txtの実体、取得元、配置先、checksum、
+  選択処理への受け渡しと速度測定はサーバー基盤で保証し、設計の不足事項として指摘しない
 - 使用する言語とソフトウェアに応じ、標準的な構文・設定検査と実行時検査を計画する。ここでは
   検査対象と目的だけを簡潔に示し、完全なスクリプトや全コマンドはコード生成段階へ委ねる
 """
@@ -712,6 +749,18 @@ def scenario_review_prompt(
     review_context: str = "generation",
     reconsideration: dict | None = None,
 ) -> str:
+    source_sync_scope = ""
+    if review_context == "source_sync":
+        source_sync_scope = """
+同期レビュー固有の責務:
+- この工程は、ソース修正後のシナリオ本文を攻撃グラフと実装へ同期できたかだけを確認する。
+  独立した2回目のソース監査ではない。新しい実装要件、追加テスト、別の修正方針を持ち込まない
+- errorにできるのは、提示された本文と攻撃グラフまたは生成物の間に、引用可能な直接の矛盾が残る場合だけ。
+  repair_targetはscenario_textに限定し、source_code、attack_graph、attack_graph_regeneration、user_inputを
+  返さない。実装への懸念はソースレビューまたは実ビルドの責務であり、この工程から差し戻さない
+- パッケージ、サービス、DB、権限等の実環境での挙動を実行せずに推測した懸念や、より網羅的な
+  acceptance testの提案はビルド阻止理由にしない。同期で変更した箇所と、その直接の波及だけを見る
+"""
     reconsideration_section = ""
     if reconsideration is not None:
         reconsideration_section = f"""
@@ -722,14 +771,15 @@ def scenario_review_prompt(
 生成物の修正案がサーバー検証に失敗しました。修正案だけでなく、前回レビューの前提や修正先が
 誤っていた可能性も検討してください。修正案だけが誤りなら指摘を維持し、検証可能な修正内容へ具体化
 してください。検証エラーを回避する内容を捏造せず、指摘が誤りなら撤回し、
-限定修正で扱えない構造問題ならattack_graph_regeneration、入力条件の問題ならuser_inputへ変更して
+限定修正で扱えない構造問題ならattack_graph_regeneration、明示された入力条件同士が論理的に
+両立不能な場合だけuser_inputへ変更して
 シナリオ全体を改めて判定してください。ただし、スキーマで禁止されたフィールドを許可するために
 attack_graph_regenerationへ逃がさず、その要求自体を撤回してください。同じ根拠のない修正要求を
 繰り返さないでください。
 """
     return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
 作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
-前提を飛ばす近道がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
+保護対象を直接漏らす実装計画がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
 再現可能かつ一貫した形で成立させられるかを審査します。
 
 マシン: {machine.name}
@@ -755,6 +805,7 @@ System flag取得要件（正解値ではない）: {machine.needs_system_flag},
 ```markdown
 {_redact_passwords(scenario.definition, scenario.attack_graph)}
 ```
+{source_sync_scope}
 {reconsideration_section}
 
 JSONのみを返してください:
@@ -769,9 +820,11 @@ JSONのみを返してください:
 - プレイヤー向け紹介文が設計書と矛盾する、または具体的な侵入口、URLやパス、ポート、製品バージョン、
   認証情報、コマンド、権限昇格経路、フラグの場所や値、攻撃連鎖の順序を漏らす場合は
   description_spoilerのerrorにする。役割、状況、目的、脆弱性の大分類だけなら許容する
-- 全攻撃ステップを順に追い、各requiresの成果物が後段で実際に必要か、各achievesへ到達できるかを
-  攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
-  errorにする
+- 全攻撃ステップを順に追い、意図した経路の中で各requiresの成果物が後段に実際に渡され、各achievesへ
+  到達できるかを確認する。記述された経路自体が前段の成果物を使用しない場合はbroken_chainにする。
+  別手法やオンライン認証試行で到達し得るという理由だけではbroken_chainにもunintended_shortcutにも
+  しない。unintended_shortcutはflag、秘密、次工程の成果物が通常表示、公開ファイル、過剰permission、
+  検証用backdoor等から攻略前に直接取得できる場合に限定する
 - 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
   semantic_mismatchのerrorにする。検証済み攻撃グラフを正とし、設計書側の改名、step分割・統合、
   ハッシュ方式の読み替えが原因ならrepair_targetはscenario_textにする。本文へ合わせるために
@@ -788,18 +841,25 @@ JSONのみを返してください:
 - 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
   攻略成立性を保証できない場合はimplementation_gapまたはunsupported_assumptionのerrorにする
 - acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
-  飛ばした失敗を観測可能な形で確認できない場合はacceptance_test_gapのerrorにする
+  飛ばした失敗を全く観測できない場合はacceptance_test_gapのerrorにする。ただし、同じ性質の追加ケースや
+  網羅性向上だけを要求せず、実ビルドで判定する環境依存の懸念はwarningにする
 - warningは成立性を損なわない改善提案だけに使い、成立可否が不明な点をwarningへ弱めない
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
   記載する。単なる一般論や推測だけで不合格にしない
 - repair_target: scenario_text=本文、attack_graph=限定修正、attack_graph_regeneration=再作成、
-  source_code=実装(source_sync時のみ)、user_input=入力
+  source_code=実装(source_sync時のみ)、user_input=相互矛盾した明示入力だけ
 - attack_graphの限定修正はtitle、description、implementation_stepsのみで、repair_fieldsへ列挙する。
   それ以外のフィールドが本文と違うだけならscenario_textを修正する
 - attack_graph_regenerationは、設計書との表現差ではなく、攻撃グラフ単体のrequires/achievesが
   破綻しているbroken_chain、またはグラフ単体の前提が成立不能なunsupported_assumptionに限定する。
   必ず該当する既存step_idと構造フィールドをrepair_fieldsへ入れる
+- user_inputは、ユーザーが明示した2つ以上の条件が論理的に同時成立しない場合だけ使用する。categoryは
+  input_contradiction、step_idはnull、repair_fieldsには矛盾する入力フィールド名を入れる。例えば
+  system_flag_detailsで「vimをsudoersへ入れない」と「sudo vimで取得する」を同時に要求する場合である。
+  攻撃グラフ、設計書、生成コードの欠陥、AIの選択、難易度への合わせ方、実装方式、password_crackingの
+  構造化値は生成側の責務であり、user_inputへ転嫁しない。難易度を上げる・要件を緩和するという提案を
+  user_inputとして返さず、指定難易度の範囲で生成物を修正または再生成する
 
 権限レビューでは、時系列の権限表として攻撃前後の実効UID、重要パスと全親ディレクトリ、
 owner/group/mode、sudoers、capabilityを追う。同じ状態に相反する記述がある、意図した主体が読めず
@@ -827,6 +887,8 @@ def code_prompt(
 
 検証済みの攻撃グラフ:
 {attack_graph_json_for_ai(scenario.attack_graph)}
+
+{_rockyou_placeholder_map(scenario.attack_graph)}
 
 配置する正解フラグ（未設定は配置しない）:
 - User flag: {scenario.user_flag or "未設定"}
@@ -926,6 +988,8 @@ System flag正解値: {scenario.system_flag or "未設定"}
 {attack_graph_json_for_ai(scenario.attack_graph)}
 ```
 
+{_rockyou_placeholder_map(scenario.attack_graph)}
+
 失敗内容:
 ```json
 {report_json}
@@ -936,8 +1000,10 @@ known_failed_resourcesに列挙された要素は、現在の失敗内容に現�
 original_triggerとrejected_patchが含まれる場合、元の修正目的を維持しつつ、拒否された同じパッチを
 繰り返さないでください。元レビューのremediationと決定的検証が衝突する場合は検証制約を破らず、
 別の有効な修正方法を選んでください。レビュー自体の再判定は呼び出し側が行います。
-failed_commandsまたはfailure_log_contextがある場合は、そのコマンドと前後のエラーを根本原因として
-扱い、末尾の後処理メッセージだけを修正しないでください。
+failed_checksがある場合は、そのcheck_idに対応する現在のscenario_manifest.jsonの検査と
+failure_log_contextを一次情報として根本原因を特定してください。failed_commandsまたは
+failure_log_contextがある場合も、そのコマンドと前後のエラーを根本原因として扱い、末尾の
+後処理メッセージだけを修正しないでください。
 
 現在のファイル:
 ```json
@@ -1044,16 +1110,13 @@ def scenario_sync_prompt(
 
 JSONのみを返してください:
 {{"scenario_description":"改訂後のプレイヤー向け紹介文","definition":"改訂後のMarkdown",
-"attack_graph":{{"objectives":[],"steps":[]}},
 "summary":"同期した事実の要約"}}
 
 制約:
 - 実装に存在しない挙動を追加せず、実装と異なる古いパス、権限、資格情報、手順、検証を残さない
-- 攻撃グラフのstep_id、kind、requires、achieves、CVE-ID、cve_title、cve_description、cwe_ids、
-  installation_artifact、artifact_source、source_build_reason、脆弱性メカニズムは不変であり、実装に
-  合わせて変更しない。実装がこれらと異なる場合は、設計を誤実装へ合わせずsummaryで不一致を明示する
-- 攻撃グラフのrequiresとachievesを維持し、前提を飛ばせる状態を正当化しない
-- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionやattack_graphへ記載しない
+- 攻撃グラフは参照専用で返却対象に含めない。検証済みの攻撃グラフはサーバー側でそのまま維持する。
+  実装が攻撃グラフと異なる場合は、設計を誤実装へ合わせずsummaryで不一致を明示する
+- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionへ記載しない
 - scenario_id、scenario_version_id、タイトル、対象OSは変更対象にしない
 - owner・group・mode等を変えた場合、本文の実装計画、攻略手順、肯定・否定テストをすべて同期する
 - scenario_descriptionも実装と本文に合わせて更新する。ただし、具体的な侵入口、URLやパス、ポート、
@@ -1075,7 +1138,33 @@ def source_review_prompt(
 ) -> str:
     reconsideration_section = ""
     if reconsideration is not None:
-        reconsideration_section = f"""
+        if reconsideration.get("kind") == "source_repair_verification":
+            reconsideration_section = f"""
+修正後レビューの固定スコープ:
+```json
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+```
+これは新しいフル監査ではない。blocking_reviewに列挙された各errorが解消したかを確認し、加えて
+changed_filesの変更が直接引き起こした回帰だけを探す。以前のerrorを再掲する場合は同じstep_id、category、
+repair_targetを使う。新しいerrorはaffected_filesにchanged_filesとの共通パスを必ず含め、変更との因果を
+evidenceで説明する。変更されていない箇所の新規指摘、追加の改善案、前回見落としただけの指摘はwarningに
+留める。修正候補が不合格でも、その候補へさらに修正を積み重ねず、呼び出し側が修正前ソースへ戻して
+置換パッチを作り直す。repair_originがbuild_failureの場合、元の候補は既に意味レビュー済みであり、
+ビルド失敗そのものの解消は次の実ビルドが判定する。このレビューでは変更箇所からの回帰だけを判定する。
+"""
+        elif reconsideration.get("kind") == "source_full_reaudit":
+            reconsideration_section = f"""
+修正によるレビュー契約の変更:
+```json
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+```
+manifestが表す攻撃ステップ・サービス・脆弱性・目的の契約、実装ファイル構成、または初回レビューが
+宣言した修正範囲が変わったため、固定スコープを破棄して現在の候補を最初からフル監査する。以前の指摘
+だけに限定せず、ビルドを止めるfindingを今回の応答へ一度に全件列挙する。ただし、レビュー契約が変化
+したという事実だけをerrorにせず、現在の生成物に残る具体的な不整合を根拠に判定する。
+"""
+        else:
+            reconsideration_section = f"""
 前回レビューの再検討資料:
 ```json
 {_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
@@ -1116,16 +1205,34 @@ System flag正解値: {scenario.system_flag or "未設定"}
 JSONのみを返してください:
 {{"approved":false,"summary":"...","findings":[{{"step_id":"...","severity":"error",
 "repair_target":"source_code","category":"unintended_shortcut",
+"affected_files":["contents/app/index.php"],
 "evidence":"ファイルと具体的挙動","remediation":"必要な修正"}}]}}
 
 審査規則:
 - 全攻撃ステップを順に追い、実装コード、provision、manifest、acceptance_testsの整合性を確認する
+- 固定スコープが提示されていない最初のレビューでは、ビルドを止めるfindingを一度に全件列挙する。
+  修正を1件ずつ小出しにしたり、次回レビューのために既知の指摘を保留したりしない
+- このレビューはビルド前ゲートである。errorは、提示されたファイルから直接証明でき、修正しなければ
+  意図した経路が成立しない、別手法になる、または保護対象が直接漏れる致命的不整合だけに限定する。
+  パッケージ、デーモン、DB、権限、ネットワーク等の実環境での挙動を実行しないと確定できない懸念は
+  warningとし、Packerビルドとacceptance testへ委ねる。「失敗する可能性がある」だけでerrorにしない
+- 既存テストが中核の攻撃成功と必要な前提を検査しているなら、追加の境界値、重複するnegative control、
+  実装詳細の再証明を要求しない。改善用の追加テストはwarningとし、テストが皆無・実行不能・常に成功・
+  攻撃を迂回していることをファイルから直接証明できる場合だけacceptance_test_gapのerrorにする
+- サーバー制約に「サーバーが選択・検証・生成する」と明記された値やファイルは信頼境界の外側で保証済み
+  として扱い、生成ソースに同じ検証や生成を重複実装させない。モデルへ渡されていない外部データの内容を
+  推測して、その確認テストを要求しない。特にrockyou.txtからの選択範囲・所属・行番号・探索時間は基盤側、
+  contents/scripts/verify.shはmanifestからのサーバー生成であり、filesに無いことを欠陥にしない
+- 再検討資料がある場合は、前回指摘と変更ファイルの直接の回帰を優先する。無関係な箇所を新規に精査して
+  細粒度のブロッカーを後出しせず、新しいerrorは明白な致命的不整合を変更箇所から直接証明できる場合に限る
 - 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
-- intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
-- 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
-  acceptance_test_gapのerrorにする
+- flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
+  攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
+  より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
+- 中核の攻撃について、攻撃固有の効果を全く証明せず、通常入力、エラー、接続成功だけを確認するテストは
+  unproven_exploitまたはacceptance_test_gapのerrorにする
 - 実装された主脆弱性が攻撃グラフの種類と異なる場合はwrong_techniqueのerrorにする
 - CVEステップではcve_title、cve_description、cwe_idsを公式事実として、実装コードと設定が同じ
   発火条件と影響を実現しているか確認する。同製品の別脆弱性、一般的な設定不備、模擬エンドポイント、
@@ -1133,7 +1240,8 @@ JSONのみを返してください:
 - attack_graphとmanifestのinstallation_artifact、artifact_source、source_build_reasonを実装と照合する。
   ビルド済み成果物を選択済みなのにソースをコンパイルしている、またはパッケージ・公式バイナリを
   調査した根拠なしにsource_buildへ変更している場合はimplementation_mismatchのerrorにする
-- requiresを飛ばせる、または前段の成果物が後段で実際に使われない場合はbroken_chainのerrorにする
+- 記述された意図的経路の実装が前段の成果物を後段で実際に使わない場合はbroken_chainにする。
+  独立した別手法でも到達可能という理由だけでbroken_chainにしない
 - password_cracking stepでは、provisionが生成してDB等へ保存する値から、ユーザーが操作するform/APIの
   method・action・field、到達するhandler branch、hash/verify API、比較対象column、認証成功後の成果物まで
   データフローを追跡する。実際の入口が生パスワードを保存値へ直接比較する、保存ハッシュ自体で通る、
@@ -1143,15 +1251,16 @@ JSONのみを返してください:
   実装証拠として認めない。実際のデータフローと外部からの観測結果を根拠にする
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには判断に使ったファイルパス、変数、通常経路と攻撃経路の差を具体的に記載する
+- affected_filesにはfindingの根拠となる生成ファイルだけを列挙する。一般論だけのfindingや、実際には
+  変更されていないファイルを回帰の根拠にするため列挙したfindingをerrorにしない
 - 各findingのrepair_targetを必ず指定する。実装ファイル、provision、manifest、acceptance_testsの
   修正はsource_code、実装が正しく本文だけが古い場合はscenario_textにする。このレビュー工程では
   検証済み攻撃グラフを不変の入力として扱い、attack_graphやuser_inputをrepair_targetに返さない
 - 実装を攻撃グラフへ合わせられる不一致を別の生成物へ転嫁しない。特にinstallation_method、
   installation_artifact、artifact_source、source_build_reasonの値を取り違えず、存在しないフィールドの
   追加を要求しない。攻撃グラフの不変条件と衝突する修正要求をsource_code向けに出さない
-- 生成物で利用可能な構文・設定検査が省略されている、対象ファイルの一部しか検査していない、
-  または検査失敗を無視する実装はacceptance_test_gapのerrorにする。言語・ソフトウェアに適した
-  実際のparser、compiler、interpreter、config testを使っていることを確認する
+- 必須の構文・設定検査が全く無い、または検査失敗を意図的に無視することが直接確認できる場合は
+  acceptance_test_gapのerrorにする。一部ファイルの追加検査や別ツールによる重複検査はwarningに留める
 - rockyou.txtをハッシュ集やターゲット用コンポーネントと誤認していないか確認する。ターゲット側で
   取得または使用していても一律に不合格にはせず、シナリオ上の目的がなく追加されている場合や、
   未検証の単一URLへの依存によってビルド再現性を損なう場合だけ、影響に応じてwarningまたは

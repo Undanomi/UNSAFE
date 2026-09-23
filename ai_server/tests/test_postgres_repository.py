@@ -4,7 +4,7 @@ import os
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 
 from ai_server.database import (
     AISessionRecord,
@@ -48,6 +48,19 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         assert loaded.session_id == state.session_id
         assert loaded.owner_user_id == "integration-user"
         assert loaded.status == state.status
+        await repository.increment_ai_token_usage(state.session_id, 100, 25, 130)
+        await repository.increment_ai_token_usage(state.session_id, 50, 10, 62)
+        async with repository.session_factory() as session:
+            usage = (
+                await session.execute(
+                    select(
+                        AISessionRecord.ai_input_tokens,
+                        AISessionRecord.ai_output_tokens,
+                        AISessionRecord.ai_total_tokens,
+                    ).where(AISessionRecord.session_id == UUID(state.session_id))
+                )
+            ).one()
+        assert usage == (150, 35, 192)
         loaded.machine_information = MachineInformation(
             name="Postgres Test",
             visibility="private",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ai_server.models import (
     PasswordCrackingSpec,
     ScenarioDraft,
     SourceFile,
+    rockyou_password_placeholder,
 )
 from ai_server.services.source_archive import InvalidSourceError, SourceArchive
 
@@ -335,6 +337,68 @@ def test_accepts_runtime_generated_selected_password_hash(tmp_path: Path) -> Non
     assert "22062531" in provision
 
 
+def test_rejects_placeholder_for_unknown_password_step(tmp_path: Path) -> None:
+    generated = password_cracking_source(
+        f"PASSWORD='{rockyou_password_placeholder('unknown-step')}'"
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session-unknown-password-step",
+            password_cracking_scenario(),
+            generated,
+        )
+
+    failure = captured.value.report["checks"][0]
+    assert failure["name"].startswith("password_cracking:placeholder:")
+    assert "unknown password steps" in failure["message"]
+
+
+def test_rejects_rockyou_placeholder_comparison_and_unsupported_injection(
+    tmp_path: Path,
+) -> None:
+    generated = password_cracking_source(
+        f"ROCKYOU_PASSWORD='{ROCKYOU_PASSWORD_PLACEHOLDER}'\n"
+        'ROCKYOU_PASSWORD="${SLSG_ROCKYOU_PASSWORD:-$ROCKYOU_PASSWORD}"\n'
+        f"if [[ \"$ROCKYOU_PASSWORD\" == '{ROCKYOU_PASSWORD_PLACEHOLDER}' ]]; then exit 1; fi"
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(
+            "session-invalid-placeholder-guard",
+            password_cracking_scenario(),
+            generated,
+        )
+
+    failures = {
+        check["name"]: check["message"]
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    }
+    assert "password_cracking:unsupported_password_injection" in failures
+    assert "password_cracking:materialized_secret_comparison" in failures
+    assert "22062531" not in json.dumps(failures)
+
+
+def test_accepts_rockyou_placeholder_as_input_without_substitution_guard(
+    tmp_path: Path,
+) -> None:
+    generated = password_cracking_source(
+        f"ROCKYOU_PASSWORD='{ROCKYOU_PASSWORD_PLACEHOLDER}'\n"
+        'test -n "$ROCKYOU_PASSWORD"\n'
+        'PASSWORD_HASH=$(php -r "echo md5($argv[1]);" "$ROCKYOU_PASSWORD")\n'
+        f"sshpass -p '{ROCKYOU_PASSWORD_PLACEHOLDER}' ssh alice@127.0.0.1 test -f /home/alice/user.txt"
+    )
+
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-valid-placeholder-input",
+        password_cracking_scenario(),
+        generated,
+    )
+
+    assert archive_path.is_file()
+
+
 def test_does_not_statically_parse_runtime_hash_generation(tmp_path: Path) -> None:
     generated = password_cracking_source(
         f"PASSWORD='{ROCKYOU_PASSWORD_PLACEHOLDER}'\n"
@@ -521,10 +585,50 @@ def test_generates_runtime_verification_entrypoint_from_manifest(tmp_path: Path)
         script = archive.read("contents/scripts/verify.sh").decode()
         mode = (archive.getinfo("contents/scripts/verify.sh").external_attr >> 16) & 0o777
     assert "bash -o pipefail -c" in script
+    assert "SLSG_CHECK_START" in script
+    assert "SLSG_CHECK_PASS" in script
+    assert "SLSG_CHECK_FAIL" in script
+    assert "run_check 'health_checks[0]'" in script
+    assert "run_check 'acceptance_tests[0]'" in script
     assert "curl -fsSL http://127.0.0.1/" in script
     assert "runuser -u www-data -- test -r /var/www/html/index.php" in script
     assert "exit 0" not in script
     assert mode == 0o755
+
+
+def test_runtime_verification_logs_check_ids_without_command_text(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    manifest_path = candidate_root / "contents/scenario_manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "health_checks": [{"command": "true"}],
+                "acceptance_tests": [
+                    {"command": "false # do-not-log-this-secret"},
+                    {"command": "printf should-not-run"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    SourceArchive._write_verification_script(candidate_root)
+    result = subprocess.run(
+        ["bash", str(candidate_root / "contents/scripts/verify.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "SLSG_CHECK_START health_checks[0]" in output
+    assert "SLSG_CHECK_PASS health_checks[0]" in output
+    assert "SLSG_CHECK_START acceptance_tests[0]" in output
+    assert "SLSG_CHECK_FAIL acceptance_tests[0] exit=1" in output
+    assert "acceptance_tests[1]" not in output
+    assert "do-not-log-this-secret" not in output
 
 
 def test_static_validation_does_not_parse_package_manager_commands(tmp_path: Path) -> None:
@@ -784,4 +888,7 @@ def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) 
     with zipfile.ZipFile(archive_path) as zipped:
         archived_report = json.loads(zipped.read("repair_report.json"))
     assert archived_report["source_semantic_review"]["status"] == "rejected"
+    assert archive.load_semantic_review_from_archive(archive_path) == archived_report[
+        "source_semantic_review"
+    ]
     assert updated_checksum != original_checksum

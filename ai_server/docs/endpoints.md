@@ -401,7 +401,7 @@ build_serverにはアクセスしません。
 ### `GET /v1/health/ready`
 
 PostgreSQLへ `SELECT 1` を実行し、セッションを扱える状態か確認します。コンテナの
-readiness checkや内部ロードバランサーからの確認に使用します。build_serverやGeminiの
+readiness checkや内部ロードバランサーからの確認に使用します。build_serverやAIプロバイダーの
 可用性までは確認しません。
 
 ## 主なエラー

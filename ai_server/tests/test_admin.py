@@ -60,11 +60,15 @@ def test_admin_views_allow_editing_only() -> None:
     assert AISessionAdmin.can_create is False
     assert AISessionAdmin.can_edit is True
     assert AISessionAdmin.can_delete is False
-    assert AISessionAdmin.form_excluded_columns == (AISessionAdmin.model.created_at,)
+    assert AISessionAdmin.model.created_at in AISessionAdmin.form_excluded_columns
     assert AISessionAdmin.model.scenario_generation_attempts in AISessionAdmin.column_list
     assert AISessionAdmin.model.scenario_generation_attempt_limit in AISessionAdmin.column_list
     assert AISessionAdmin.model.source_generation_attempts in AISessionAdmin.column_list
     assert AISessionAdmin.model.source_generation_attempt_limit in AISessionAdmin.column_list
+    assert AISessionAdmin.model.ai_total_tokens in AISessionAdmin.column_list
+    assert AISessionAdmin.model.ai_input_tokens in AISessionAdmin.column_list
+    assert AISessionAdmin.model.ai_output_tokens in AISessionAdmin.column_list
+    assert AISessionAdmin.model.ai_total_tokens in AISessionAdmin.form_excluded_columns
 
 
 def test_skill_admin_views_preserve_published_history() -> None:

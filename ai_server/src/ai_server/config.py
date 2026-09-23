@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,7 @@ class RuntimeLimitSettings(DatabaseSettings):
     """Non-secret AI server limits shared with the read-only admin dashboard."""
 
     gemini_max_output_tokens: int = Field(default=65536, ge=1024, le=65536)
+    openai_max_output_tokens: int = Field(default=65536, ge=1024, le=128000)
     generation_retries: int = Field(default=3, ge=1, le=10)
     cve_min_year: int = Field(default=2024, ge=1999, le=2100)
     scenario_generation_attempts: int = Field(default=5, ge=1, le=10)
@@ -54,6 +56,9 @@ class Settings(RuntimeLimitSettings):
     ai_provider: str = "gemini"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.6-luna"
+    openai_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
     github_token: str | None = None
 
     rockyou_path: Path = Path("/app/data/rockyou.txt")
@@ -67,6 +72,13 @@ class Settings(RuntimeLimitSettings):
     )
 
     skills_enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_ai_provider(self) -> Settings:
+        self.ai_provider = self.ai_provider.strip().lower()
+        if self.ai_provider not in {"gemini", "openai", "stub"}:
+            raise ValueError("AI_PROVIDER must be one of: gemini, openai, stub")
+        return self
 
     @model_validator(mode="after")
     def validate_download_signing_settings(self) -> Settings:

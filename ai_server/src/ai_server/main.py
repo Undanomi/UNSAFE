@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from .api import router
 from .config import Settings, get_settings
 from .repository import SessionNotFoundError, SessionRepository
-from .services.ai import GeminiGenerator
+from .services.ai import GeminiGenerator, OpenAIGenerator
 from .services.build_client import BuildClient
 from .services.download_signing import DownloadSigner
 from .services.events import EventBroker
@@ -47,11 +47,16 @@ def create_app(
         build_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(resolved.build_timeout_seconds, connect=10)
         )
-        generator = (
-            StubGenerator()
-            if resolved.ai_provider.lower() == "stub"
-            else GeminiGenerator(resolved, ai_client)
-        )
+        if resolved.ai_provider == "stub":
+            generator = StubGenerator()
+        elif resolved.ai_provider == "gemini":
+            generator = GeminiGenerator(resolved, ai_client)
+        else:
+            generator = OpenAIGenerator(resolved, ai_client)
+        if isinstance(generator, (GeminiGenerator, OpenAIGenerator)) and isinstance(
+            repository, SessionRepository
+        ):
+            generator.set_token_usage_recorder(repository.increment_ai_token_usage)
         if skill_service_override is not None:
             skill_service = skill_service_override
         elif resolved.skills_enabled and isinstance(repository, SessionRepository):
@@ -62,14 +67,14 @@ def create_app(
                 max_context_chars=resolved.skill_context_max_chars,
                 planner=SemanticSkillPlanner(
                     generator._generate,
-                    model=resolved.gemini_model,
+                    model=generator.model,
                     min_cve_year=resolved.cve_min_year,
                     max_catalog_chars=resolved.skill_selection_max_chars,
                     max_skills=resolved.skills_max_per_phase,
                     max_cves=resolved.skill_selection_max_cves,
                     retries=resolved.skill_selection_retries,
                 )
-                if isinstance(generator, GeminiGenerator)
+                if isinstance(generator, (GeminiGenerator, OpenAIGenerator))
                 else None,
             )
         else:
