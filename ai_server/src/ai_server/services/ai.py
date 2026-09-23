@@ -798,8 +798,17 @@ class _BaseGenerator:
                 ),
                 "",
             )
-        if not title or not description:
-            raise ValueError(f"{cve_id} official record is missing a title or description")
+        if not description:
+            raise ValueError(f"{cve_id} official record is missing a description")
+        if not title:
+            # A CNA title is optional in the CVE record schema.  Keep the
+            # downstream display title deterministic and grounded in the
+            # official record by deriving it from the first description
+            # sentence instead of asking the model to invent one.
+            normalized_description = re.sub(r"\s+", " ", description).strip()
+            title = re.split(
+                r"(?<=[.!?])\s+", normalized_description, maxsplit=1
+            )[0]
         cwe_ids: list[str] = []
         for problem in evidence.get("problem_types") or []:
             if not isinstance(problem, dict):

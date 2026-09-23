@@ -2207,6 +2207,50 @@ def test_debian_package_requires_target_release_osv_evidence() -> None:
     assert "Debian:13" in verification.compatibility_reason
 
 
+def test_official_cve_facts_derive_title_from_description_when_cna_title_is_missing() -> None:
+    facts = GeminiGenerator._official_cve_facts(
+        "CVE-2025-55182",
+        {
+            "state": "PUBLISHED",
+            "title": None,
+            "descriptions": [
+                {
+                    "lang": "en",
+                    "value": (
+                        "React Server Components contain a remote code execution issue. "
+                        "An unauthenticated attacker can exploit it."
+                    ),
+                }
+            ],
+            "problem_types": [],
+            "references": [],
+            "official_cve_url": "https://www.cve.org/CVERecord?id=CVE-2025-55182",
+        },
+    )
+
+    assert facts["title"] == (
+        "React Server Components contain a remote code execution issue."
+    )
+    assert facts["description"] == (
+        "React Server Components contain a remote code execution issue. "
+        "An unauthenticated attacker can exploit it."
+    )
+
+
+def test_official_cve_facts_still_require_an_official_description() -> None:
+    with pytest.raises(
+        ValueError, match="CVE-2025-55182 official record is missing a description"
+    ):
+        GeminiGenerator._official_cve_facts(
+            "CVE-2025-55182",
+            {
+                "state": "PUBLISHED",
+                "title": None,
+                "descriptions": [],
+            },
+        )
+
+
 def test_cve_verification_rejects_unjustified_source_build() -> None:
     with pytest.raises(ValueError, match="source build requires evidence"):
         CVEVerification(
