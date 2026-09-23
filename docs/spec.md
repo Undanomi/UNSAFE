@@ -19,7 +19,6 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 | --- | --- | --- |
 | ブラウザ | Next.js クライアント | ユーザー操作 |
 | オンプレ環境 | Next.js + BFF | フロントエンド機能 |
-| Cloudflare | AI Job Queue | AI 生成ジョブを AI サーバーへ非同期配する |
 | Firebase | Firebase Authentication | 認証基盤 |
 | オンプレ環境 | フロントエンド用PostgreSQL | ユーザー、マシン、チャット、回答履歴を保存する |
 | オンプレ環境 | AI サーバー | AI Job Queue からジョブを取得し、シナリオやコードを生成する |
@@ -56,7 +55,7 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 
 ### 2.4 ジョブキューとオンプレ環境
 
-- AIサーバーは、Cloudflare QueuesのHTTP Pull Consumerとして動作する
+- AIサーバーは、フロントエンドサーバーのHTTP Pull Consumerとして動作する
 - AIサーバーは、自身が処理可能なときだけ外向きHTTPS通信でジョブを取得する
 - ジョブの入力取得、進捗通知および結果登録には、BFFの内部APIを使用する
 - 具体的な制御は、後続の Issue で定める
@@ -75,6 +74,4 @@ API、データ構造、ジョブ制御、移行および運用の詳細設計�
 | ブラウザ | Firebase Authentication | Firebase Authentication |
 | ブラウザ | Next.js / BFF | Firebase Session Cookie |
 | Next.js / BFF | フロントエンド用PostgreSQL | フロントエンド専用DBユーザー |
-| Next.js / BFF | Cloudflare Queues | API token |
-| AI・ビルドサーバー | Cloudflare Queues | Queue 操作用 Cloudflare API token |
 | AI・ビルドサーバー | BFF 内部 API | サーバー別 Bearer token |
