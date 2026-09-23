@@ -13,7 +13,7 @@ import {
   BUILDING_MACHINE_DESCRIPTION,
   completedMachineDescription,
 } from "@/lib/machines/description"
-import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/stores/machine-detail"
+import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/types/machine-detail"
 import type { MachineRecord } from "@/types/postgres"
 
 function formatCreatedAt(value: Date | string) {
