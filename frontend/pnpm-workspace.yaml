@@ -2,6 +2,7 @@ engineStrict: true
 
 ignoredBuiltDependencies:
   - '@firebase/util'
+  - esbuild
   - protobufjs
   - sharp
 
