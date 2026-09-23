@@ -6,16 +6,16 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
-import { PROFILE_DATA, type ProfileMachine, type UserProfile } from "@/stores/profile"
+import type { ProfileMachine, UserProfile } from "@/stores/profile"
 
 type ProfileEditorProps = {
-  profile?: UserProfile
+  profile: UserProfile
   canEdit?: boolean
   showBackLink?: boolean
 }
 
 export function ProfileEditor({
-  profile = PROFILE_DATA,
+  profile,
   canEdit = true,
   showBackLink = true,
 }: ProfileEditorProps) {

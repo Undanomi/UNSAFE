@@ -90,7 +90,13 @@ export async function verifyMachineFlagAction(
 
   try {
     const correct = await verifyMachineFlagService(user.uid, machineId, kind, answer)
-    if (correct) revalidatePath("/machines")
+
+    if (correct) {
+      revalidatePath("/machines")
+      revalidatePath("/profile")
+      revalidatePath(`/users/${user.uid}`)
+    }
+
     return correct === null ? { success: false } : { success: true, correct }
   } catch (error) {
     console.error("Failed to verify machine flag.", error)
