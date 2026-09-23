@@ -972,8 +972,10 @@ known_failed_resourcesに列挙された要素は、現在の失敗内容に現�
 original_triggerとrejected_patchが含まれる場合、元の修正目的を維持しつつ、拒否された同じパッチを
 繰り返さないでください。元レビューのremediationと決定的検証が衝突する場合は検証制約を破らず、
 別の有効な修正方法を選んでください。レビュー自体の再判定は呼び出し側が行います。
-failed_commandsまたはfailure_log_contextがある場合は、そのコマンドと前後のエラーを根本原因として
-扱い、末尾の後処理メッセージだけを修正しないでください。
+failed_checksがある場合は、そのcheck_idに対応する現在のscenario_manifest.jsonの検査と
+failure_log_contextを一次情報として根本原因を特定してください。failed_commandsまたは
+failure_log_contextがある場合も、そのコマンドと前後のエラーを根本原因として扱い、末尾の
+後処理メッセージだけを修正しないでください。
 
 現在のファイル:
 ```json
@@ -1080,16 +1082,13 @@ def scenario_sync_prompt(
 
 JSONのみを返してください:
 {{"scenario_description":"改訂後のプレイヤー向け紹介文","definition":"改訂後のMarkdown",
-"attack_graph":{{"objectives":[],"steps":[]}},
 "summary":"同期した事実の要約"}}
 
 制約:
 - 実装に存在しない挙動を追加せず、実装と異なる古いパス、権限、資格情報、手順、検証を残さない
-- 攻撃グラフのstep_id、kind、requires、achieves、CVE-ID、cve_title、cve_description、cwe_ids、
-  installation_artifact、artifact_source、source_build_reason、脆弱性メカニズムは不変であり、実装に
-  合わせて変更しない。実装がこれらと異なる場合は、設計を誤実装へ合わせずsummaryで不一致を明示する
-- 攻撃グラフのrequiresとachievesを維持し、前提を飛ばせる状態を正当化しない
-- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionやattack_graphへ記載しない
+- 攻撃グラフは参照専用で返却対象に含めない。検証済みの攻撃グラフはサーバー側でそのまま維持する。
+  実装が攻撃グラフと異なる場合は、設計を誤実装へ合わせずsummaryで不一致を明示する
+- User/System flagの配置要件は維持するが、正解フラグ値そのものをdefinitionへ記載しない
 - scenario_id、scenario_version_id、タイトル、対象OSは変更対象にしない
 - owner・group・mode等を変えた場合、本文の実装計画、攻略手順、肯定・否定テストをすべて同期する
 - scenario_descriptionも実装と本文に合わせて更新する。ただし、具体的な侵入口、URLやパス、ポート、

@@ -252,10 +252,17 @@ class MachineWorkflow:
                 )
             else:
                 if build_log.strip():
-                    repair_report["packer_log_tail"] = build_log
-                    failed_commands, failure_context = _extract_build_failures(build_log)
-                    if failed_commands:
-                        repair_report["failed_commands"] = failed_commands
+                    failed_commands, failed_checks, failure_context = _extract_build_failures(
+                        build_log
+                    )
+                    if failed_checks:
+                        repair_report["failed_checks"] = failed_checks
+                    else:
+                        # Before verify.sh starts there is no structured check ID, so
+                        # retain the legacy evidence needed for provisioning failures.
+                        repair_report["packer_log_tail"] = build_log
+                        if failed_commands:
+                            repair_report["failed_commands"] = failed_commands
                     if failure_context:
                         repair_report["failure_log_context"] = failure_context
         if _source_review_report_has_unsupported_target(repair_report):
@@ -992,7 +999,7 @@ def _compact_repair_history(history: list[dict], limit: int = 10) -> list[dict]:
             packer_log = trigger.get("packer_log_tail")
             if isinstance(packer_log, str):
                 compact_trigger["packer_log_tail"] = _bounded_context(packer_log, 4_000)
-            for key in ("failed_commands", "failure_log_context"):
+            for key in ("failed_commands", "failed_checks", "failure_log_context"):
                 value = trigger.get(key)
                 if isinstance(value, list):
                     compact_trigger[key] = value[:10]
@@ -1381,8 +1388,10 @@ def _bounded_context(value: str, limit: int) -> str:
     return value[:prefix] + "\n...[truncated]...\n" + value[-(limit - prefix) :]
 
 
-def _extract_build_failures(log: str) -> tuple[list[str], list[str]]:
-    """Extract traced shell commands and bounded context near concrete build errors."""
+def _extract_build_failures(
+    log: str,
+) -> tuple[list[str], list[dict[str, int | str]], list[str]]:
+    """Extract failed verification IDs, traced commands, and nearby build errors."""
 
     lines = [line.rstrip() for line in log.splitlines() if line.strip()]
     error_pattern = re.compile(
@@ -1390,15 +1399,41 @@ def _extract_build_failures(log: str) -> tuple[list[str], list[str]]:
         r"no such file|non[- ]zero|exit status|returned?\s+\d+)"
     )
     trace_pattern = re.compile(r"^\s*\+\s+(.+\S)\s*$")
+    check_failure_pattern = re.compile(
+        r"\bSLSG_CHECK_FAIL\s+"
+        r"(?P<check_id>(?:health_checks|acceptance_tests)\[\d+\])\s+"
+        r"exit=(?P<exit_code>\d+)\b"
+    )
     commands: list[str] = []
+    failed_checks: list[dict[str, int | str]] = []
     contexts: list[str] = []
+    marker_indexes: set[int] = set()
+
+    # Structured verification failures are more useful than generic Packer errors.
+    # Capture them first so earlier non-fatal messages cannot consume the context limit.
     for index, line in enumerate(lines):
-        if not error_pattern.search(line):
+        check_match = check_failure_pattern.search(line)
+        if check_match:
+            marker_indexes.add(index)
+            failed_check: dict[str, int | str] = {
+                "check_id": check_match.group("check_id"),
+                "exit_code": int(check_match.group("exit_code")),
+            }
+            if failed_check not in failed_checks:
+                failed_checks.append(failed_check)
+            start = max(0, index - 3)
+            end = min(len(lines), index + 2)
+            context = "\n".join(lines[start:end])
+            if context not in contexts and len(contexts) < 10:
+                contexts.append(context)
+
+    for index, line in enumerate(lines):
+        if index in marker_indexes or not error_pattern.search(line):
             continue
         start = max(0, index - 3)
         end = min(len(lines), index + 2)
         context = "\n".join(lines[start:end])
-        if context not in contexts:
+        if context not in contexts and len(contexts) < 10:
             contexts.append(context)
         for candidate in reversed(lines[max(0, index - 12) : index + 1]):
             match = trace_pattern.match(candidate)
@@ -1407,6 +1442,4 @@ def _extract_build_failures(log: str) -> tuple[list[str], list[str]]:
                 if command not in commands:
                     commands.append(command)
                 break
-        if len(contexts) >= 10:
-            break
-    return commands[:10], contexts[:10]
+    return commands[:10], failed_checks[:10], contexts[:10]

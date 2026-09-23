@@ -30,7 +30,11 @@ from ai_server.models import (
 )
 from ai_server.repository import SessionNotFoundError
 from ai_server.services.errors import ScenarioInputRevisionRequiredError
-from ai_server.services.workflow import MachineWorkflow, _source_review_scope_invalidation_reasons
+from ai_server.services.workflow import (
+    MachineWorkflow,
+    _extract_build_failures,
+    _source_review_scope_invalidation_reasons,
+)
 
 
 class FakeAsyncStream(httpx.AsyncByteStream):
@@ -167,6 +171,24 @@ def test_distribution_artifact_does_not_fallback_to_qcow2() -> None:
     )
     with pytest.raises(RuntimeError, match="without a zip"):
         MachineWorkflow._distribution_artifact([old_artifact])
+
+
+def test_extract_build_failures_prioritizes_structured_check_marker() -> None:
+    log = "\n".join(
+        [f"non-fatal error {index}" for index in range(12)]
+        + [
+            "SLSG_CHECK_START health_checks[4]",
+            "service returned an unexpected state",
+            "SLSG_CHECK_FAIL health_checks[4] exit=3",
+            "packer exited with non-zero status",
+        ]
+    )
+
+    _commands, failed_checks, contexts = _extract_build_failures(log)
+
+    assert failed_checks == [{"check_id": "health_checks[4]", "exit_code": 3}]
+    assert "SLSG_CHECK_START health_checks[4]" in contexts[0]
+    assert "SLSG_CHECK_FAIL health_checks[4] exit=3" in contexts[0]
 
 
 @pytest.fixture
@@ -864,7 +886,16 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     state = await create_failed_build_state(app)
     assert state.scenario is not None
     authoritative_graph = state.scenario.attack_graph
-    fake_build.packer_log_response = "+ command before failure\nerror detail"
+    fake_build.packer_log_response = (
+        "irrelevant package installation noise\n"
+        "another unrelated build line\n"
+        "one more unrelated build line\n"
+        "unrelated setup completed\n"
+        "+ command before failure\n"
+        "SLSG_CHECK_START acceptance_tests[3]\n"
+        "error detail\n"
+        "SLSG_CHECK_FAIL acceptance_tests[3] exit=7"
+    )
 
     async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
         rewritten_graph = scenario.attack_graph.model_copy(
@@ -920,7 +951,12 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert "contents/README.md" in repair_report
     assert "command before failure" in repair_report
     assert "error detail" in repair_report
-    assert '"failed_commands"' in repair_report
+    assert "irrelevant package installation noise" not in repair_report
+    assert '"packer_log_tail"' not in repair_report
+    assert '"failed_commands"' not in repair_report
+    assert '"failed_checks"' in repair_report
+    assert '"check_id": "acceptance_tests[3]"' in repair_report
+    assert '"exit_code": 7' in repair_report
     assert '"failure_log_context"' in repair_report
     assert '"scenario_sync_status": "approved"' in repair_report
 

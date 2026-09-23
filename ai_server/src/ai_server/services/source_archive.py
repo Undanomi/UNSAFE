@@ -111,18 +111,37 @@ class SourceArchive:
             return 0
         if not isinstance(manifest, dict):
             return 0
-        commands: list[str] = []
+        commands: list[tuple[str, str]] = []
         for field in ("health_checks", "acceptance_tests"):
             checks = manifest.get(field)
             if not isinstance(checks, list):
                 return 0
-            for check in checks:
+            for index, check in enumerate(checks):
                 command = check.get("command") if isinstance(check, dict) else None
                 if not isinstance(command, str) or not command.strip():
                     return 0
-                commands.append(command)
-        script = "#!/bin/bash\nset -euo pipefail\n" + "".join(
-            f"bash -o pipefail -c {shlex.quote(command)}\n" for command in commands
+                commands.append((f"{field}[{index}]", command))
+        script = """#!/bin/bash
+set -euo pipefail
+
+run_check() {
+    local check_id="$1"
+    local check_command="$2"
+    local status
+
+    printf 'SLSG_CHECK_START %s\n' "$check_id"
+    if bash -o pipefail -c "$check_command"; then
+        printf 'SLSG_CHECK_PASS %s\n' "$check_id"
+    else
+        status=$?
+        printf 'SLSG_CHECK_FAIL %s exit=%s\n' "$check_id" "$status" >&2
+        return "$status"
+    fi
+}
+
+""" + "".join(
+            f"run_check {shlex.quote(check_id)} {shlex.quote(command)}\n"
+            for check_id, command in commands
         )
         destination = candidate_root.joinpath(*VERIFICATION_SCRIPT.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)

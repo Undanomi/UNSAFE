@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -521,10 +522,50 @@ def test_generates_runtime_verification_entrypoint_from_manifest(tmp_path: Path)
         script = archive.read("contents/scripts/verify.sh").decode()
         mode = (archive.getinfo("contents/scripts/verify.sh").external_attr >> 16) & 0o777
     assert "bash -o pipefail -c" in script
+    assert "SLSG_CHECK_START" in script
+    assert "SLSG_CHECK_PASS" in script
+    assert "SLSG_CHECK_FAIL" in script
+    assert "run_check 'health_checks[0]'" in script
+    assert "run_check 'acceptance_tests[0]'" in script
     assert "curl -fsSL http://127.0.0.1/" in script
     assert "runuser -u www-data -- test -r /var/www/html/index.php" in script
     assert "exit 0" not in script
     assert mode == 0o755
+
+
+def test_runtime_verification_logs_check_ids_without_command_text(tmp_path: Path) -> None:
+    candidate_root = tmp_path / "candidate"
+    manifest_path = candidate_root / "contents/scenario_manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "health_checks": [{"command": "true"}],
+                "acceptance_tests": [
+                    {"command": "false # do-not-log-this-secret"},
+                    {"command": "printf should-not-run"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    SourceArchive._write_verification_script(candidate_root)
+    result = subprocess.run(
+        ["bash", str(candidate_root / "contents/scripts/verify.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "SLSG_CHECK_START health_checks[0]" in output
+    assert "SLSG_CHECK_PASS health_checks[0]" in output
+    assert "SLSG_CHECK_START acceptance_tests[0]" in output
+    assert "SLSG_CHECK_FAIL acceptance_tests[0] exit=1" in output
+    assert "acceptance_tests[1]" not in output
+    assert "do-not-log-this-secret" not in output
 
 
 def test_static_validation_does_not_parse_package_manager_commands(tmp_path: Path) -> None:

@@ -417,6 +417,12 @@ class ScenarioRevision(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
 
 
+class ScenarioTextRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
+    summary: str = Field(min_length=1, max_length=4000)
+
+
 class ScenarioGeneration(BaseModel):
     scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)

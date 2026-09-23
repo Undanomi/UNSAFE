@@ -398,6 +398,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "実装と異なる古いパス、権限" in sync_prompt
     assert "正解フラグ値そのもの" in sync_prompt
     assert "scenario_description" in sync_prompt
+    assert "攻撃グラフは参照専用で返却対象に含めない" in sync_prompt
+    assert '"attack_graph":{' not in sync_prompt
     feedback_sync_prompt = scenario_sync_prompt(
         machine,
         scenario,

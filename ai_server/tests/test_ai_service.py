@@ -526,6 +526,60 @@ async def test_vm_source_repair_uses_source_patch_schema() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scenario_sync_keeps_authoritative_graph_and_ignores_returned_copy() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "scenario_description": "Investigate the synchronized machine.",
+                "definition": "# Synchronized scenario",
+                "summary": "Updated implementation details.",
+                # This reproduces the malformed copy that previously aborted sync.
+                "attack_graph": {
+                    "objectives": [],
+                    "steps": [
+                        {
+                            "step_id": "sqli-user-hash",
+                            "title": "Extract a user hash",
+                            "kind": "web_vulnerability",
+                            "phase": "initial_access",
+                            "description": "Use the intended SQL injection.",
+                            "cve_title": "CVE metadata copied onto a non-CVE step",
+                            "cve_description": "This must not be parsed during prose sync.",
+                            "cwe_ids": ["CWE-89"],
+                            "implementation_steps": ["Send the training request."],
+                        }
+                    ],
+                },
+            }
+        )
+
+    machine = MachineInformation(
+        name="Test", visibility="private", theme="Web", difficulty="Easy"
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        scenario_description="Investigate the machine.",
+        definition="# Original scenario",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(files=[SourceFile(path="contents/README.md", content="test")])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        revision = await GeminiGenerator(
+            Settings(gemini_api_key="test-key"), client
+        ).synchronize_scenario(machine, scenario, current)
+
+    assert revision.attack_graph == scenario.attack_graph
+    assert revision.definition == "# Synchronized scenario"
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    assert "attack_graph" not in schema["properties"]
+
+
+@pytest.mark.asyncio
 async def test_vm_source_generation_retries_duplicate_embedded_paths() -> None:
     requests: list[dict] = []
 

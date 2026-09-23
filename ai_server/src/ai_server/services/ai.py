@@ -26,6 +26,7 @@ from ..models import (
     ScenarioGeneration,
     ScenarioReview,
     ScenarioRevision,
+    ScenarioTextRevision,
     SourceFile,
     SourcePatch,
     SourceReview,
@@ -1389,26 +1390,20 @@ JSONのみを返してください:
                 response = await self._generate(
                     prompt,
                     json_output=True,
-                    response_schema=ScenarioRevision,
+                    response_schema=ScenarioTextRevision,
                     max_output_tokens=self.max_output_tokens,
                 )
-                revision = ScenarioRevision.model_validate_json(response)
-                expected_objectives = {
-                    (objective.objective_id, objective.objective_type)
-                    for objective in scenario.attack_graph.objectives
-                }
-                revised_objectives = {
-                    (objective.objective_id, objective.objective_type)
-                    for objective in revision.attack_graph.objectives
-                }
-                if revised_objectives != expected_objectives:
-                    raise ValueError("scenario revision must preserve flag objectives")
+                text_revision = ScenarioTextRevision.model_validate_json(response)
+                revision = ScenarioRevision(
+                    scenario_description=text_revision.scenario_description,
+                    definition=text_revision.definition,
+                    attack_graph=scenario.attack_graph,
+                    summary=text_revision.summary,
+                )
                 revision_text = (
                     revision.scenario_description
                     + "\n"
                     + revision.definition
-                    + "\n"
-                    + revision.attack_graph.model_dump_json()
                 ).casefold()
                 for flag in (scenario.user_flag, scenario.system_flag):
                     if flag and flag.casefold() in revision_text:
