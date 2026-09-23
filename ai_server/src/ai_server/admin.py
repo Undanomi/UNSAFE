@@ -54,6 +54,13 @@ RUNTIME_LIMITS = (
         "Maximum output tokens requested from Gemini.",
     ),
     RuntimeLimit(
+        "openai_max_output_tokens",
+        "OPENAI_MAX_OUTPUT_TOKENS",
+        "OpenAI output tokens",
+        "1,024–128,000",
+        "Maximum reasoning and visible output tokens requested from OpenAI.",
+    ),
+    RuntimeLimit(
         "generation_retries",
         "GENERATION_RETRIES",
         "AI structured-output retries",

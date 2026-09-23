@@ -110,6 +110,21 @@ def _gemini_json_schema(value):
     return schema
 
 
+def _openai_json_schema(value):
+    """Convert Pydantic's schema to the strict subset accepted by Responses."""
+    if isinstance(value, list):
+        return [_openai_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    schema = {key: _openai_json_schema(item) for key, item in value.items() if key != "default"}
+    properties = schema.get("properties")
+    if schema.get("type") == "object" and isinstance(properties, dict):
+        schema["required"] = list(properties)
+        schema["additionalProperties"] = False
+    return schema
+
+
 async def _record_scenario_draft(
     observer: Callable[[], Awaitable[None]] | None,
     scenario: ScenarioDraft,
@@ -236,10 +251,19 @@ class AIGenerator(Protocol):
     ) -> SourceReview: ...
 
 
-class GeminiGenerator:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+class _BaseGenerator:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient,
+        *,
+        model: str,
+        max_output_tokens: int,
+    ) -> None:
         self.settings = settings
         self.client = client
+        self.model = model
+        self.max_output_tokens = max_output_tokens
 
     async def _generate(
         self,
@@ -249,50 +273,7 @@ class GeminiGenerator:
         response_schema: type[BaseModel] | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
-        if not self.settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is required when AI_PROVIDER=gemini")
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.settings.gemini_model}:generateContent"
-        )
-        generation_config: dict[str, object] = {}
-        if json_output or response_schema is not None:
-            generation_config["responseMimeType"] = "application/json"
-        if response_schema is not None:
-            generation_config["responseJsonSchema"] = _gemini_json_schema(
-                response_schema.model_json_schema()
-            )
-        if max_output_tokens is not None:
-            generation_config["maxOutputTokens"] = max_output_tokens
-        response = await self.client.post(
-            url,
-            headers={"x-goog-api-key": self.settings.gemini_api_key or ""},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": generation_config,
-            },
-        )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            detail = response.text.strip()[:2000]
-            message = f"{error}; Gemini response: {detail}" if detail else str(error)
-            raise httpx.HTTPStatusError(
-                message,
-                request=error.request,
-                response=error.response,
-            ) from error
-        candidates = response.json().get("candidates", [])
-        if not candidates:
-            raise RuntimeError("Gemini returned no candidates")
-        finish_reason = candidates[0].get("finishReason")
-        if finish_reason and finish_reason != "STOP":
-            raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
-        parts = candidates[0].get("content", {}).get("parts", [])
-        generated_text = "".join(part.get("text", "") for part in parts).strip()
-        if not generated_text:
-            raise RuntimeError("Gemini returned an empty response")
-        return generated_text
+        raise NotImplementedError
 
     async def _draft_attack_graph(
         self,
@@ -309,7 +290,7 @@ class GeminiGenerator:
             ),
             json_output=True,
             response_schema=AttackGraph,
-            max_output_tokens=self.settings.gemini_max_output_tokens,
+            max_output_tokens=self.max_output_tokens,
         )
         try:
             value = json.loads(response)
@@ -369,7 +350,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=AttackGraph,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 value = json.loads(response)
                 raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
@@ -437,7 +418,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioGeneration,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 compacted = ScenarioGeneration.model_validate_json(compacted_response)
                 if len(compacted.definition) > SCENARIO_DEFINITION_TARGET_CHARS:
@@ -486,7 +467,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioCorrection,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 last_attempted_correction = response
                 correction = ScenarioCorrection.model_validate_json(response)
@@ -1010,7 +991,7 @@ JSONのみを返してください:
                         ),
                         json_output=True,
                         response_schema=ScenarioGeneration,
-                        max_output_tokens=self.settings.gemini_max_output_tokens,
+                        max_output_tokens=self.max_output_tokens,
                     )
                     try:
                         generated = await self._parse_or_compact_scenario_generation(
@@ -1134,7 +1115,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioReview,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 return ScenarioReview.model_validate_json(response)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
@@ -1173,7 +1154,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=GeneratedSource,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 generated = GeneratedSource.model_validate_json(response)
                 _validate_generated_file_payload(generated.files)
@@ -1199,7 +1180,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=GuidancePlan,
-                    max_output_tokens=min(self.settings.gemini_max_output_tokens, 4096),
+                    max_output_tokens=min(self.max_output_tokens, 4096),
                 )
                 guidance = GuidancePlan.model_validate_json(response)
                 serialized = guidance.model_dump_json().casefold()
@@ -1254,7 +1235,7 @@ JSONのみを返してください:
                     ),
                     json_output=True,
                     response_schema=SourcePatch,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 patch = SourcePatch.model_validate_json(response)
                 _validate_generated_file_payload(patch.files)
@@ -1284,7 +1265,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioRevision,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 revision = ScenarioRevision.model_validate_json(response)
                 expected_objectives = {
@@ -1337,13 +1318,155 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=SourceReview,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 return SourceReview.model_validate_json(response)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review VM source: {last_error}")
+
+
+class GeminiGenerator(_BaseGenerator):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+        super().__init__(
+            settings,
+            client,
+            model=settings.gemini_model,
+            max_output_tokens=settings.gemini_max_output_tokens,
+        )
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        json_output: bool = False,
+        response_schema: type[BaseModel] | None = None,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        if not self.settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is required when AI_PROVIDER=gemini")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        generation_config: dict[str, object] = {}
+        if json_output or response_schema is not None:
+            generation_config["responseMimeType"] = "application/json"
+        if response_schema is not None:
+            generation_config["responseJsonSchema"] = _gemini_json_schema(
+                response_schema.model_json_schema()
+            )
+        if max_output_tokens is not None:
+            generation_config["maxOutputTokens"] = max_output_tokens
+        response = await self.client.post(
+            url,
+            headers={"x-goog-api-key": self.settings.gemini_api_key or ""},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": generation_config,
+            },
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            detail = response.text.strip()[:2000]
+            message = f"{error}; Gemini response: {detail}" if detail else str(error)
+            raise httpx.HTTPStatusError(
+                message,
+                request=error.request,
+                response=error.response,
+            ) from error
+        candidates = response.json().get("candidates", [])
+        if not candidates:
+            raise RuntimeError("Gemini returned no candidates")
+        finish_reason = candidates[0].get("finishReason")
+        if finish_reason and finish_reason != "STOP":
+            raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        generated_text = "".join(part.get("text", "") for part in parts).strip()
+        if not generated_text:
+            raise RuntimeError("Gemini returned an empty response")
+        return generated_text
+
+
+class OpenAIGenerator(_BaseGenerator):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+        super().__init__(
+            settings,
+            client,
+            model=settings.openai_model,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        json_output: bool = False,
+        response_schema: type[BaseModel] | None = None,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        if self.settings.openai_api_key is None:
+            raise ValueError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
+
+        payload: dict[str, object] = {
+            "model": self.model,
+            "input": prompt,
+            "reasoning": {"effort": self.settings.openai_reasoning_effort},
+            "store": False,
+        }
+        if max_output_tokens is not None:
+            payload["max_output_tokens"] = max_output_tokens
+        if response_schema is not None:
+            payload["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": response_schema.__name__.lower()[:64],
+                    "schema": _openai_json_schema(response_schema.model_json_schema()),
+                    "strict": True,
+                }
+            }
+        elif json_output:
+            payload["text"] = {"format": {"type": "json_object"}}
+
+        response = await self.client.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": (f"Bearer {self.settings.openai_api_key.get_secret_value()}"),
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            detail = response.text.strip()[:2000]
+            message = f"{error}; OpenAI response: {detail}" if detail else str(error)
+            raise httpx.HTTPStatusError(
+                message,
+                request=error.request,
+                response=error.response,
+            ) from error
+
+        body = response.json()
+        status = body.get("status")
+        if status != "completed":
+            detail = body.get("incomplete_details") or body.get("error") or status
+            raise RuntimeError(f"OpenAI generation did not complete: {detail}")
+
+        generated_parts: list[str] = []
+        for output in body.get("output", []):
+            if output.get("type") != "message":
+                continue
+            for content in output.get("content", []):
+                if content.get("type") == "refusal":
+                    raise RuntimeError(
+                        f"OpenAI refused the request: {content.get('refusal', 'unknown reason')}"
+                    )
+                if content.get("type") == "output_text":
+                    generated_parts.append(content.get("text", ""))
+        generated_text = "".join(generated_parts).strip()
+        if not generated_text:
+            raise RuntimeError("OpenAI returned an empty response")
+        return generated_text
 
 
 def _validate_generated_file_payload(files: list[SourceFile]) -> None:

@@ -17,7 +17,7 @@ from ai_server.models import (
     SourceFile,
     SourceReview,
 )
-from ai_server.services.ai import CVEVerification, GeminiGenerator
+from ai_server.services.ai import CVEVerification, GeminiGenerator, OpenAIGenerator
 from ai_server.services.errors import ScenarioInputRevisionRequiredError, exception_detail
 
 
@@ -64,6 +64,64 @@ def verified_cve_graph() -> AttackGraph:
             )
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_uses_responses_api_and_structured_output() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return openai_response(
+            {"approved": True, "summary": "The source is consistent.", "findings": []}
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        openai_reasoning_effort="low",
+        openai_max_output_tokens=32000,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await OpenAIGenerator(settings, client)._generate(
+            "Return the source review as JSON.",
+            json_output=True,
+            response_schema=SourceReview,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+
+    assert SourceReview.model_validate_json(review).approved is True
+    request = requests[0]
+    assert request.url == "https://api.openai.com/v1/responses"
+    assert request.headers["Authorization"] == "Bearer test-openai-key"
+    payload = json.loads(request.content)
+    assert payload["model"] == "gpt-5.6-luna"
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["max_output_tokens"] == 32000
+    assert payload["store"] is False
+    response_format = payload["text"]["format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["strict"] is True
+    assert response_format["schema"]["additionalProperties"] is False
+    assert response_format["schema"]["required"] == ["approved", "summary", "findings"]
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_reports_incomplete_response() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [],
+            },
+        )
+
+    settings = Settings(ai_provider="openai", openai_api_key="test-openai-key")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError, match="max_output_tokens"):
+            await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
 
 
 @pytest.mark.asyncio
@@ -1853,5 +1911,22 @@ def gemini_response(value) -> httpx.Response:
                     "content": {"parts": [{"text": generated_text}]},
                 }
             ]
+        },
+    )
+
+
+def openai_response(value) -> httpx.Response:
+    generated_text = value if isinstance(value, str) else json.dumps(value)
+    return httpx.Response(
+        200,
+        json={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": generated_text}],
+                }
+            ],
         },
     )
