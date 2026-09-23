@@ -36,7 +36,7 @@
 ## DB 契約と取得責務
 
 - セッション Cookie を検証した利用者 ID をサーバーの一覧サービスへ渡す。クライアントから所有者 ID を受け付けない。
-- PostgreSQLの `machines` は `status in [created, building, ready, failed, preparing]` かつ、通常は `published = true` または自分が作成したものを取得する。「自分が作成したマシンのみ」を指定した場合は自作だけを取得する。
+- PostgreSQLの `machines` は `status in [created, building, ready, failed, cancelled, preparing]` かつ、通常は `published = true` または自分が作成したものを取得する。「自分が作成したマシンのみ」を指定した場合は自作だけを取得する。
 - `machines.id` を正とし、`status = deleted` はDBクエリで除外する。
 - 一覧取得では `name`, `summary`, `description`, `tags`, `level`, `created_at`, `created_by`, `published`, `status` だけを取得する。フラグ正解値・成果物パス・AI セッション ID は読み出さない。
 - 回答済みは `machine_solutions` のユーザーIDとマシンIDの組で判定する。いずれか 1 つのフラグに正解した時点で回答済みとし、不正解や空回答は保存しない。
