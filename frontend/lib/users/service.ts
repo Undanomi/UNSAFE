@@ -2,8 +2,8 @@ import "server-only"
 
 import { queryDatabase } from "@/lib/database/client"
 import { buildInitialUserDocument, type UserIdentity } from "@/lib/users/user-document"
-import type { UserProfile } from "@/stores/profile"
 import type { UserRecord } from "@/types/postgres"
+import type { UserProfile } from "@/types/profile"
 
 export type UserProfileUpdate = Partial<
   Pick<UserRecord, "bio" | "icon_url" | "name" | "profile_completed">

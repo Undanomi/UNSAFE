@@ -6,7 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
-import type { ProfileMachine, UserProfile } from "@/stores/profile"
+import type { ProfileMachine, UserProfile } from "@/types/profile"
 
 type ProfileEditorProps = {
   profile: UserProfile

@@ -9,7 +9,7 @@ import {
   retryMachineBuildService,
   verifyMachineFlagService,
 } from "@/lib/machines/service"
-import type { MachineBuildState, MachineGuidance } from "@/stores/machine-detail"
+import type { MachineBuildState, MachineGuidance } from "@/types/machine-detail"
 
 export type GenerateMachineGuidanceResult =
   | { success: true; guidance: MachineGuidance }
