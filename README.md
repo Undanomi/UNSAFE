@@ -1,6 +1,6 @@
 # SLSG
 
-[![デモサイト Live](https://img.shields.io/badge/%E5%85%AC%E9%96%8B%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
+[![デモサイト Live](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
 
 <p align="center">
   <a href="https://www.youtube.com">
