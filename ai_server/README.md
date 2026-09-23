@@ -24,6 +24,7 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 │   ├── scenario_manifest.json
 │   ├── build.sh
 │   ├── scripts/provision.sh
+│   ├── scripts/verify.sh      # Packerがプロビジョニング後に必ず実行
 │   ├── app/                 # シナリオに応じて生成
 │   └── config/              # シナリオに応じて生成
 ├── generation_manifest.json
@@ -35,11 +36,11 @@ build_server へは、この生成ルートを `source.zip` として送りま�
 ai_server ホスト上で実行することはありません。
 
 Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
-入口へ到達することを必須とします。Packer中の実検査とmanifestの双方にアプリ固有の肯定検査が
-あること、Web実行ユーザーによるファイル読み取り・親ディレクトリ探索と所有者・modeを検査する
-ことを静的検証します。ディレクトリリスティングは静的validationで一律禁止せず、攻撃グラフで
-意図した攻略要素かどうかを生成・レビュー時に判断します。
-シェルとCGIは実行可能modeを必須とし、通常のPHP-FPM用ソースは読み取り権限を検査します。
+入口へ到達することを必須とします。HTTP応答、アプリ固有の肯定検査、Web実行ユーザーの実効権限は、
+ソース文字列から推測せず、Packerが`contents/scripts/verify.sh`を実行した結果と敵対的AIレビューで
+確認します。フラグの配置・認証・誤った値の拒否も同じ実行検査で確認します。
+ディレクトリリスティングも静的validationで一律禁止せず、攻撃グラフで意図した攻略要素かどうかを
+生成・レビュー時に判断します。
 
 シナリオは、攻略のネタバレを避けたプレイヤー向けの `scenario_description`、実装者向けの
 `scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）を保存します。
@@ -81,7 +82,8 @@ CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定�
 前提ステップを飛ばす近道、実装可能性、acceptance test計画に加え、実行主体、owner/group/mode、
 親ディレクトリの探索権限、ACL・sudo・setuid・capability、flagの攻略前後の可読性を重点確認します。
 不合格所見は次の生成試行へ渡され、レビューを通過したシナリオだけが保存されます。
-生成ソースは構文・パーミッションなどの決定的validationに加え、攻撃グラフと実コードを比較する
+生成ソースは必須ファイル、JSON Schema、パス安全性、XML構文などの決定的validationに加え、
+攻撃グラフと実コードを比較する
 敵対的AIレビューを通過する必要があります。意図した手法を使わない近道、通常機能による成果物の
 先出し、単なるエラーや接続成功だけのexploit判定、前提ステップを飛ばせる攻撃経路は修復対象です。
 この意味レビューの不合格と再修復はbuild_serverへ投入されないため、`build_repair_attempts`を増やしません。
@@ -112,6 +114,14 @@ ai_server と専用 PostgreSQL だけを起動する場合:
 cp ai_server/.env.example ai_server/.env
 docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build
 ```
+
+`ai_server`イメージのビルド時に、Kali Linux公式リポジトリの固定コミットから
+`rockyou.txt.gz`を取得し、SHA-256を検証して展開します。ハッシュクラックを含む場合もGeminiへ
+実際のパスワードは渡さず、ソース内では`__SLSG_ROCKYOU_PASSWORD__`だけを使用させます。最初の
+ソース生成後に、ai_serverが`ROCKYOU_MIN_LINE`〜`ROCKYOU_MAX_LINE`からランダムな平文を選び、
+アーカイブ作成時にプレースホルダーを置換します。既定の範囲は、ハッシュ方式とwork factorを調整して
+一般的な開発用PCで約2〜3分の辞書探索にするための目安です。固定長の16進文字列をパスワードハッシュ
+らしさだけで拒否する検査は行わないため、パッケージや配布物のchecksumを誤検知しません。
 
 build_server を含むバックエンドサービスをリポジトリルートから起動する場合:
 

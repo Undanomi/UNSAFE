@@ -29,6 +29,7 @@ from ..models import (
     SourceReview,
 )
 from ..prompts import (
+    attack_graph_json_for_ai,
     attack_graph_prompt,
     attack_graph_revision_prompt,
     code_prompt,
@@ -264,13 +265,16 @@ class GeminiGenerator:
             )
         if max_output_tokens is not None:
             generation_config["maxOutputTokens"] = max_output_tokens
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        request_body: dict[str, object] = {
+            "contents": contents,
+            "generationConfig": generation_config,
+        }
+
         response = await self.client.post(
             url,
             headers={"x-goog-api-key": self.settings.gemini_api_key or ""},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": generation_config,
-            },
+            json=request_body,
         )
         try:
             response.raise_for_status()
@@ -289,6 +293,8 @@ class GeminiGenerator:
         if finish_reason and finish_reason != "STOP":
             raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
         parts = candidates[0].get("content", {}).get("parts", [])
+        if any("functionCall" in part for part in parts):
+            raise RuntimeError("Gemini requested an unavailable function tool")
         generated_text = "".join(part.get("text", "") for part in parts).strip()
         if not generated_text:
             raise RuntimeError("Gemini returned an empty response")
@@ -347,6 +353,23 @@ class GeminiGenerator:
             ):
                 for field_name, default in cve_only_defaults.items():
                     step[field_name] = default.copy() if isinstance(default, list) else default
+            if isinstance(step, dict) and step.get("kind") != "password_cracking":
+                step["password_cracking"] = None
+        GeminiGenerator._clear_password_selections(raw_graph)
+        return raw_graph
+
+    @staticmethod
+    def _clear_password_selections(raw_graph):
+        if not isinstance(raw_graph, dict) or not isinstance(raw_graph.get("steps"), list):
+            return raw_graph
+        for step in raw_graph["steps"]:
+            if not isinstance(step, dict):
+                continue
+            spec = step.get("password_cracking")
+            if isinstance(spec, dict):
+                spec["password"] = None
+                spec["line_number"] = None
+                spec["search_space_lines"] = None
         return raw_graph
 
     async def _revise_attack_graph(
@@ -373,6 +396,7 @@ class GeminiGenerator:
                 )
                 value = json.loads(response)
                 raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
+                raw_graph = self._clear_password_selections(raw_graph)
                 last_attempted_revision = raw_graph
                 try:
                     revised = AttackGraph.model_validate(raw_graph)
@@ -1004,7 +1028,7 @@ JSONのみを返してください:
                     response = await self._generate(
                         scenario_prompt(
                             machine,
-                            graph.model_dump_json(indent=2),
+                            attack_graph_json_for_ai(graph),
                             review_feedback=rejected,
                             skill_context=scenario_skill_context,
                         ),
@@ -1136,11 +1160,61 @@ JSONのみを返してください:
                     response_schema=ScenarioReview,
                     max_output_tokens=self.settings.gemini_max_output_tokens,
                 )
-                return ScenarioReview.model_validate_json(response)
+                review = ScenarioReview.model_validate_json(response)
+                self._validate_scenario_review(review, scenario, review_context)
+                return review
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review scenario: {last_error}")
+
+    @staticmethod
+    def _validate_scenario_review(
+        review: ScenarioReview,
+        scenario: ScenarioDraft,
+        review_context: str,
+    ) -> None:
+        step_by_id = {step.step_id: step for step in scenario.attack_graph.steps}
+        for finding in review.findings:
+            if finding.step_id is not None and finding.step_id not in step_by_id:
+                raise ValueError(
+                    f"scenario review references unknown step_id: {finding.step_id}"
+                )
+            if (
+                finding.repair_target in {"attack_graph", "attack_graph_regeneration"}
+                and finding.step_id is None
+            ):
+                raise ValueError(
+                    f"{finding.repair_target} finding requires a known step_id"
+                )
+            if (
+                finding.repair_target == "attack_graph_regeneration"
+                and finding.category not in {"broken_chain", "unsupported_assumption"}
+            ):
+                raise ValueError(
+                    "attack_graph_regeneration is only valid for an independently broken "
+                    "dependency graph or an unsupported graph assumption; prose mismatches "
+                    "must target scenario_text"
+                )
+            if finding.repair_target == "source_code" and review_context != "source_sync":
+                raise ValueError(
+                    "source_code findings are only valid during source_sync review"
+                )
+            if finding.step_id is None:
+                continue
+            step = step_by_id[finding.step_id]
+            cve_only = {
+                "installation_artifact",
+                "artifact_source",
+                "source_build_reason",
+                "cve_title",
+                "cve_description",
+                "cwe_ids",
+            }
+            if step.kind != "cve" and cve_only.intersection(finding.repair_fields):
+                raise ValueError(
+                    f"scenario review requests CVE-only fields for non-CVE step {step.step_id}"
+                )
 
     @staticmethod
     def _validate_skill_cves(

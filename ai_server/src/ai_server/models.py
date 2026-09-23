@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 USER_FLAG_VALUE_PATTERN = re.compile(r"^flag\{user_[0-9a-f]{32}\}$")
 SYSTEM_FLAG_VALUE_PATTERN = re.compile(r"^flag\{system_[0-9a-f]{32}\}$")
 SCENARIO_DEFINITION_MAX_CHARS = 12_000
+ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
 
 
 def utcnow() -> datetime:
@@ -107,6 +108,44 @@ class AttackObjective(BaseModel):
     description: str = Field(min_length=1, max_length=4000)
 
 
+class PasswordCrackingSpec(BaseModel):
+    wordlist: Literal["rockyou.txt"]
+    password: str | None = Field(
+        default=None, min_length=8, max_length=32, pattern=r"^[A-Za-z0-9]+$"
+    )
+    line_number: int | None = Field(default=None, ge=1)
+    search_space_lines: int | None = Field(default=None, ge=1)
+    hash_algorithm: str = Field(min_length=1, max_length=100)
+    hash_runtime: str = Field(min_length=1, max_length=100)
+    hash_api: str = Field(min_length=1, max_length=200)
+    hashcat_mode: int | None = Field(default=None, ge=0)
+    john_format: str | None = Field(default=None, min_length=1, max_length=100)
+    target_crack_seconds: int = Field(ge=120, le=180)
+
+    @model_validator(mode="after")
+    def validate_cracking_parameters(self) -> PasswordCrackingSpec:
+        selection = (self.password, self.line_number, self.search_space_lines)
+        if any(value is None for value in selection) and any(
+            value is not None for value in selection
+        ):
+            raise ValueError(
+                "rockyou selection fields must be all unset or all populated"
+            )
+        if (
+            self.line_number is not None
+            and self.search_space_lines is not None
+            and self.line_number > self.search_space_lines
+        ):
+            raise ValueError("password line must be within the declared search space")
+        if self.hashcat_mode is None and self.john_format is None:
+            raise ValueError("password cracking requires a Hashcat mode or John format")
+        return self
+
+    @property
+    def selection_bound(self) -> bool:
+        return self.password is not None
+
+
 class AttackStep(BaseModel):
     step_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     title: str = Field(min_length=1, max_length=200)
@@ -138,6 +177,7 @@ class AttackStep(BaseModel):
     installation_method: str | None = Field(default=None, max_length=500)
     implementation_steps: list[str] = Field(min_length=1, max_length=50)
     references: list[str] = Field(default_factory=list, max_length=30)
+    password_cracking: PasswordCrackingSpec | None = None
 
     @model_validator(mode="after")
     def validate_cve_fields(self) -> AttackStep:
@@ -153,6 +193,12 @@ class AttackStep(BaseModel):
             raise ValueError("CVE installation evidence is only valid when kind is cve")
         if self.installation_artifact == "source_build" and not self.source_build_reason:
             raise ValueError("source-built CVE software requires a source_build_reason")
+        if self.kind == "password_cracking" and self.password_cracking is None:
+            raise ValueError("a password_cracking step requires password_cracking metadata")
+        if self.kind != "password_cracking" and self.password_cracking is not None:
+            raise ValueError(
+                "password_cracking metadata is only valid when kind is password_cracking"
+            )
         return self
 
 
@@ -297,6 +343,36 @@ class ScenarioReviewFinding(BaseModel):
     repair_fields: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def repair_fields_match_target(self) -> ScenarioReviewFinding:
+        allowed_graph_fields = {"title", "description", "implementation_steps"}
+        allowed_regeneration_fields = {
+            "step_id",
+            "kind",
+            "phase",
+            "requires",
+            "achieves",
+            "cve_id",
+            "password_cracking",
+        }
+        fields = set(self.repair_fields)
+        if self.repair_target == "attack_graph":
+            if not fields or not fields <= allowed_graph_fields:
+                raise ValueError(
+                    "attack_graph repair_fields must only contain title, description, "
+                    "or implementation_steps"
+                )
+        elif self.repair_target == "attack_graph_regeneration":
+            if not fields <= allowed_regeneration_fields:
+                raise ValueError(
+                    "attack_graph_regeneration repair_fields contain non-structural fields"
+                )
+        elif fields:
+            raise ValueError(
+                f"repair_fields must be empty for repair_target={self.repair_target}"
+            )
+        return self
 
 
 class ScenarioReview(BaseModel):

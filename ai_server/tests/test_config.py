@@ -42,3 +42,8 @@ def test_admin_settings_do_not_require_build_server_token(
     )
 
     assert settings.sqladmin_username == "admin-user"
+
+
+def test_settings_reject_invalid_rockyou_window() -> None:
+    with pytest.raises(ValidationError, match="ROCKYOU_MIN_LINE"):
+        Settings(rockyou_min_line=200, rockyou_max_line=100, _env_file=None)
