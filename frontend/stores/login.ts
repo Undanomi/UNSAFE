@@ -1,5 +1,5 @@
 export const LOGIN_COPY = {
-  appName: "SLSG",
+  appName: "UNSAFE",
   auth: {
     description: "Google アカウントでログインして利用を開始できます。",
     googleLogin: "Google でログイン",

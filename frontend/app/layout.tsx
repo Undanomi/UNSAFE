@@ -2,7 +2,7 @@ import type { Metadata } from "next"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "SLSG | Security Learning Scenario Generator",
+  title: "UNSAFE",
   description: "セキュリティ学習用のシナリオ作成ジェネレーター",
 }
 

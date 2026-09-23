@@ -20,7 +20,7 @@ export default async function UserPage({ params }: UserPageProps) {
 
   const profile = await getUserProfileService(authenticatedUser.uid, userId)
   return (
-    <AppShell>
+    <AppShell artworkVariant="machines" layoutVariant="profile">
       {profile ? (
         <ProfileEditor canEdit={false} key={profile.id} profile={profile} />
       ) : (

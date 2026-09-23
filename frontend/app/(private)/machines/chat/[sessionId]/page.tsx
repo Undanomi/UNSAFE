@@ -20,7 +20,7 @@ export default async function ChatSessionPage({ params }: ChatSessionPageProps) 
   const session = await getChatSessionPageService(user.uid, sessionId)
 
   return (
-    <AppShell contentClassName="py-9 pb-14 max-lg:py-8">
+    <AppShell artworkVariant="machines" layoutVariant="chat">
       {session ? <ChatWorkspace key={session.id} session={session} /> : <MissingChatSession />}
     </AppShell>
   )

@@ -1,6 +1,11 @@
-import { ArrowLeft, ShieldCheck } from "lucide-react"
+"use client"
+
+import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import type { ReactNode } from "react"
+import { useEffect, useState } from "react"
+import { DesignArtwork, MachineListHud } from "@/components/design-artwork"
+import { SlsgBrand } from "@/components/slsg-brand"
 
 type PrivacySection = {
   title: string
@@ -304,51 +309,192 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
   },
 ]
 
-export function PrivacyPolicy() {
+const PRIVACY_TOC_LABELS = [
+  "取得する情報",
+  "利用目的",
+  "Googleユーザーデータ",
+  "第三者への提供",
+  "保存と安全管理",
+  "連携解除",
+  "確認・修正・削除",
+  "Cookie",
+  "ポリシーの変更",
+  "お問い合わせ",
+]
+
+function sectionId(index: number) {
+  return `privacy-section-${index + 1}`
+}
+
+function sectionTitle(title: string) {
+  return title.replace(/^\d+\.\s*/, "")
+}
+
+function PrivacySectionIndex({ index }: { index: number }) {
   return (
-    <main className="min-h-screen bg-[#151513] px-5 py-8 text-[#e7e5df] sm:px-8 sm:py-12">
-      <div className="mx-auto max-w-3xl">
-        <Link
-          className="inline-flex items-center gap-2 text-[0.86rem] font-bold text-[#bdbbb3] transition hover:text-white"
-          href="/login"
-        >
-          <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          ログインへ戻る
-        </Link>
+    <span aria-hidden="true" className="slsg-privacy-section-index">
+      <svg fill="none" viewBox="0 0 92 100">
+        <title>セクション{index}</title>
+        <path className="slsg-privacy-section-index-halo" d="M46 2 85 25v50L46 98 7 75V25Z" />
+        <path className="slsg-privacy-section-index-frame" d="M46 4 83 26v48L46 96 9 74V26Z" />
+      </svg>
+      <strong>{index}</strong>
+    </span>
+  )
+}
 
-        <article className="mt-14">
-          <div className="flex items-start gap-4 border-b border-[#3a3934] pb-9">
-            <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-[#4b4a43] bg-[#20201e] text-[#e7e5df]">
-              <ShieldCheck aria-hidden="true" size={23} strokeWidth={1.8} />
-            </span>
-            <div>
-              <p className="text-[0.78rem] font-bold tracking-[0.08em] text-[#aaa89f]">SLSG</p>
-              <h1 className="mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02] font-semibold tracking-[-0.05em]">
-                プライバシーポリシー
-              </h1>
-              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月23日</p>
-            </div>
-          </div>
+function PrivacyNetworkArtwork() {
+  return (
+    <svg aria-hidden="true" className="slsg-privacy-network-art" fill="none" viewBox="0 0 460 300">
+      <defs>
+        <linearGradient id="privacy-network-steel" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stopColor="#a4b2c7" stopOpacity="0.7" />
+          <stop offset="0.5" stopColor="#667692" stopOpacity="0.62" />
+          <stop offset="1" stopColor="#28364f" stopOpacity="0.7" />
+        </linearGradient>
+        <linearGradient id="privacy-network-panel" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stopColor="#486078" />
+          <stop offset="1" stopColor="#1b2a42" />
+        </linearGradient>
+      </defs>
+      <g stroke="#667d9b" strokeOpacity="0.38" strokeWidth="1.4">
+        <path d="m96 205 134-75 137 77M96 205l134 74 137-72M230 130v149" />
+        <path d="m96 205 62 34m209-32-62 34" />
+      </g>
+      <g transform="translate(178 25)">
+        <path d="m0 35 52-30 58 32-54 32Z" fill="url(#privacy-network-steel)" />
+        <path d="m0 35 56 34v104L0 139Z" fill="url(#privacy-network-panel)" />
+        <path d="m56 69 54-32v101l-54 35Z" fill="#263750" />
+        <g stroke="#6c87a1" strokeOpacity="0.7">
+          <path d="m12 57 32 19v12L12 69Zm0 29 32 19v12l-32-19Zm0 29 32 19v12l-32-19Z" />
+          <path d="m68 78 31-18m-31 40 31-18m-31 40 31-18" />
+        </g>
+      </g>
+      {[
+        { x: 38, y: 158 },
+        { x: 316, y: 158 },
+      ].map(({ x, y }) => (
+        <g key={`${x}-${y}`} transform={`translate(${x} ${y})`}>
+          <path d="m0 28 39-23 47 25-42 25Z" fill="url(#privacy-network-steel)" />
+          <path d="m0 28 44 27v57L0 85Z" fill="url(#privacy-network-panel)" />
+          <path d="m44 55 42-25v55l-42 27Z" fill="#263750" />
+          <path d="m10 53 24 14m-24 9 24 14m21-20 22-13m-22 36 22-13" stroke="#6d87a1" />
+          <g fill="#697a94">
+            <circle cx="10" cy="4" r="6" />
+            <circle cx="31" cy="-5" r="6" />
+            <circle cx="52" cy="4" r="6" />
+          </g>
+          <path d="M10 10v15M31 1v26M52 10v15" stroke="#697a94" />
+        </g>
+      ))}
+      <g transform="translate(207 223)">
+        <path d="M17 28V16c0-21 31-21 31 0v12" stroke="#71839c" strokeWidth="7" />
+        <path d="M3 27h59v52L33 96 3 79Z" fill="#26344d" fillOpacity="0.9" />
+        <rect fill="#8190a5" height="27" rx="5" width="21" x="22" y="42" />
+        <circle cx="32.5" cy="51" fill="#26344d" r="4" />
+        <path d="m32.5 54-3 10h6Z" fill="#26344d" />
+      </g>
+    </svg>
+  )
+}
 
-          <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[#d3d1ca]">
-            <p>
-              Security Learning Scenario
-              Generator（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
-            </p>
+export function PrivacyPolicy() {
+  const [activeSection, setActiveSection] = useState(1)
 
-            {PRIVACY_SECTIONS.map((section) => (
-              <section key={section.title}>
-                <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
-                  {section.title}
-                </h2>
-                <div className="mt-3 space-y-5 [&_a]:underline [&_a]:underline-offset-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
-                  {section.body}
-                </div>
-              </section>
-            ))}
-          </div>
+  useEffect(() => {
+    const hashIndex = PRIVACY_SECTIONS.findIndex(
+      (_, index) => `#${sectionId(index)}` === location.hash,
+    )
+    if (hashIndex >= 0) setActiveSection(hashIndex + 1)
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleEntry = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort(
+            (a, b) => Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top),
+          )[0]
+
+        if (!visibleEntry) return
+        const visibleIndex = Number(visibleEntry.target.getAttribute("data-section-index"))
+        if (visibleIndex) setActiveSection(visibleIndex)
+      },
+      { rootMargin: "-16% 0px -70% 0px", threshold: 0 },
+    )
+
+    for (let index = 0; index < PRIVACY_SECTIONS.length; index += 1) {
+      const element = document.getElementById(sectionId(index))
+      if (element) observer.observe(element)
+    }
+
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div className="slsg-shell slsg-shell-machines slsg-privacy-page">
+      <aside className="slsg-sidebar slsg-privacy-sidebar">
+        <SlsgBrand className="slsg-privacy-brand" href="/login" />
+        <div className="slsg-privacy-sidebar-divider" />
+        <p className="slsg-privacy-toc-heading">このページの内容</p>
+        <nav aria-label="プライバシーポリシーの目次" className="slsg-privacy-toc">
+          {PRIVACY_TOC_LABELS.map((label, index) => {
+            const itemIndex = index + 1
+            const isActive = activeSection === itemIndex
+            return (
+              <a
+                aria-current={isActive ? "location" : undefined}
+                className={isActive ? "is-active" : ""}
+                href={`#${sectionId(index)}`}
+                key={label}
+                onClick={() => setActiveSection(itemIndex)}
+              >
+                <span>{String(itemIndex).padStart(2, "0")}</span>
+                <strong>{label}</strong>
+              </a>
+            )
+          })}
+        </nav>
+      </aside>
+
+      <MachineListHud />
+      <DesignArtwork variant="machines" />
+      <PrivacyNetworkArtwork />
+
+      <main className="slsg-main slsg-privacy-main">
+        <header className="slsg-privacy-header">
+          <Link className="slsg-detail-back-link slsg-privacy-header-back" href="/login">
+            <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
+            ログインへ戻る
+          </Link>
+          <h1 className="slsg-machine-page-title font-bold">プライバシーポリシー</h1>
+          <p className="slsg-privacy-updated">最終更新日：2026年9月10日</p>
+          <p className="slsg-machine-page-description slsg-muted slsg-privacy-lead">
+            UNSAFE（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
+          </p>
+        </header>
+
+        <article className="slsg-privacy-sections">
+          {PRIVACY_SECTIONS.map((section, index) => (
+            <section
+              className="slsg-privacy-section"
+              data-section-index={index + 1}
+              id={sectionId(index)}
+              key={section.title}
+            >
+              <PrivacySectionIndex index={index + 1} />
+              <div className="slsg-privacy-section-content">
+                <h2>{sectionTitle(section.title)}</h2>
+                <div className="slsg-privacy-section-body">{section.body}</div>
+              </div>
+            </section>
+          ))}
+
+          <section className="slsg-privacy-history">
+            <h2>変更履歴</h2>
+            <p>2026年9月5日：［変更内容］</p>
+          </section>
         </article>
-      </div>
-    </main>
+      </main>
+    </div>
   )
 }

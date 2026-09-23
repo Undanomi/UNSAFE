@@ -23,6 +23,8 @@ export default async function MachineDetailPage({ params }: MachineDetailPagePro
   const machine = await getMachineDetailService(user.uid, machineId)
 
   return (
-    <AppShell>{machine ? <MachineDetailView machine={machine} /> : <MissingMachine />}</AppShell>
+    <AppShell artworkVariant="machines" layoutVariant="machine-detail">
+      {machine ? <MachineDetailView machine={machine} /> : <MissingMachine />}
+    </AppShell>
   )
 }

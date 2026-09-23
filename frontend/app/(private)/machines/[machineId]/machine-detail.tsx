@@ -3,9 +3,9 @@
 import {
   AlertCircle,
   ArrowLeft,
+  BookOpenText,
   CheckCircle2,
   Download,
-  HardDrive,
   Lightbulb,
   LoaderCircle,
   RefreshCw,
@@ -18,6 +18,7 @@ import {
   verifyMachineFlagAction,
 } from "@/app/actions/machines"
 import { MarkdownContent } from "@/components/markdown-content"
+import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import type {
   FlagDefinition,
   MachineBuildState,
@@ -31,10 +32,29 @@ type MachineDetailProps = {
 
 type FlagPanelProps = {
   flag: FlagDefinition
+  index: number
   onCorrect: () => void
 }
 
-function FlagPanel({ flag, onCorrect }: FlagPanelProps) {
+const DIFFICULTY_CLASS: Record<MachineDetail["difficulty"], string> = {
+  "Very Easy": "slsg-difficulty-very-easy",
+  Easy: "slsg-difficulty-easy",
+  Medium: "slsg-difficulty-medium",
+  High: "slsg-difficulty-high",
+}
+
+function formatDisplayDate(date: string) {
+  const parsedDate = new Date(date)
+  if (!Number.isNaN(parsedDate.getTime())) {
+    return new Intl.DateTimeFormat("ja-JP", {
+      dateStyle: "medium",
+      timeZone: "Asia/Tokyo",
+    }).format(parsedDate)
+  }
+  return date
+}
+
+function FlagPanel({ flag, index, onCorrect }: FlagPanelProps) {
   const [answer, setAnswer] = useState("")
   const [result, setResult] = useState<"correct" | "incorrect" | null>(
     flag.acquired ? "correct" : null,
@@ -57,40 +77,44 @@ function FlagPanel({ flag, onCorrect }: FlagPanelProps) {
   }
 
   return (
-    <section className="rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm max-sm:p-5">
-      <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
-        {flag.label}
-      </h2>
-      <div className="mt-5 flex gap-3 max-sm:flex-col">
-        <input
-          autoComplete="off"
-          className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
-          disabled={isChecking}
-          maxLength={200}
-          onChange={(event) => {
-            setAnswer(event.target.value)
-            setResult(null)
-          }}
-          placeholder="flag{...}"
-          spellCheck={false}
-          value={answer}
-        />
-        <button
-          className="inline-flex min-h-[46px] shrink-0 items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold shadow-sm transition hover:-translate-y-px"
-          disabled={!answer.trim() || isChecking}
-          onClick={() => void handleSubmit()}
-          type="button"
-        >
-          {isChecking ? "判定中…" : "判定する"}
-        </button>
-      </div>
-      <div aria-live="polite">
-        {result === "correct" ? (
-          <p className="mt-3 text-[0.86rem] font-bold text-[#28633a]">正解です。</p>
-        ) : null}
-        {result === "incorrect" ? (
-          <p className="mt-3 text-[0.86rem] font-bold text-[#9a392d]">一致しません。</p>
-        ) : null}
+    <section className="slsg-detail-flag-row">
+      <span aria-hidden="true" className="slsg-detail-flag-index">
+        <svg className="slsg-detail-flag-index-border" viewBox="0 0 74 74">
+          <title>フラグ番号の枠</title>
+          <polygon points="37,1 69,19 69,55 37,73 5,55 5,19" />
+        </svg>
+        <span className="slsg-detail-flag-index-label">{String(index).padStart(2, "0")}</span>
+      </span>
+      <div className="slsg-detail-flag-content">
+        <h3>{flag.label}</h3>
+        <p>{flag.label}を発見したら、フラグを入力して判定してください。</p>
+        <div className="slsg-detail-flag-entry">
+          <input
+            autoComplete="off"
+            className="slsg-detail-flag-input"
+            disabled={isChecking}
+            maxLength={200}
+            onChange={(event) => {
+              setAnswer(event.target.value)
+              setResult(null)
+            }}
+            placeholder="flag{...}"
+            spellCheck={false}
+            value={answer}
+          />
+          <button
+            className="slsg-detail-action"
+            disabled={!answer.trim() || isChecking}
+            onClick={() => void handleSubmit()}
+            type="button"
+          >
+            {isChecking ? "判定中…" : "判定する"}
+          </button>
+        </div>
+        <div aria-live="polite" className="slsg-detail-flag-result">
+          {result === "correct" ? <p className="is-correct">正解です。</p> : null}
+          {result === "incorrect" ? <p className="is-incorrect">一致しません。</p> : null}
+        </div>
       </div>
     </section>
   )
@@ -114,7 +138,7 @@ function GuidancePanel({
   const visibleItems = items.slice(0, Math.min(confirmedCount + 1, items.length))
 
   return (
-    <section className="rounded-3xl border border-[#ded5a9] bg-[#fffdf4] p-6 shadow-sm max-sm:p-5">
+    <section className="slsg-detail-guidance rounded-3xl border border-[#ded5a9] bg-[#fffdf4] p-6 shadow-sm max-sm:p-5">
       <div className="flex items-start gap-3">
         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#f2e9b7] text-[#655715]">
           <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
@@ -294,56 +318,44 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
     }
   }
 
+  const descriptionParagraphs = description.match(/[^。]+。?/g) ?? [description]
+
   return (
-    <section className="grid gap-6">
-      <Link
-        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[#61605b] transition hover:text-[#20201e]"
-        href="/machines"
-      >
-        <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
+    <section className="slsg-machine-detail-page">
+      <Link className="slsg-detail-back-link" href="/machines">
+        <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
         マシン一覧へ戻る
       </Link>
-      <header className="flex items-start justify-between gap-6 max-md:flex-col">
-        <div className="flex items-start gap-3">
-          <span className="mt-0.5 grid size-10 place-items-center rounded-xl border border-[#e5e5e2] bg-[#f8f8f7] text-[#20201e]">
-            <HardDrive aria-hidden="true" size={20} strokeWidth={2} />
-          </span>
-          <div>
-            <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-              {machine.name}
-            </h1>
-            <p className="mt-2 leading-[1.65] text-[#61605b]">{machine.summary}</p>
-          </div>
+      <header className="slsg-detail-hero">
+        <div className="slsg-detail-heading">
+          <h1>{machine.name}</h1>
+          <p>{machine.summary}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2 max-md:self-end max-sm:w-full max-sm:self-auto">
+        <div className="slsg-detail-actions">
           {canDownload ? (
             <a
-              className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] max-sm:flex-1"
+              className="slsg-detail-action"
               href={`/api/machines/${encodeURIComponent(machine.id)}/download`}
             >
-              <Download aria-hidden="true" size={18} strokeWidth={2} />
+              <Download aria-hidden="true" size={22} strokeWidth={1.8} />
               ダウンロード
             </a>
           ) : (
-            <button
-              className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm max-sm:flex-1"
-              disabled
-              type="button"
-            >
-              <Download aria-hidden="true" size={18} strokeWidth={2} />
+            <button className="slsg-detail-action" disabled type="button">
+              <Download aria-hidden="true" size={22} strokeWidth={1.8} />
               {isBuilding ? "ビルド中" : "利用できません"}
             </button>
           )}
           <button
-            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-55 max-sm:flex-1"
+            className="slsg-detail-action"
             disabled={isGuidanceGenerating || buildState.status !== "ready"}
             onClick={() => void handleGuidance()}
             type="button"
           >
             {isGuidanceGenerating ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
+              <LoaderCircle aria-hidden="true" className="animate-spin" size={22} />
             ) : (
-              <Lightbulb aria-hidden="true" size={18} strokeWidth={2} />
+              <BookOpenText aria-hidden="true" size={22} strokeWidth={1.6} />
             )}
             {isGuidanceGenerating ? "作成中…" : guidance ? "誘導問題を再生成する" : "誘導問題"}
           </button>
@@ -366,60 +378,95 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         />
       ) : null}
 
-      <section className="rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm max-sm:p-5">
-        <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
-          マシンの説明
-        </h2>
-        <p className="mt-3 leading-[1.75] text-[#61605b]">{description}</p>
-        <div className="mt-5 flex flex-wrap gap-2 text-[0.82rem] text-[#61605b]">
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold text-[#20201e]">
-            {machine.visibility}
-          </span>
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold">
-            {machine.difficulty}
-          </span>
-          <span className="rounded-full border border-[#d6d6d2] bg-white px-2.5 py-1 font-bold">
-            {machine.theme}
-          </span>
-          <span className="px-2.5 py-1">作成者 {machine.author}</span>
-          <span className="px-2.5 py-1">作成日 {machine.createdAt}</span>
-        </div>
-      </section>
+      <div className="slsg-detail-overview">
+        <section className="slsg-detail-card slsg-detail-description-card">
+          <h2 className="slsg-detail-card-heading">マシンの説明</h2>
+          <div className="slsg-detail-description-body">
+            {descriptionParagraphs.map((paragraph) => (
+              <p key={paragraph}>{paragraph}</p>
+            ))}
+          </div>
+        </section>
+
+        <section className="slsg-detail-card slsg-detail-info-card">
+          <h2 className="slsg-detail-card-heading">マシン情報</h2>
+          <dl className="slsg-detail-info-list">
+            {[
+              ["公開状態", machine.visibility],
+              ["難易度", machine.difficulty],
+              ["テーマ", machine.theme],
+              ["作成者", machine.author],
+              ["作成日", formatDisplayDate(machine.createdAt)],
+            ].map(([label, value]) => (
+              <div className="slsg-detail-info-row" key={label}>
+                <dt>{label}</dt>
+                <dd>
+                  {label === "公開状態" ? (
+                    <span
+                      className={
+                        machine.visibility === "公開" ? "slsg-status-public" : "slsg-status-private"
+                      }
+                    >
+                      {value}
+                      {machine.visibility === "非公開" ? " · 自分" : ""}
+                    </span>
+                  ) : null}
+                  {label === "難易度" ? (
+                    <span className={`slsg-difficulty ${DIFFICULTY_CLASS[machine.difficulty]}`}>
+                      {value}
+                    </span>
+                  ) : null}
+                  {label !== "公開状態" && label !== "難易度" ? value : null}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      </div>
 
       {showFlags && (machine.userFlag || machine.systemFlag) ? (
-        <div className="grid gap-5">
-          {machine.userFlag ? (
-            <>
-              {guidance ? (
-                <GuidancePanel
-                  guidance={guidance}
-                  key={`user-${JSON.stringify(guidance)}`}
-                  showIntroduction
-                  target="user"
+        <section className="slsg-detail-card slsg-detail-flags-card">
+          <h2 className="slsg-detail-card-heading">フラグの提出</h2>
+          <div className="slsg-detail-flags-body">
+            {machine.userFlag ? (
+              <>
+                {guidance ? (
+                  <GuidancePanel
+                    guidance={guidance}
+                    key={`user-${JSON.stringify(guidance)}`}
+                    showIntroduction
+                    target="user"
+                  />
+                ) : null}
+                <FlagPanel
+                  flag={machine.userFlag}
+                  index={1}
+                  onCorrect={() => setUserFlagAcquired(true)}
                 />
-              ) : null}
-              <FlagPanel flag={machine.userFlag} onCorrect={() => setUserFlagAcquired(true)} />
-            </>
-          ) : null}
-          {machine.systemFlag ? (
-            <>
-              {guidance ? (
-                <GuidancePanel
-                  guidance={guidance}
-                  key={`system-${JSON.stringify(guidance)}`}
-                  locked={machine.userFlag !== null && !userFlagAcquired}
-                  showIntroduction={!guidance.items.some((item) => item.target_flag === "user")}
-                  target="system"
+              </>
+            ) : null}
+            {machine.systemFlag ? (
+              <>
+                {guidance ? (
+                  <GuidancePanel
+                    guidance={guidance}
+                    key={`system-${JSON.stringify(guidance)}`}
+                    locked={machine.userFlag !== null && !userFlagAcquired}
+                    showIntroduction={!guidance.items.some((item) => item.target_flag === "user")}
+                    target="system"
+                  />
+                ) : null}
+                <FlagPanel
+                  flag={{ ...machine.systemFlag, acquired: systemFlagAcquired }}
+                  index={2}
+                  onCorrect={() => setSystemFlagAcquired(true)}
                 />
-              ) : null}
-              <FlagPanel
-                flag={{ ...machine.systemFlag, acquired: systemFlagAcquired }}
-                onCorrect={() => setSystemFlagAcquired(true)}
-              />
-            </>
-          ) : null}
-        </div>
+              </>
+            ) : null}
+          </div>
+        </section>
       ) : null}
+      <TerminalTelemetry />
     </section>
   )
 }
@@ -446,29 +493,22 @@ function BuildStatusPanel({
 
   if (state.status === "ready") {
     return (
-      <section className="flex items-center gap-3 rounded-2xl border border-[#bed8c5] bg-[#f4fbf6] p-5 text-[#28633a]">
+      <section className="slsg-detail-build-status is-ready">
         <CheckCircle2 aria-hidden="true" size={20} />
-        <p className="text-[0.9rem] font-extrabold">マシンのビルドが完了しました。</p>
+        <p>マシンのビルドが完了しました。</p>
       </section>
     )
   }
 
   if (state.status === "failed") {
     return (
-      <section className="rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-5">
-        <div className="flex items-start gap-3 text-[#9a392d]">
-          <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
-          <div>
-            <h2 className="font-extrabold">マシンのビルドに失敗しました</h2>
-          </div>
+      <section className="slsg-detail-build-status is-failed">
+        <div className="slsg-detail-build-message">
+          <AlertCircle aria-hidden="true" size={20} />
+          <h2>マシンのビルドに失敗しました</h2>
         </div>
         {canRetry ? (
-          <button
-            className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#20201e] px-4 text-[0.86rem] font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-55"
-            disabled={isRetrying}
-            onClick={onRetry}
-            type="button"
-          >
+          <button disabled={isRetrying} onClick={onRetry} type="button">
             {isRetrying ? (
               <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />
             ) : (
@@ -477,7 +517,7 @@ function BuildStatusPanel({
             {isRetrying ? "再ビルドを開始中…" : "もう一度ビルドする"}
           </button>
         ) : null}
-        {error ? <p className="mt-3 text-[0.84rem] font-bold text-[#9a392d]">{error}</p> : null}
+        {error ? <p className="slsg-detail-build-error">{error}</p> : null}
       </section>
     )
   }
@@ -510,19 +550,16 @@ function BuildStatusPanel({
   }
 
   return (
-    <section className="rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-5">
-      <div className="flex items-center justify-between gap-4">
-        <span className="flex items-center gap-2 text-[0.9rem] font-extrabold">
+    <section className="slsg-detail-build-status is-building">
+      <div className="slsg-detail-build-message">
+        <span>
           <LoaderCircle aria-hidden="true" className="animate-spin" size={18} />
           {message}
         </span>
-        <span className="text-[0.8rem] font-bold text-[#61605b]">{state.progress}%</span>
+        <strong>{state.progress}%</strong>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#dfdfdb]">
-        <span
-          className="block h-full rounded-full bg-[#20201e] transition-[width]"
-          style={{ width: `${state.progress}%` }}
-        />
+      <div className="slsg-detail-build-progress">
+        <span style={{ width: `${state.progress}%` }} />
       </div>
     </section>
   )
@@ -530,13 +567,13 @@ function BuildStatusPanel({
 
 export function MissingMachine() {
   return (
-    <section className="grid gap-3 rounded-3xl border border-[#e5e5e2] bg-white p-8 shadow-sm">
+    <section className="slsg-panel grid gap-3 rounded-[14px] p-8">
       <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
         このマシンは見つかりませんでした。
       </h1>
-      <p className="leading-[1.65] text-[#61605b]">一覧から別のマシンを選択してください。</p>
+      <p className="leading-[1.65] text-[#a9b5ca]">一覧から別のマシンを選択してください。</p>
       <Link
-        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[#20201e] underline underline-offset-4"
+        className="inline-flex w-fit items-center gap-2 text-[0.86rem] font-bold text-[#dce8fa] underline underline-offset-4"
         href="/machines"
       >
         <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
