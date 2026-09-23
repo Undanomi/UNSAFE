@@ -100,6 +100,9 @@ def create_app(
             resolved.build_repair_max_attempts,
             resolved.scenario_sync_attempts,
             skill_service,
+            rockyou_path=resolved.rockyou_path,
+            rockyou_min_line=resolved.rockyou_min_line,
+            rockyou_max_line=resolved.rockyou_max_line,
         )
         app.state.download_signer = DownloadSigner(
             resolved.download_signing_secret.get_secret_value(),
