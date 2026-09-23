@@ -15,6 +15,7 @@ from ai_server.services.rockyou import (
     RockYouPasswordSelector,
     bind_rockyou_passwords,
     materialize_rockyou_placeholders,
+    strip_rockyou_selections,
 )
 
 
@@ -93,3 +94,27 @@ def test_binds_only_after_source_generation_and_materializes_placeholder(
         template, bound
     )
     assert "password123" in materialize_rockyou_placeholders(template, bound)
+
+    persisted = strip_rockyou_selections(
+        bound.model_copy(update={"definition": "Selected password: password123"})
+    )
+    persisted_spec = persisted.attack_graph.steps[0].password_cracking
+    assert persisted_spec is not None
+    assert persisted_spec.password is None
+    assert persisted_spec.line_number is None
+    assert persisted_spec.search_space_lines is None
+    assert "password123" not in persisted.definition
+
+
+def test_keyed_selection_is_repeatable_across_selector_instances(tmp_path: Path) -> None:
+    wordlist = tmp_path / "rockyou.txt"
+    wordlist.write_text("password123\npassword456\npassword789\n")
+
+    first = RockYouPasswordSelector(
+        wordlist, min_line=1, max_line=3, selection_key="session-1"
+    ).select()
+    second = RockYouPasswordSelector(
+        wordlist, min_line=1, max_line=3, selection_key="session-1"
+    ).select()
+
+    assert first == second

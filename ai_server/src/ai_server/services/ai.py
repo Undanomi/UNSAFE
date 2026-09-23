@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar, Token
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -47,6 +49,21 @@ from ..skills.planning import context_for_graph
 from ..skills.renderer import SkillRenderer
 from ..skills.selector import SkillSelector
 from .errors import ScenarioInputRevisionRequiredError
+
+logger = logging.getLogger(__name__)
+_TOKEN_USAGE_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "ai_token_usage_session_id", default=None
+)
+TokenUsageRecorder = Callable[[str, int, int, int], Awaitable[None]]
+
+
+def begin_token_usage_session(session_id: str) -> Token:
+    return _TOKEN_USAGE_SESSION_ID.set(session_id)
+
+
+def end_token_usage_session(token: Token) -> None:
+    _TOKEN_USAGE_SESSION_ID.reset(token)
+
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 SCENARIO_DEFINITION_TARGET_CHARS = 10_500
@@ -265,6 +282,31 @@ class _BaseGenerator:
         self.client = client
         self.model = model
         self.max_output_tokens = max_output_tokens
+        self.token_usage_recorder: TokenUsageRecorder | None = None
+
+    def set_token_usage_recorder(self, recorder: TokenUsageRecorder) -> None:
+        self.token_usage_recorder = recorder
+
+    async def _record_token_usage(
+        self, input_tokens: object, output_tokens: object, total_tokens: object
+    ) -> None:
+        session_id = _TOKEN_USAGE_SESSION_ID.get()
+        if session_id is None or self.token_usage_recorder is None:
+            return
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (input_tokens, output_tokens, total_tokens)
+        ):
+            logger.warning("AI provider returned invalid token usage metadata")
+            return
+        try:
+            await self.token_usage_recorder(
+                session_id, input_tokens, output_tokens, total_tokens
+            )
+        except Exception:
+            logger.exception(
+                "could not persist AI token usage", extra={"session_id": session_id}
+            )
 
     async def _generate(
         self,
@@ -1172,6 +1214,20 @@ JSONのみを返してください:
                     "dependency graph or an unsupported graph assumption; prose mismatches "
                     "must target scenario_text"
                 )
+            if finding.repair_target == "user_input" and (
+                finding.category != "input_contradiction" or finding.step_id is not None
+            ):
+                raise ValueError(
+                    "user_input is only valid for an explicit input_contradiction without "
+                    "a generated attack-graph step_id"
+                )
+            if (
+                finding.category == "input_contradiction"
+                and finding.repair_target != "user_input"
+            ):
+                raise ValueError(
+                    "input_contradiction findings must target user_input"
+                )
             if finding.repair_target == "source_code" and review_context != "source_sync":
                 raise ValueError(
                     "source_code findings are only valid during source_sync review"
@@ -1443,7 +1499,15 @@ class GeminiGenerator(_BaseGenerator):
                 request=error.request,
                 response=error.response,
             ) from error
-        candidates = response.json().get("candidates", [])
+        body = response.json()
+        usage = body.get("usageMetadata", {})
+        if isinstance(usage, dict):
+            await self._record_token_usage(
+                usage.get("promptTokenCount"),
+                usage.get("candidatesTokenCount"),
+                usage.get("totalTokenCount"),
+            )
+        candidates = body.get("candidates", [])
         if not candidates:
             raise RuntimeError("Gemini returned no candidates")
         finish_reason = candidates[0].get("finishReason")
@@ -1518,6 +1582,13 @@ class OpenAIGenerator(_BaseGenerator):
             ) from error
 
         body = response.json()
+        usage = body.get("usage", {})
+        if isinstance(usage, dict):
+            await self._record_token_usage(
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                usage.get("total_tokens"),
+            )
         status = body.get("status")
         if status != "completed":
             detail = body.get("incomplete_details") or body.get("error") or status

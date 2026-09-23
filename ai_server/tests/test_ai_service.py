@@ -21,7 +21,13 @@ from ai_server.models import (
     SourceReview,
 )
 from ai_server.prompts import attack_graph_json_for_ai
-from ai_server.services.ai import CVEVerification, GeminiGenerator, OpenAIGenerator
+from ai_server.services.ai import (
+    CVEVerification,
+    GeminiGenerator,
+    OpenAIGenerator,
+    begin_token_usage_session,
+    end_token_usage_session,
+)
 from ai_server.services.errors import ScenarioInputRevisionRequiredError, exception_detail
 
 
@@ -68,7 +74,8 @@ def test_ai_graph_serialization_redacts_late_bound_password() -> None:
 
     serialized = attack_graph_json_for_ai(graph)
     assert "22062531" not in serialized
-    assert ROCKYOU_PASSWORD_PLACEHOLDER in serialized
+    assert '"password": null' in serialized
+    assert ROCKYOU_PASSWORD_PLACEHOLDER not in serialized
     assert '"line_number": null' in serialized
     assert '"search_space_lines": null' in serialized
 
@@ -1621,7 +1628,7 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
 
 
 @pytest.mark.asyncio
-async def test_terminal_unsupported_assumption_requests_input_revision() -> None:
+async def test_generated_graph_issue_cannot_be_routed_to_user_input() -> None:
     graph = {
         "objectives": [],
         "steps": [
@@ -1653,8 +1660,84 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
                     "severity": "error",
                     "category": "unsupported_assumption",
                     "repair_target": "user_input",
+                    "repair_fields": ["difficulty"],
                     "evidence": "The design assumes a stable RCE without an exploit method.",
                     "remediation": "Raise the difficulty or relax the required impact.",
+                }
+            ],
+        },
+        {
+            "approved": True,
+            "summary": "The generated design must be repaired without changing user input.",
+            "findings": [],
+        },
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(responses.pop(0))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=3),
+            client,
+        )
+        scenario = await generator.generate_scenario(
+            MachineInformation(
+                name="Test",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            )
+        )
+
+    assert scenario.scenario_id
+    assert responses == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_input_contradiction_requests_input_revision() -> None:
+    graph = {
+        "objectives": [
+            {
+                "objective_id": "system-flag",
+                "objective_type": "system_flag",
+                "description": (
+                    "Do not grant sudo for vim, and obtain the flag through sudo vim."
+                ),
+            }
+        ],
+        "steps": [
+            {
+                "step_id": "privilege-escalation",
+                "title": "Escalate privileges",
+                "kind": "privilege_escalation",
+                "phase": "privilege_escalation",
+                "description": "Exercise the requested training path.",
+                "requires": [],
+                "achieves": ["system-flag"],
+                "cve_id": None,
+                "implementation_steps": ["Prepare the service."],
+            }
+        ],
+    }
+    responses = [
+        graph,
+        {
+            "scenario_description": "Training scenario.",
+            "definition": "# Training scenario",
+        },
+        {
+            "approved": False,
+            "summary": "The two explicit flag requirements contradict each other.",
+            "findings": [
+                {
+                    "step_id": None,
+                    "severity": "error",
+                    "category": "input_contradiction",
+                    "repair_target": "user_input",
+                    "repair_fields": ["system_flag_details"],
+                    "evidence": "The input both forbids sudo vim and requires sudo vim.",
+                    "remediation": "Remove either of the contradictory sudo vim requirements.",
                 }
             ],
         },
@@ -1675,11 +1758,16 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
                     visibility="private",
                     theme="Web",
                     difficulty="Easy",
+                    needs_system_flag=True,
+                    system_flag_details=(
+                        "Do not grant sudo for vim, and obtain the flag through sudo vim."
+                    ),
                 )
             )
 
     assert captured.value.code == "scenario_input_revision_required"
-    assert captured.value.findings[0]["category"] == "unsupported_assumption"
+    assert captured.value.findings[0]["category"] == "input_contradiction"
+    assert captured.value.findings[0]["repair_fields"] == ["system_flag_details"]
     assert responses == []
 
 
@@ -2098,3 +2186,51 @@ def openai_response(value) -> httpx.Response:
             ],
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+async def test_provider_usage_is_recorded_for_current_session(provider: str) -> None:
+    recorded: list[tuple[str, int, int, int]] = []
+
+    async def record(session_id: str, input_tokens: int, output_tokens: int, total: int):
+        recorded.append((session_id, input_tokens, output_tokens, total))
+
+    if provider == "gemini":
+        response = gemini_response("generated")
+        payload = json.loads(response.content)
+        payload["usageMetadata"] = {
+            "promptTokenCount": 120,
+            "candidatesTokenCount": 30,
+            "totalTokenCount": 155,
+        }
+        response = httpx.Response(200, json=payload)
+        settings = Settings(gemini_api_key="test-key")
+        generator_type = GeminiGenerator
+    else:
+        response = openai_response("generated")
+        payload = json.loads(response.content)
+        payload["usage"] = {
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "total_tokens": 150,
+        }
+        response = httpx.Response(200, json=payload)
+        settings = Settings(
+            ai_provider="openai", openai_api_key="test-openai-key", _env_file=None
+        )
+        generator_type = OpenAIGenerator
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        generator = generator_type(settings, client)
+        generator.set_token_usage_recorder(record)
+        token = begin_token_usage_session("session-token-test")
+        try:
+            assert await generator._generate("prompt") == "generated"
+        finally:
+            end_token_usage_session(token)
+
+    expected_total = 155 if provider == "gemini" else 150
+    assert recorded == [("session-token-test", 120, 30, expected_total)]

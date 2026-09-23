@@ -53,6 +53,10 @@ def create_app(
             generator = GeminiGenerator(resolved, ai_client)
         else:
             generator = OpenAIGenerator(resolved, ai_client)
+        if isinstance(generator, (GeminiGenerator, OpenAIGenerator)) and isinstance(
+            repository, SessionRepository
+        ):
+            generator.set_token_usage_recorder(repository.increment_ai_token_usage)
         if skill_service_override is not None:
             skill_service = skill_service_override
         elif resolved.skills_enabled and isinstance(repository, SessionRepository):

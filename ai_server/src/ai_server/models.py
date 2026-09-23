@@ -332,6 +332,7 @@ class ScenarioReviewFinding(BaseModel):
         "acceptance_test_gap",
         "unsupported_assumption",
         "description_spoiler",
+        "input_contradiction",
     ]
     repair_target: Literal[
         "scenario_text",
@@ -356,6 +357,13 @@ class ScenarioReviewFinding(BaseModel):
             "cve_id",
             "password_cracking",
         }
+        allowed_input_fields = {
+            "theme",
+            "user_flag_details",
+            "system_flag_details",
+            "skill_names",
+            "cve_ids",
+        }
         fields = set(self.repair_fields)
         if self.repair_target == "attack_graph":
             if not fields or not fields <= allowed_graph_fields:
@@ -364,14 +372,28 @@ class ScenarioReviewFinding(BaseModel):
                     "or implementation_steps"
                 )
         elif self.repair_target == "attack_graph_regeneration":
-            if not fields <= allowed_regeneration_fields:
+            if not fields or not fields <= allowed_regeneration_fields:
                 raise ValueError(
-                    "attack_graph_regeneration repair_fields contain non-structural fields"
+                    "attack_graph_regeneration repair_fields must contain structural fields"
+                )
+        elif self.repair_target == "user_input":
+            if not fields or not fields <= allowed_input_fields:
+                raise ValueError(
+                    "user_input repair_fields must identify contradictory machine input fields"
                 )
         elif fields:
             raise ValueError(
                 f"repair_fields must be empty for repair_target={self.repair_target}"
             )
+        if self.repair_target == "user_input" and (
+            self.category != "input_contradiction" or self.step_id is not None
+        ):
+            raise ValueError(
+                "user_input is only valid for an explicit input_contradiction without "
+                "a generated attack-graph step_id"
+            )
+        if self.category == "input_contradiction" and self.repair_target != "user_input":
+            raise ValueError("input_contradiction findings must target user_input")
         return self
 
 

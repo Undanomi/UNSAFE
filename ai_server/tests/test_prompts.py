@@ -316,13 +316,15 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "install OpenSSH before writing its configuration" in scenario_retry
 
     for prompt in implementation_prompts:
-        assert "意図した脆弱性が「存在する」だけでなく「攻略に必要」" in prompt
-        assert "より短い別経路" in prompt
+        assert "保護対象そのものを攻略前に直接開示" in prompt
+        assert "オンライン認証試行" in prompt
+        assert "経路の一意性や最短性を要求しない" in prompt
 
     review_prompt = source_review_prompt(machine, scenario, source)
     assert "独立した敵対的レビュー担当" in review_prompt
     assert "作者の説明やmanifestの自己申告を信用せず" in review_prompt
     assert "unintended_shortcut" in review_prompt
+    assert "通常レスポンス、公開ファイル、過剰permission" in review_prompt
     assert "実際のデータフロー" in review_prompt
     assert "provisionが生成してDB等へ保存する値" in review_prompt
     assert "method・action・field" in review_prompt
@@ -369,7 +371,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
-    assert len(scenario_review) < 5000
+    assert len(scenario_review) < 5500
 
     assert "`php -l`" in review_prompt
     assert "`bash -n`" in review_prompt

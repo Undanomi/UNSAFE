@@ -31,14 +31,18 @@ SCENARIO_MANIFEST_CONSTRAINTS = f"""scenario_manifest.jsonのJSON Schema:
 """
 
 
-def attack_graph_json_for_ai(graph: AttackGraph, *, indent: int | None = 2) -> str:
-    """Serialize a graph without revealing late-bound password material to the model."""
+def attack_graph_json_for_ai(
+    graph: AttackGraph,
+    *,
+    indent: int | None = 2,
+) -> str:
+    """Serialize a design graph without revealing late-bound password material."""
     value = graph.model_dump(mode="json")
     for step in value["steps"]:
         spec = step.get("password_cracking")
         if spec is None:
             continue
-        spec["password"] = ROCKYOU_PASSWORD_PLACEHOLDER
+        spec["password"] = None
         spec["line_number"] = None
         spec["search_space_lines"] = None
     return json.dumps(value, ensure_ascii=False, indent=indent)
@@ -326,8 +330,11 @@ FLAG_PLACEMENT_CONSTRAINTS = """フラグ配置と到達性の共通制約:
 EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない近道の共通制約:
 - 各攻撃ステップについて、前提状態、攻撃者が外部から行う具体的操作、成功時だけ得られる観測可能な
   証拠、次ステップへ渡す成果物を明確にし、単なるサービス起動やエラー発生を攻略成功とみなさない
-- 意図した脆弱性が「存在する」だけでなく「攻略に必要」であることを保証する。通常入力、通常機能、
-  初期画面、公開ファイル、バナー、コメント、既定認証情報から同じ成果物を先に取得できる近道を作らない
+- ここでいう「意図しない近道」は、生成物が保護対象そのものを攻略前に直接開示する実装欠陥に限定する。
+  例はflagや次工程の秘密を通常レスポンス、初期画面、公開ファイル、バナー、コメント、ログ、過剰な
+  permission、テスト専用分岐からそのまま取得できる場合である
+- 別の攻撃手法、オンライン認証試行、より短い攻略経路が理論上存在することだけを「近道」としない。
+  意図した経路が成立して各成果物を後段で利用できるなら、経路の一意性や最短性を要求しない
 - 正常系のbenign controlでは秘密・認証情報・flag・次工程の成果物を取得できず、意図したexploitでは
   それを取得でき、似ているが成立しないnegative controlでは取得できないことを対にして検証する
 - exploitの検証は脆弱性種別に固有の効果を証明する。SQLiなら通常検索や単なるSQLエラーではなく、
@@ -342,8 +349,8 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   成功時のファイル作成や応答を直接発生させる分岐を実装しない
 - sudo、runuser、su等で攻略後のユーザーへ直接切り替えてflagを読む操作をexploitの証明に使わない。
   攻撃者入口から実際のpayloadを送り、その結果として得た能力または出力でflag到達を証明する
-- 実装または修復の完了前に、より短い別経路、情報の先出し、意図しない別種の脆弱性、前提を飛ばせる
-  権限や認証情報がないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
+- 実装または修復の完了前に、保護対象の直接的な情報漏えい、攻略前に読める権限、検証用backdoorが
+  ないか攻撃者視点で反証し、見つかった場合は完成扱いにしない
 """
 
 DESIGN_CONSTRAINTS = """設計段階の共通制約:
@@ -722,14 +729,15 @@ def scenario_review_prompt(
 生成物の修正案がサーバー検証に失敗しました。修正案だけでなく、前回レビューの前提や修正先が
 誤っていた可能性も検討してください。修正案だけが誤りなら指摘を維持し、検証可能な修正内容へ具体化
 してください。検証エラーを回避する内容を捏造せず、指摘が誤りなら撤回し、
-限定修正で扱えない構造問題ならattack_graph_regeneration、入力条件の問題ならuser_inputへ変更して
+限定修正で扱えない構造問題ならattack_graph_regeneration、明示された入力条件同士が論理的に
+両立不能な場合だけuser_inputへ変更して
 シナリオ全体を改めて判定してください。ただし、スキーマで禁止されたフィールドを許可するために
 attack_graph_regenerationへ逃がさず、その要求自体を撤回してください。同じ根拠のない修正要求を
 繰り返さないでください。
 """
     return f"""あなたは教育用攻撃マシンのシナリオを審査する、独立した敵対的レビュー担当です。
 作者の説明を信用せず、完成した設計書と攻撃グラフから、意図した攻撃経路が対象OS上で本当に成立し、
-前提を飛ばす近道がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
+保護対象を直接漏らす実装計画がないかを反証してください。セキュア化ではなく、教材として意図した脆弱性だけを
 再現可能かつ一貫した形で成立させられるかを審査します。
 
 マシン: {machine.name}
@@ -769,9 +777,11 @@ JSONのみを返してください:
 - プレイヤー向け紹介文が設計書と矛盾する、または具体的な侵入口、URLやパス、ポート、製品バージョン、
   認証情報、コマンド、権限昇格経路、フラグの場所や値、攻撃連鎖の順序を漏らす場合は
   description_spoilerのerrorにする。役割、状況、目的、脆弱性の大分類だけなら許容する
-- 全攻撃ステップを順に追い、各requiresの成果物が後段で実際に必要か、各achievesへ到達できるかを
-  攻撃者視点で確認する。前段なしで後段へ進める場合はbroken_chainまたはunintended_shortcutの
-  errorにする
+- 全攻撃ステップを順に追い、意図した経路の中で各requiresの成果物が後段に実際に渡され、各achievesへ
+  到達できるかを確認する。記述された経路自体が前段の成果物を使用しない場合はbroken_chainにする。
+  別手法やオンライン認証試行で到達し得るという理由だけではbroken_chainにもunintended_shortcutにも
+  しない。unintended_shortcutはflag、秘密、次工程の成果物が通常表示、公開ファイル、過剰permission、
+  検証用backdoor等から攻略前に直接取得できる場合に限定する
 - 設計書と攻撃グラフの手法、実行主体、成果物、依存関係、flag到達条件が矛盾する場合は
   semantic_mismatchのerrorにする。検証済み攻撃グラフを正とし、設計書側の改名、step分割・統合、
   ハッシュ方式の読み替えが原因ならrepair_targetはscenario_textにする。本文へ合わせるために
@@ -794,12 +804,18 @@ JSONのみを返してください:
 - evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
   記載する。単なる一般論や推測だけで不合格にしない
 - repair_target: scenario_text=本文、attack_graph=限定修正、attack_graph_regeneration=再作成、
-  source_code=実装(source_sync時のみ)、user_input=入力
+  source_code=実装(source_sync時のみ)、user_input=相互矛盾した明示入力だけ
 - attack_graphの限定修正はtitle、description、implementation_stepsのみで、repair_fieldsへ列挙する。
   それ以外のフィールドが本文と違うだけならscenario_textを修正する
 - attack_graph_regenerationは、設計書との表現差ではなく、攻撃グラフ単体のrequires/achievesが
   破綻しているbroken_chain、またはグラフ単体の前提が成立不能なunsupported_assumptionに限定する。
   必ず該当する既存step_idと構造フィールドをrepair_fieldsへ入れる
+- user_inputは、ユーザーが明示した2つ以上の条件が論理的に同時成立しない場合だけ使用する。categoryは
+  input_contradiction、step_idはnull、repair_fieldsには矛盾する入力フィールド名を入れる。例えば
+  system_flag_detailsで「vimをsudoersへ入れない」と「sudo vimで取得する」を同時に要求する場合である。
+  攻撃グラフ、設計書、生成コードの欠陥、AIの選択、難易度への合わせ方、実装方式、password_crackingの
+  構造化値は生成側の責務であり、user_inputへ転嫁しない。難易度を上げる・要件を緩和するという提案を
+  user_inputとして返さず、指定難易度の範囲で生成物を修正または再生成する
 
 権限レビューでは、時系列の権限表として攻撃前後の実効UID、重要パスと全親ディレクトリ、
 owner/group/mode、sudoers、capabilityを追う。同じ状態に相反する記述がある、意図した主体が読めず
@@ -1123,7 +1139,9 @@ JSONのみを返してください:
 - 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
-- intended techniqueを使わず同じ成果物を得られる場合はunintended_shortcutのerrorにする
+- flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
+  攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
+  より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
 - 攻撃固有の効果を証明せず、通常入力、エラー、接続成功だけを確認するテストはunproven_exploitまたは
   acceptance_test_gapのerrorにする
 - 実装された主脆弱性が攻撃グラフの種類と異なる場合はwrong_techniqueのerrorにする
@@ -1133,7 +1151,8 @@ JSONのみを返してください:
 - attack_graphとmanifestのinstallation_artifact、artifact_source、source_build_reasonを実装と照合する。
   ビルド済み成果物を選択済みなのにソースをコンパイルしている、またはパッケージ・公式バイナリを
   調査した根拠なしにsource_buildへ変更している場合はimplementation_mismatchのerrorにする
-- requiresを飛ばせる、または前段の成果物が後段で実際に使われない場合はbroken_chainのerrorにする
+- 記述された意図的経路の実装が前段の成果物を後段で実際に使わない場合はbroken_chainにする。
+  独立した別手法でも到達可能という理由だけでbroken_chainにしない
 - password_cracking stepでは、provisionが生成してDB等へ保存する値から、ユーザーが操作するform/APIの
   method・action・field、到達するhandler branch、hash/verify API、比較対象column、認証成功後の成果物まで
   データフローを追跡する。実際の入口が生パスワードを保存値へ直接比較する、保存ハッシュ自体で通る、

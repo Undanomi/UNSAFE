@@ -279,6 +279,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_status,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
@@ -298,6 +301,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
         AISessionRecord.build_repair_attempt_limit,
@@ -306,7 +312,12 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
     )
     column_default_sort = (AISessionRecord.updated_at, True)
     column_details_list = "__all__"
-    form_excluded_columns = (AISessionRecord.created_at,)
+    form_excluded_columns = (
+        AISessionRecord.created_at,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
+        AISessionRecord.ai_total_tokens,
+    )
     form_overrides: ClassVar = {"status": SelectField}
     form_args: ClassVar = {
         "status": {"choices": _choices(SessionStatus)},

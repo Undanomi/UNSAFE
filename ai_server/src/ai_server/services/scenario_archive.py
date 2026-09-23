@@ -8,8 +8,9 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from ..models import AttackGraph, MachineInformation, ScenarioDraft, ScenarioReview
+from .rockyou import strip_rockyou_graph, strip_rockyou_selections
 
-SCENARIO_REVIEW_POLICY_VERSION = 4
+SCENARIO_REVIEW_POLICY_VERSION = 5
 
 
 class ScenarioDraftArchive:
@@ -26,6 +27,7 @@ class ScenarioDraftArchive:
         review: ScenarioReview | None = None,
         machine: MachineInformation | None = None,
     ) -> None:
+        scenario = strip_rockyou_selections(scenario)
         version_root = self.root / session_id / scenario.scenario_version_id
         version_root.mkdir(parents=True, exist_ok=True, mode=0o750)
         self._migrate_flat_attempts(version_root)
@@ -110,6 +112,7 @@ class ScenarioDraftArchive:
         graph: AttackGraph,
         scenario_version_id: str = "v1",
     ) -> None:
+        graph = strip_rockyou_graph(graph)
         attempt_root = self._attempt_root(session_id, scenario_version_id, attempt)
         metadata = self._read_attempt_metadata(attempt_root)
         metadata["status"] = "attack_graph_ready"

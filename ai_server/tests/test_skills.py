@@ -196,5 +196,6 @@ def test_skill_context_is_added_without_removing_core_prompt_constraints() -> No
     prompt = code_prompt(machine(), scenario(), SkillRenderer.render(context))
 
     assert "SQL injectionでは保護された行の抽出を検証する" in prompt
-    assert "意図した脆弱性が「存在する」だけでなく「攻略に必要」" in prompt
+    assert "保護対象そのものを攻略前に直接開示" in prompt
+    assert "経路の一意性や最短性を要求しない" in prompt
     assert "chmod -R 777" in prompt

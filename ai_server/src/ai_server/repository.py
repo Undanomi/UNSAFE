@@ -24,6 +24,7 @@ from .models import (
     SessionStatus,
     utcnow,
 )
+from .services.rockyou import strip_rockyou_selections
 
 
 class SessionNotFoundError(Exception):
@@ -71,6 +72,33 @@ class SessionRepository:
     async def ping(self) -> None:
         async with self.session_factory() as session:
             await session.execute(text("SELECT 1"))
+
+    async def increment_ai_token_usage(
+        self,
+        session_id: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+    ) -> None:
+        """Atomically add provider-reported token usage to one AI session."""
+        try:
+            parsed_session_id = UUID(session_id)
+        except ValueError as error:
+            raise SessionNotFoundError(session_id) from error
+        if min(input_tokens, output_tokens, total_tokens) < 0:
+            raise ValueError("AI token usage must not be negative")
+        async with self.session_factory.begin() as session:
+            result = await session.execute(
+                update(AISessionRecord)
+                .where(AISessionRecord.session_id == parsed_session_id)
+                .values(
+                    ai_input_tokens=AISessionRecord.ai_input_tokens + input_tokens,
+                    ai_output_tokens=AISessionRecord.ai_output_tokens + output_tokens,
+                    ai_total_tokens=AISessionRecord.ai_total_tokens + total_tokens,
+                )
+            )
+            if result.rowcount == 0:
+                raise SessionNotFoundError(session_id)
 
     async def create(self, owner_user_id: str) -> SessionState:
         state = SessionState(session_id=str(uuid4()), owner_user_id=owner_user_id)
@@ -212,11 +240,12 @@ class SessionRepository:
     @staticmethod
     async def _save_scenario(session: AsyncSession, state: SessionState) -> None:
         assert state.scenario and state.machine_information
+        scenario = strip_rockyou_selections(state.scenario)
         scenario_insert = insert(ScenarioRecord).values(
-            scenario_id=state.scenario.scenario_id,
+            scenario_id=scenario.scenario_id,
             owner_user_id=state.owner_user_id,
-            title=state.scenario.title,
-            description=state.scenario.scenario_description,
+            title=scenario.title,
+            description=scenario.scenario_description,
             difficulty=state.machine_information.difficulty,
             status="draft",
             current_version=1,
@@ -235,14 +264,14 @@ class SessionRepository:
             )
         )
         version_insert = insert(ScenarioVersionRecord).values(
-            scenario_version_id=state.scenario.scenario_version_id,
-            scenario_id=state.scenario.scenario_id,
+            scenario_version_id=scenario.scenario_version_id,
+            scenario_id=scenario.scenario_id,
             version=1,
-            scenario_definition=state.scenario.definition,
-            target_os=state.scenario.target_os,
-            attack_graph=state.scenario.attack_graph.model_dump(mode="json"),
-            user_flag=state.scenario.user_flag,
-            system_flag=state.scenario.system_flag,
+            scenario_definition=scenario.definition,
+            target_os=scenario.target_os,
+            attack_graph=scenario.attack_graph.model_dump(mode="json"),
+            user_flag=scenario.user_flag,
+            system_flag=scenario.system_flag,
             generated_code_path=state.source_path,
             generated_code_checksum=state.source_checksum,
             created_by=state.owner_user_id,

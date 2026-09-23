@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     CHAR,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -82,6 +83,9 @@ class AISessionRecord(Base):
     source_generation_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scenario_sync_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scenario_sync_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ai_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ai_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ai_total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     build_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -11,6 +11,7 @@ from ..models import (
     Artifact,
     GeneratedSource,
     MachineAccess,
+    ScenarioDraft,
     ScenarioReview,
     SessionState,
     SessionStatus,
@@ -21,10 +22,14 @@ from ..models import (
 from ..repository import SessionRepository
 from ..skills.models import SkillPhase
 from ..skills.service import NoopSkillService, SkillResolver
-from .ai import AIGenerator
+from .ai import AIGenerator, begin_token_usage_session, end_token_usage_session
 from .build_client import BuildClient
 from .errors import exception_detail
-from .rockyou import RockYouPasswordSelector, bind_rockyou_passwords
+from .rockyou import (
+    RockYouPasswordSelector,
+    bind_rockyou_passwords,
+    strip_rockyou_selections,
+)
 from .source_archive import InvalidSourceError, SourceArchive
 from .source_repair import apply_source_patch
 from .source_validation import known_failed_resources
@@ -72,6 +77,24 @@ class MachineWorkflow:
     def is_running(self, session_id: str) -> bool:
         task = self.tasks.get(session_id)
         return session_id in self.starting_sessions or (task is not None and not task.done())
+
+    def bind_construction_passwords(
+        self, session_id: str, scenario: ScenarioDraft
+    ) -> ScenarioDraft:
+        """Bind repeatable construction-only values without changing the stored design."""
+        if not any(step.password_cracking for step in scenario.attack_graph.steps):
+            return scenario
+        if self.rockyou_path is None:
+            raise RuntimeError("rockyou selector is required to bind password cracking source")
+        return bind_rockyou_passwords(
+            scenario,
+            RockYouPasswordSelector(
+                self.rockyou_path,
+                self.rockyou_min_line,
+                self.rockyou_max_line,
+                selection_key=session_id,
+            ),
+        )
 
     async def cancel(self, session_id: str) -> None:
         self.cancel_requests.add(session_id)
@@ -292,6 +315,7 @@ class MachineWorkflow:
         existing_repair_history: list[dict] | None = None,
         build_slots_remaining: int = 1,
     ) -> None:
+        usage_token = begin_token_usage_session(session_id)
         try:
             is_build_repair = failure_report is not None
             persisted_failure_context = failure_report
@@ -437,21 +461,10 @@ class MachineWorkflow:
                         and not step.password_cracking.selection_bound
                         for step in working_scenario.attack_graph.steps
                     ):
-                        if self.rockyou_path is None:
-                            raise RuntimeError(
-                                "rockyou selector is required to bind password cracking source"
-                            )
-                        working_scenario = bind_rockyou_passwords(
-                            working_scenario,
-                            RockYouPasswordSelector(
-                                self.rockyou_path,
-                                self.rockyou_min_line,
-                                self.rockyou_max_line,
-                            ),
+                        working_scenario = self.bind_construction_passwords(
+                            session_id, working_scenario
                         )
                         authoritative_attack_graph = working_scenario.attack_graph
-                        state.scenario = working_scenario
-                        await self.repository.save(state)
                     retry_base = generated
                     retry_scenario = working_scenario
                     patch_applied = False
@@ -767,7 +780,7 @@ class MachineWorkflow:
                 raise RuntimeError(
                     f"source validation failed after retries: {last_validation_error}"
                 )
-            state.scenario = working_scenario
+            state.scenario = strip_rockyou_selections(working_scenario)
             state.source_path = str(archive_path.parent / "source")
             state.source_checksum = checksum
             state.build_id = None
@@ -811,6 +824,8 @@ class MachineWorkflow:
                 }
             state.repair_failure_report = failure_to_persist
             await self.repository.save(state)
+        finally:
+            end_token_usage_session(usage_token)
 
     async def _monitor_build(self, session_id: str, build_slots_remaining: int) -> None:
         while True:
