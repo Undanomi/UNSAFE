@@ -1,4 +1,4 @@
-# SLSG への貢献
+# Contributing
 
 SLSG への貢献を歓迎します。Issue や PR の出し方と、開発環境の準備を案内します。
 
