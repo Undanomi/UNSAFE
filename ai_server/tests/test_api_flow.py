@@ -191,6 +191,21 @@ def test_extract_build_failures_prioritizes_structured_check_marker() -> None:
     assert "SLSG_CHECK_FAIL health_checks[4] exit=3" in contexts[0]
 
 
+def test_extract_build_failures_uses_structured_script_location() -> None:
+    log = (
+        "installing dependencies\n"
+        "npm ERR! build failed\n"
+        "SLSG_SCRIPT_FAIL phase=provision "
+        "source=./scripts/provision.sh line=42 exit=1\n"
+        "packer exited with non-zero status"
+    )
+
+    commands, _failed_checks, contexts = _extract_build_failures(log)
+
+    assert commands[0] == "./scripts/provision.sh:42 (phase=provision, exit=1)"
+    assert "npm ERR! build failed" in contexts[0]
+
+
 @pytest.fixture
 async def client(tmp_path: Path):
     settings = Settings(
@@ -204,6 +219,69 @@ async def client(tmp_path: Path):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:
             yield test_client, app, fake_build
+
+
+@pytest.mark.asyncio
+async def test_ai_safety_refusal_is_public_and_cannot_be_rebuilt(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    state = await app.state.repository.get(session_id)
+    state.machine_information = MachineInformation(
+        name="Blocked candidate",
+        visibility="private",
+        theme="Verification",
+        difficulty="Easy",
+    )
+    state.scenario = ScenarioDraft(
+        scenario_id="scenario-blocked-candidate",
+        title="Blocked candidate",
+        definition="# Blocked candidate",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="verify-candidate",
+                    title="Verify candidate",
+                    kind="reconnaissance",
+                    phase="reconnaissance",
+                    description="Verify the generated candidate.",
+                    implementation_steps=["Run the isolated verification."],
+                )
+            ]
+        ),
+    )
+    state.status = SessionStatus.FAILED
+    state.error_message = "internal workbench failure detail"
+    state.repair_failure_report = {
+        "kind": "ai_safety_refusal",
+        "status": "blocked",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+        "internal_observations": ["must not be exposed"],
+    }
+    await app.state.repository.save(state)
+
+    response = await http.get(f"/v1/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["failure"] == {
+        "kind": "ai_safety_refusal",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+    }
+    assert response.json()["error_message"] == response.json()["failure"]["summary"]
+    assert "internal workbench failure detail" not in response.text
+    assert "internal_observations" not in response.text
+
+    retry = await http.post(
+        f"/v1/sessions/{session_id}/machines",
+        json={"scenario_id": state.scenario.scenario_id},
+        headers=headers,
+    )
+
+    assert retry.status_code == 409
+    assert "安全上の理由でAIが処理を拒否" in retry.json()["detail"]
+    assert not app.state.workflow.is_running(session_id)
 
 
 @pytest.mark.asyncio
@@ -886,6 +964,9 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     state = await create_failed_build_state(app)
     assert state.scenario is not None
     authoritative_graph = state.scenario.attack_graph
+    original_description = state.scenario.scenario_description
+    original_definition = state.scenario.definition
+    sync_calls = 0
     fake_build.packer_log_response = (
         "irrelevant package installation noise\n"
         "another unrelated build line\n"
@@ -898,6 +979,8 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     )
 
     async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
+        nonlocal sync_calls
+        sync_calls += 1
         rewritten_graph = scenario.attack_graph.model_copy(
             update={
                 "steps": [
@@ -934,11 +1017,9 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert submitted_state.build_repair_attempt_limit == 3
     assert submitted_state.scenario is not None
     assert submitted_state.scenario.attack_graph == authoritative_graph
-    assert (
-        submitted_state.scenario.scenario_description
-        == "Updated player introduction after source repair."
-    )
-    assert submitted_state.scenario.definition == "retry synchronized with repaired source"
+    assert submitted_state.scenario.scenario_description == original_description
+    assert submitted_state.scenario.definition == original_definition
+    assert sync_calls == 0
     assert fake_build.submitted_request["idempotency_key"].startswith(
         f"ai-session-{state.session_id}-"
     )
@@ -958,11 +1039,11 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert '"check_id": "acceptance_tests[3]"' in repair_report
     assert '"exit_code": 7' in repair_report
     assert '"failure_log_context"' in repair_report
-    assert '"scenario_sync_status": "approved"' in repair_report
+    assert '"scenario_sync_status"' not in repair_report
 
 
 @pytest.mark.asyncio
-async def test_scenario_review_feedback_revises_scenario_without_another_code_patch(client) -> None:
+async def test_operational_source_repair_does_not_trigger_scenario_sync(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -1027,15 +1108,15 @@ async def test_scenario_review_feedback_revises_scenario_without_another_code_pa
 
     assert fake_build.submitted_request is not None
     assert len(repair_reports) == 1
-    assert sync_feedback[0] is None
-    assert sync_feedback[1]["kind"] == "scenario_sync_review"
+    assert sync_feedback == []
+    assert review_calls == 0
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.scenario is not None
-    assert submitted.scenario.definition == "review feedback applied"
+    assert submitted.scenario.definition == state.scenario.definition
 
 
 @pytest.mark.asyncio
-async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(client) -> None:
+async def test_operational_repair_does_not_open_scenario_review_gate(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -1089,16 +1170,14 @@ async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(
             break
         await asyncio.sleep(0.01)
 
-    assert current.status == SessionStatus.FAILED
+    assert current.status in {SessionStatus.BUILD_QUEUED, SessionStatus.COMPLETED}
     assert len(repair_reports) == 1
-    assert len(feedback_seen) == 2
-    assert feedback_seen[0] is None
-    assert all(feedback is not None for feedback in feedback_seen[1:])
-    assert fake_build.submitted_request is None
+    assert feedback_seen == []
+    assert fake_build.submitted_request is not None
 
 
 @pytest.mark.asyncio
-async def test_source_finding_from_scenario_sync_does_not_reopen_source(client) -> None:
+async def test_operational_repair_skips_unrelated_scenario_review(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -1167,12 +1246,12 @@ async def test_source_finding_from_scenario_sync_does_not_reopen_source(client) 
 
     assert fake_build.submitted_request is not None
     assert len(repair_reports) == 1
-    assert review_calls == 1
+    assert review_calls == 0
     assert fake_build.submitted_archive is not None
     with zipfile.ZipFile(fake_build.submitted_archive) as archive:
         report = json.loads(archive.read("repair_report.json"))
-    assert report["attempts"][-1]["scenario_sync_status"] == "approved"
-    assert "CVE-2026-42533" in json.dumps(report, ensure_ascii=False)
+    assert "scenario_sync_status" not in report["attempts"][-1]
+    assert "CVE-2026-42533" not in json.dumps(report, ensure_ascii=False)
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.status in {SessionStatus.BUILD_QUEUED, SessionStatus.COMPLETED}
     assert submitted.source_generation_attempts < submitted.source_generation_attempt_limit
@@ -1542,7 +1621,7 @@ async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> 
             (file for file in current.files if file.path == "contents/app/index.php"),
             None,
         )
-        assert index is None or "echo '<td>';" not in index.content
+        assert index is not None and "echo '<td>';" in index.content
         return SourcePatch(
             files=[
                 SourceFile(
@@ -1751,6 +1830,26 @@ def test_full_source_reaudit_depends_on_contract_or_repair_surface_changes() -> 
         source(test_only_manifest),
         manifest_review,
         {"contents/scenario_manifest.json"},
+    ) == []
+
+    test_support_candidate = source(test_only_manifest)
+    test_support_candidate.files.append(
+        SourceFile(path="contents/tests/test-exploit.sh", content="#!/bin/bash\nexit 0\n")
+    )
+    test_gap_review = manifest_review.model_copy(
+        update={
+            "findings": [
+                manifest_review.findings[0].model_copy(
+                    update={"category": "acceptance_test_gap"}
+                )
+            ]
+        }
+    )
+    assert _source_review_scope_invalidation_reasons(
+        base,
+        test_support_candidate,
+        test_gap_review,
+        {"contents/scenario_manifest.json", "contents/tests/test-exploit.sh"},
     ) == []
 
     changed_contract = {

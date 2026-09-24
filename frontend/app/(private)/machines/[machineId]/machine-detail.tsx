@@ -211,6 +211,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   const [buildState, setBuildState] = useState<MachineBuildState>({
     status: machine.status ?? "ready",
     progress: machine.buildProgress ?? 0,
+    failure: machine.buildFailure ?? null,
   })
   const [description, setDescription] = useState(machine.description)
   const [isRetrying, setIsRetrying] = useState(false)
@@ -454,15 +455,31 @@ function BuildStatusPanel({
   }
 
   if (state.status === "failed") {
+    const safetyRefused = state.failure?.kind === "ai_safety_refusal"
+    const retryAllowed = canRetry && state.failure?.retryAllowed !== false
     return (
       <section className="rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-5">
         <div className="flex items-start gap-3 text-[#9a392d]">
           <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={20} />
           <div>
-            <h2 className="font-extrabold">マシンのビルドに失敗しました</h2>
+            <h2 className="font-extrabold">
+              {safetyRefused
+                ? "安全上の理由でAIが処理を拒否しました"
+                : "マシンのビルドに失敗しました"}
+            </h2>
+            {state.failure ? (
+              <p className="mt-2 text-[0.84rem] font-bold leading-relaxed">
+                {state.failure.summary}
+              </p>
+            ) : null}
+            {safetyRefused ? (
+              <p className="mt-2 text-[0.8rem] leading-relaxed">
+                このマシンの処理は停止しました。同じマシンをそのまま再ビルドすることはできません。
+              </p>
+            ) : null}
           </div>
         </div>
-        {canRetry ? (
+        {retryAllowed ? (
           <button
             className="mt-4 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#20201e] px-4 text-[0.86rem] font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-55"
             disabled={isRetrying}
