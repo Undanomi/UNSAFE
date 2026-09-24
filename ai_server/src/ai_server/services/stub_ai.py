@@ -19,6 +19,8 @@ from ..models import (
     SourceFile,
     SourcePatch,
     SourceReview,
+    SourceWorkbenchCommand,
+    SourceWorkbenchDecision,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext
 from .ai import _record_scenario_draft
@@ -356,6 +358,32 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     + "\nRepair applied for local integration testing.\n",
                 )
             ]
+        )
+
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["apt-get", "update"],
+                    cwd="contents",
+                    purpose="Validate package repository availability in a fresh target container.",
+                    network_access=True,
+                    run_as_root=True,
+                ),
+                summary="Validate the fresh target container package repository.",
+            )
+        return SourceWorkbenchDecision(
+            action="finish",
+            summary="The deterministic stub syntax check completed.",
         )
 
     async def synchronize_scenario(

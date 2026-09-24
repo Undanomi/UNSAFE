@@ -1355,12 +1355,16 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
     assert attempts == 2
     assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
+    verification_prompt = requests[4]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
     assert "permission_blocker" in retry_prompt
     assert "No mode is specified for the parent directory." in retry_prompt
     assert "Specify and validate owner, group, and mode." in retry_prompt
     assert "# Generated scenario attempt 2" in retry_prompt
     assert "文書全体を生成し直してはいけません" in retry_prompt
+    assert "scenario_repair_verification" in verification_prompt
+    assert "新しいフル監査ではなく" in verification_prompt
+    assert "より細かい実装要件を後出し" in verification_prompt
     graph_prompts = [
         request
         for request in requests
@@ -1432,7 +1436,7 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="Persisted draft was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)
@@ -1449,6 +1453,93 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
     assert len(observer.recorded) == 2
     assert observer.recorded[-1][1] is not None
     assert observer.recorded[-1][1].approved is True
+
+
+@pytest.mark.asyncio
+async def test_scenario_correction_uses_only_the_current_review(monkeypatch) -> None:
+    machine = MachineInformation(
+        name="Focused Repair", visibility="private", theme="Web", difficulty="Easy"
+    )
+    persisted = ScenarioDraft(
+        scenario_id="scenario-focused-repair",
+        title="Focused Repair",
+        scenario_description="Inspect the machine and obtain the flags.",
+        definition="# Scenario\n\nBase implementation plan.",
+        attack_graph=graph_without_objectives(),
+    )
+    first_review = ScenarioReview(
+        approved=False,
+        summary="First issue.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate",
+                severity="error",
+                category="implementation_gap",
+                evidence="OBSOLETE_FIRST_DIAGNOSTIC",
+                remediation="Apply the first focused repair.",
+            )
+        ],
+    )
+
+    class Observer:
+        resume_scenario = persisted
+        resume_review = first_review
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    correction_prompts: list[str] = []
+    review_calls = 0
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=2), client
+        )
+
+        async def generate(prompt, **_kwargs):
+            correction_prompts.append(prompt)
+            if len(correction_prompts) == 1:
+                old = "Base implementation plan."
+                new = "Base implementation plan with the first repair."
+            else:
+                old = "Base implementation plan with the first repair."
+                new = "Base implementation plan with both repairs."
+            return json.dumps(
+                {
+                    "scenario_description": None,
+                    "definition_replacements": [{"old": old, "new": new}],
+                }
+            )
+
+        async def review(_machine, _scenario, **_kwargs):
+            nonlocal review_calls
+            review_calls += 1
+            if review_calls == 1:
+                return ScenarioReview(
+                    approved=False,
+                    summary="Second issue.",
+                    findings=[
+                        ScenarioReviewFinding(
+                            step_id="enumerate",
+                            severity="error",
+                            category="implementation_gap",
+                            evidence="CURRENT_SECOND_DIAGNOSTIC",
+                            remediation="Apply the second focused repair.",
+                        )
+                    ],
+                )
+            return ScenarioReview(approved=True, summary="Focused repairs are complete.")
+
+        monkeypatch.setattr(generator, "_generate", generate)
+        monkeypatch.setattr(generator, "review_scenario", review)
+        scenario = await generator.generate_scenario(machine, on_attempt=Observer())
+
+    assert scenario.definition.endswith("both repairs.")
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" in correction_prompts[0]
+    assert "CURRENT_SECOND_DIAGNOSTIC" in correction_prompts[1]
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" not in correction_prompts[1]
 
 
 @pytest.mark.asyncio
@@ -1669,7 +1760,7 @@ async def test_resumed_graph_review_revises_graph_before_scenario_text(monkeypat
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="The mismatch was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)

@@ -451,7 +451,7 @@ def test_static_validation_does_not_infer_cve_semantics_from_prose(tmp_path: Pat
     assert archive_path.is_file()
 
 
-def test_static_validation_does_not_compare_embedded_flag_literals(tmp_path: Path) -> None:
+def test_static_validation_requires_the_server_managed_flag(tmp_path: Path) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     mismatched = expected.upper()
     flag_scenario = scenario().model_copy(update={"user_flag": expected})
@@ -466,8 +466,96 @@ def test_static_validation_does_not_compare_embedded_flag_literals(tmp_path: Pat
             )
             source_file.content = json.dumps(manifest)
 
-    archive_path, _ = SourceArchive(tmp_path).create("session", flag_scenario, generated)
-    assert archive_path.is_file()
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", flag_scenario, generated)
+    assert any(
+        check["name"] == "flags:user:materialized"
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    )
+
+
+def test_materializes_typed_flag_placeholder_at_archive_boundary(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    provision = next(
+        file for file in generated.files if file.path == "contents/scripts/provision.sh"
+    )
+    provision.content += (
+        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
+    )
+
+    archive_path, _ = SourceArchive(tmp_path).create("session-flags", flag_scenario, generated)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        archived = archive.read("contents/scripts/provision.sh").decode()
+    assert expected in archived
+    assert "__SLSG_USER_FLAG__" not in archived
+
+
+def test_repair_report_does_not_persist_materialized_flag(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    provision = next(
+        file for file in generated.files if file.path == "contents/scripts/provision.sh"
+    )
+    provision.content += (
+        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
+    )
+
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-redacted-history",
+        flag_scenario,
+        generated,
+        repair_history=[{"trigger": {"packer_log_tail": f"wrote {expected}"}}],
+    )
+
+    with zipfile.ZipFile(archive_path) as archive:
+        report = archive.read("repair_report.json").decode()
+    assert expected not in report
+    assert "__SLSG_USER_FLAG__" in report
+
+
+def test_rejects_invented_flag_environment_injection(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    provision = next(
+        file for file in generated.files if file.path == "contents/scripts/provision.sh"
+    )
+    provision.content += (
+        "test -n \"$SLSG_USER_FLAG\"\n"
+        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session-env-flags", flag_scenario, generated)
+    assert any(
+        check["name"] == "flags:unsupported_injection"
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    )
+
+
+def test_preflight_rejects_invalid_bash_syntax(tmp_path: Path) -> None:
+    generated = web_generated_source()
+    generated.files.append(
+        SourceFile(
+            path="contents/scripts/broken.sh",
+            content="#!/bin/bash\necho 'unterminated\n",
+            mode="0755",
+        )
+    )
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session-broken-shell", scenario(), generated)
+    assert any(
+        check["name"] == "preflight:shell:contents/scripts/broken.sh"
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    )
 
 
 def test_generation_manifest_records_pinned_skills(tmp_path: Path) -> None:

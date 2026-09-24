@@ -37,6 +37,8 @@ class RuntimeLimitSettings(DatabaseSettings):
 
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
+    source_workbench_action_limit: int = Field(default=8, ge=1, le=30)
+    source_sandbox_timeout_seconds: float = Field(default=240, gt=0, le=3600)
     download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)
@@ -67,6 +69,11 @@ class Settings(RuntimeLimitSettings):
 
     build_server_url: str = "http://localhost:8080"
     build_server_token: SecretStr = Field(min_length=32)
+    source_sandbox_enabled: bool = False
+    source_sandbox_url: str = "http://localhost:8090"
+    source_sandbox_token: SecretStr = SecretStr(
+        "local-development-source-sandbox-token-change-me"
+    )
     download_signing_secret: SecretStr = SecretStr(
         "local-development-download-signing-secret-change-me"
     )
@@ -86,6 +93,8 @@ class Settings(RuntimeLimitSettings):
             raise ValueError("DOWNLOAD_SIGNING_SECRET must contain at least 32 characters")
         if self.rockyou_min_line > self.rockyou_max_line:
             raise ValueError("ROCKYOU_MIN_LINE must not exceed ROCKYOU_MAX_LINE")
+        if self.source_sandbox_enabled and len(self.source_sandbox_token.get_secret_value()) < 32:
+            raise ValueError("SOURCE_SANDBOX_TOKEN must contain at least 32 characters")
         return self
 
 

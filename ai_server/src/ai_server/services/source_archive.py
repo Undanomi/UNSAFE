@@ -9,8 +9,12 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from ..models import GeneratedSource, ScenarioDraft, SourceFile
+from ..models import GeneratedSource, ScenarioDraft, SourceFile, rockyou_password_placeholder
 from .rockyou import materialize_rockyou_placeholders
+from .scenario_secrets import (
+    materialize_scenario_flag_placeholders,
+    redact_scenario_flags,
+)
 from .source_validation import validate_source
 
 VERIFICATION_SCRIPT = PurePosixPath("contents/scripts/verify.sh")
@@ -68,6 +72,23 @@ class SourceArchive:
                 raise InvalidSourceError(
                     f"generated source validation failed: {error}", report
                 ) from error
+            try:
+                content = materialize_scenario_flag_placeholders(content, scenario)
+            except ValueError as error:
+                report = {
+                    "status": "fail",
+                    "summary": {"passed": 0, "failed": 1, "warnings": 0},
+                    "checks": [
+                        {
+                            "status": "fail",
+                            "name": f"flags:placeholder:{normalized}",
+                            "message": str(error),
+                        }
+                    ],
+                }
+                raise InvalidSourceError(
+                    f"generated source validation failed: {error}", report
+                ) from error
             total_size += len(content.encode("utf-8"))
             if total_size > 5 * 1024 * 1024:
                 raise InvalidSourceError("generated source exceeds 5 MiB")
@@ -90,7 +111,12 @@ class SourceArchive:
             history[-1]["validation_status_after"] = validation["status"]
             history[-1]["validation_summary_after"] = validation["summary"]
         (candidate_root / "repair_report.json").write_text(
-            json.dumps({"attempts": history}, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(
+                {"attempts": _redact_repair_history(history, scenario)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         generation_manifest = {
             "scenario_id": scenario.scenario_id,
@@ -187,6 +213,26 @@ run_check() {
             "status": status or ("approved" if approved else "rejected"),
             "recorded_at": datetime.now(UTC).isoformat(),
             "report": review_report,
+        }
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return self._write_archive(source_root, archive_path)
+
+    def record_workbench_report(self, archive_path: Path, workbench_report: dict) -> str:
+        """Persist command evidence produced by the isolated source workbench."""
+
+        source_root = archive_path.parent / "source"
+        report_path = source_root / "repair_report.json"
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            report = {"attempts": []}
+        if not isinstance(report, dict):
+            report = {"attempts": []}
+        report["source_workbench"] = {
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "report": workbench_report,
         }
         report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -308,3 +354,15 @@ run_check() {
         if any(part in {"", "/"} for part in path.parts):
             raise InvalidSourceError(f"invalid generated path: {value}")
         return path
+
+
+def _redact_repair_history(history: list[dict], scenario: ScenarioDraft) -> list[dict]:
+    serialized = redact_scenario_flags(json.dumps(history, ensure_ascii=False), scenario)
+    replacements = [
+        (spec.password, rockyou_password_placeholder(step.step_id))
+        for step in scenario.attack_graph.steps
+        if (spec := step.password_cracking) is not None and spec.password
+    ]
+    for password, placeholder in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        serialized = serialized.replace(password, placeholder)
+    return json.loads(serialized)

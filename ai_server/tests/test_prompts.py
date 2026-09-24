@@ -370,6 +370,15 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "固定スコープを破棄して現在の候補を最初からフル監査" in full_review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
+    focused_scenario_review = scenario_review_prompt(
+        machine,
+        scenario,
+        "repair_verification",
+        {
+            "kind": "scenario_repair_verification",
+            "blocking_review": {"summary": "Fix the current issue", "findings": []},
+        },
+    )
     assert "独立した敵対的レビュー担当" in scenario_review
     assert "permission_blocker" in scenario_review
     assert "permission_shortcut" in scenario_review
@@ -413,6 +422,10 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
     assert len(scenario_review) < 5500
+    assert "重大な不整合をまとめ" in scenario_review
+    assert "特定フレームワーク内部のimport先" in scenario_review
+    assert "新しいフル監査ではなく" in focused_scenario_review
+    assert "より細かい実装要件を後出し" in focused_scenario_review
 
     assert "`php -l`" in review_prompt
     assert "`bash -n`" in review_prompt
@@ -424,7 +437,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "存在しないフィールドの" in review_prompt
 
 
-def test_source_prompts_include_persisted_flag_values() -> None:
+def test_source_prompts_use_typed_flag_placeholders() -> None:
     machine = MachineInformation(
         name="Flag Test",
         visibility="private",
@@ -455,16 +468,32 @@ def test_source_prompts_include_persisted_flag_values() -> None:
         ),
     )
     source = GeneratedSource(
-        files=[SourceFile(path="contents/scripts/provision.sh", content="#!/bin/bash\n")]
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=(
+                    "#!/bin/bash\n"
+                    "printf '%s' 'flag{user_exact_value}'\n"
+                    "printf '%s' 'flag{system_exact_value}'\n"
+                ),
+            )
+        ]
     )
 
     for prompt in (
         code_prompt(machine, scenario),
-        repair_prompt(machine, scenario, source, {"error": "test"}),
+        repair_prompt(
+            machine,
+            scenario,
+            source,
+            {"error": "flag{user_exact_value} and flag{system_exact_value}"},
+        ),
         source_review_prompt(machine, scenario, source),
     ):
-        assert "flag{user_exact_value}" in prompt
-        assert "flag{system_exact_value}" in prompt
+        assert "flag{user_exact_value}" not in prompt
+        assert "flag{system_exact_value}" not in prompt
+        assert "__SLSG_USER_FLAG__" in prompt
+        assert "__SLSG_SYSTEM_FLAG__" in prompt
 
     assert "user_flag" not in scenario.model_dump()
     assert "system_flag" not in scenario.model_dump()

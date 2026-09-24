@@ -517,8 +517,41 @@ class GuidanceRequest(BaseModel):
 
 
 class SourcePatch(BaseModel):
-    files: list[SourceFile] = Field(min_length=1, max_length=50)
+    files: list[SourceFile] = Field(default_factory=list, max_length=50)
     delete_paths: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> SourcePatch:
+        if not self.files and not self.delete_paths:
+            raise ValueError("source patch must change or delete at least one file")
+        return self
+
+
+class SourceWorkbenchCommand(BaseModel):
+    argv: list[str] = Field(min_length=1, max_length=32)
+    cwd: str = Field(default="contents", min_length=1, max_length=500)
+    purpose: str = Field(min_length=1, max_length=1000)
+    network_access: bool = False
+    run_as_root: bool = False
+
+    @field_validator("argv")
+    @classmethod
+    def command_arguments_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 1000 or "\x00" in value for value in values):
+            raise ValueError("workbench command arguments must be non-empty bounded strings")
+        return values
+
+
+class SourceWorkbenchDecision(BaseModel):
+    action: Literal["run", "finish"]
+    command: SourceWorkbenchCommand | None = None
+    summary: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def command_matches_action(self) -> SourceWorkbenchDecision:
+        if (self.action == "run") != (self.command is not None):
+            raise ValueError("command is required exactly when action is run")
+        return self
 
 
 class Artifact(BaseModel):

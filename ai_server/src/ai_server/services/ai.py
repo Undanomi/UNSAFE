@@ -30,6 +30,7 @@ from ..models import (
     SourceFile,
     SourcePatch,
     SourceReview,
+    SourceWorkbenchDecision,
 )
 from ..prompts import (
     attack_graph_json_for_ai,
@@ -44,6 +45,7 @@ from ..prompts import (
     scenario_review_prompt,
     scenario_sync_prompt,
     source_review_prompt,
+    source_workbench_prompt,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
 from ..skills.planning import context_for_graph
@@ -251,6 +253,15 @@ class AIGenerator(Protocol):
         failure_report: dict,
         skills: SkillContext | None = None,
     ) -> SourcePatch: ...
+
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision: ...
 
     async def synchronize_scenario(
         self,
@@ -997,6 +1008,7 @@ JSONのみを返してください:
             if on_attempt is not None:
                 await on_attempt()
             attempt_phase = "attack_graph_generation"
+            graph_changed_this_attempt = False
             try:
                 if graph is None:
                     candidate = await self._draft_attack_graph(
@@ -1005,6 +1017,7 @@ JSONのみを返してください:
                     self._validate_skill_cves(candidate, resolved_skills, machine)
                     graph = await self._verify_attack_graph(machine, candidate)
                     pending_graph_review = None
+                    graph_changed_this_attempt = previous_scenario is not None
                 elif pending_graph_review is not None:
                     try:
                         graph = await self._revise_attack_graph(
@@ -1047,6 +1060,7 @@ JSONのみを返してください:
                         )
                         await _record_scenario_draft(on_attempt, previous_scenario)
                     pending_graph_review = None
+                    graph_changed_this_attempt = True
                 await _record_attack_graph(on_attempt, graph)
                 attempt_phase = "scenario_generation"
                 scenario_skill_context = SkillRenderer.render(
@@ -1090,12 +1104,23 @@ JSONのみを返してください:
                         attack_graph=graph,
                     )
                 else:
+                    active_review_feedback = (
+                        [
+                            "scenario_semantic_review: "
+                            + json.dumps(
+                                _compact_scenario_review(pending_scenario_review),
+                                ensure_ascii=False,
+                            )
+                        ]
+                        if pending_scenario_review is not None
+                        else rejected[-1:]
+                    )
                     try:
                         scenario = await self._correct_scenario(
                             machine,
                             graph,
                             previous_scenario,
-                            rejected,
+                            active_review_feedback,
                             scenario_skill_context,
                         )
                     except _GeneratedArtifactValidationFailure as error:
@@ -1127,7 +1152,26 @@ JSONのみを返してください:
                 previous_scenario = scenario
                 await _record_scenario_draft(on_attempt, scenario)
                 attempt_phase = "scenario_review"
-                review = await self.review_scenario(machine, scenario)
+                repair_scope = (
+                    pending_scenario_review
+                    if pending_scenario_review is not None and not graph_changed_this_attempt
+                    else None
+                )
+                review = await self.review_scenario(
+                    machine,
+                    scenario,
+                    review_context=(
+                        "repair_verification" if repair_scope is not None else "generation"
+                    ),
+                    reconsideration=(
+                        {
+                            "kind": "scenario_repair_verification",
+                            "blocking_review": _compact_scenario_review(repair_scope),
+                        }
+                        if repair_scope is not None
+                        else None
+                    ),
+                )
                 await _record_scenario_draft(on_attempt, scenario, review)
                 self._raise_for_user_input(review)
                 if review.approved:
@@ -1383,6 +1427,37 @@ JSONのみを返してください:
                     "rejected_model_output": response[:12_000] if response else None,
                 }
         raise RuntimeError(f"Could not repair VM source: {last_error}")
+
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        last_error: Exception | None = None
+        prompt = source_workbench_prompt(
+            machine,
+            scenario,
+            current,
+            observations,
+            commands_remaining=commands_remaining,
+        )
+        for _ in range(self.settings.generation_retries):
+            response: str | None = None
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=SourceWorkbenchDecision,
+                    max_output_tokens=min(self.max_output_tokens, 4096),
+                )
+                return SourceWorkbenchDecision.model_validate_json(response)
+            except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error, response)
+        raise RuntimeError(f"Could not choose a source workbench action: {last_error}")
 
     async def synchronize_scenario(
         self,

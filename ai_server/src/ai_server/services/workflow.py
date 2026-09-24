@@ -6,11 +6,15 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Literal, TypedDict
+
+from langgraph.graph import END, START, StateGraph
 
 from ..models import (
     Artifact,
     GeneratedSource,
     MachineAccess,
+    MachineInformation,
     ScenarioDraft,
     ScenarioReview,
     SessionState,
@@ -32,12 +36,22 @@ from .rockyou import (
 )
 from .source_archive import InvalidSourceError, SourceArchive
 from .source_repair import apply_source_patch
+from .source_sandbox import SourceSandboxClient
 from .source_validation import known_failed_resources
 
 logger = logging.getLogger(__name__)
 BUILD_POLL_INTERVAL_SECONDS = 5
 DISTRIBUTION_ARTIFACT_TYPE = "zip"
 MAX_SOURCE_REVIEW_RECONSIDERATIONS = 2
+
+
+class MachineWorkflowGraphState(TypedDict, total=False):
+    session_id: str
+    generated: GeneratedSource | None
+    failure_report: dict | None
+    repair_history: list[dict]
+    build_slots_remaining: int
+    outcome: Literal["generate", "submitted", "repair", "completed", "failed"]
 
 
 class InvalidSessionStateError(ValueError):
@@ -58,6 +72,8 @@ class MachineWorkflow:
         rockyou_path: Path | None = None,
         rockyou_min_line: int = 1,
         rockyou_max_line: int = 1,
+        source_sandbox: SourceSandboxClient | None = None,
+        source_workbench_action_limit: int = 8,
     ) -> None:
         self.repository = repository
         self.generator = generator
@@ -70,9 +86,37 @@ class MachineWorkflow:
         self.rockyou_path = rockyou_path
         self.rockyou_min_line = rockyou_min_line
         self.rockyou_max_line = rockyou_max_line
+        self.source_sandbox = source_sandbox
+        self.source_workbench_action_limit = source_workbench_action_limit
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.starting_sessions: set[str] = set()
         self.cancel_requests: set[str] = set()
+        self.graph = self._build_graph()
+
+    def _build_graph(self):
+        graph = StateGraph(MachineWorkflowGraphState)
+        graph.add_node("generate_and_submit", self._graph_generate_and_submit)
+        graph.add_node("monitor_build", self._graph_monitor_build)
+        graph.add_edge(START, "generate_and_submit")
+        graph.add_conditional_edges(
+            "generate_and_submit",
+            self._route_after_generation,
+            {"monitor_build": "monitor_build", END: END},
+        )
+        graph.add_conditional_edges(
+            "monitor_build",
+            self._route_after_build,
+            {"generate_and_submit": "generate_and_submit", END: END},
+        )
+        return graph.compile()
+
+    @staticmethod
+    async def _route_after_generation(state: MachineWorkflowGraphState) -> str:
+        return "monitor_build" if state.get("outcome") == "submitted" else END
+
+    @staticmethod
+    async def _route_after_build(state: MachineWorkflowGraphState) -> str:
+        return "generate_and_submit" if state.get("outcome") == "repair" else END
 
     def is_running(self, session_id: str) -> bool:
         task = self.tasks.get(session_id)
@@ -112,7 +156,30 @@ class MachineWorkflow:
             await self.build_client.cancel(state.build_id)
 
     async def refresh_distribution_artifact(self, state: SessionState) -> SessionState:
-        if state.status != SessionStatus.COMPLETED or not state.build_id:
+        if not state.build_id:
+            return state
+        if state.status in {SessionStatus.BUILD_QUEUED, SessionStatus.BUILDING}:
+            try:
+                build = await self.build_client.get(state.build_id)
+            except Exception:
+                logger.warning(
+                    "on-demand build status refresh failed",
+                    exc_info=True,
+                    extra={"session_id": state.session_id, "build_id": state.build_id},
+                )
+            else:
+                state.build_status = build["status"]
+                state.build_progress = build.get("progress", state.build_progress)
+                if build["status"] == "completed":
+                    self._capture_machine_access(state, build)
+                    artifacts = await self.build_client.artifacts(state.build_id)
+                    state.artifact = self._distribution_artifact(artifacts)
+                    state.status = SessionStatus.COMPLETED
+                    state = await self.repository.save(state)
+                elif build["status"] in {"building", "uploading"}:
+                    state.status = SessionStatus.BUILDING
+                    state = await self.repository.save(state)
+        if state.status != SessionStatus.COMPLETED:
             return state
         if (
             state.artifact is not None
@@ -309,25 +376,141 @@ class MachineWorkflow:
         build_slots_remaining: int = 1,
     ) -> None:
         task = asyncio.create_task(
-            self._generate_and_submit(
-                session_id,
-                generated,
-                failure_report,
-                repair_history,
-                build_slots_remaining,
+            self._run_graph(
+                {
+                    "session_id": session_id,
+                    "generated": generated,
+                    "failure_report": failure_report,
+                    "repair_history": list(repair_history or []),
+                    "build_slots_remaining": build_slots_remaining,
+                    "outcome": "generate",
+                }
             )
         )
         self.tasks[session_id] = task
         task.add_done_callback(lambda _: self.tasks.pop(session_id, None))
 
-    async def _generate_and_submit(
+    async def _run_graph(self, graph_state: MachineWorkflowGraphState) -> None:
+        try:
+            await self.graph.ainvoke(graph_state, {"recursion_limit": 100})
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            session_id = graph_state["session_id"]
+            detail = exception_detail(error)
+            logger.exception("machine workflow graph failed", extra={"session_id": session_id})
+            state = await self.repository.get(session_id)
+            state.status = SessionStatus.FAILED
+            state.error_message = detail
+            state.repair_failure_report = {
+                "kind": "machine_workflow_graph",
+                "status": "failed",
+                "error_message": detail,
+            }
+            await self.repository.save(state)
+
+    async def _graph_generate_and_submit(
+        self, graph_state: MachineWorkflowGraphState
+    ) -> MachineWorkflowGraphState:
+        remaining = await self._generate_and_submit_once(
+            graph_state["session_id"],
+            graph_state.get("generated"),
+            graph_state.get("failure_report"),
+            graph_state.get("repair_history"),
+            graph_state.get("build_slots_remaining", 1),
+        )
+        state = await self.repository.get(graph_state["session_id"])
+        return {
+            "build_slots_remaining": remaining or 0,
+            "outcome": (
+                "submitted"
+                if remaining is not None
+                and state.build_id is not None
+                and state.status in {SessionStatus.BUILD_QUEUED, SessionStatus.BUILDING}
+                else "failed"
+            ),
+        }
+
+    async def _run_source_workbench(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        generated: GeneratedSource,
+    ) -> tuple[GeneratedSource, dict]:
+        if self.source_sandbox is None:
+            return generated, {
+                "kind": "source_workbench",
+                "status": "skipped",
+                "summary": "isolated source workbench is disabled",
+                "observations": [],
+            }
+
+        sandbox_id = await self.source_sandbox.create(generated)
+        observations: list[dict] = []
+        final_summary = "workbench action limit reached after successful commands"
+        try:
+            for action_index in range(self.source_workbench_action_limit):
+                decision = await self.generator.next_source_workbench_action(
+                    machine,
+                    scenario,
+                    generated,
+                    observations,
+                    self.source_workbench_action_limit - action_index,
+                )
+                final_summary = decision.summary
+                if decision.action == "finish":
+                    break
+                assert decision.command is not None
+                result = await self.source_sandbox.execute(sandbox_id, decision.command)
+                observation = {
+                    "index": action_index + 1,
+                    "purpose": decision.command.purpose,
+                    "command": decision.command.model_dump(mode="json"),
+                    "exit_code": result.exit_code,
+                    "timed_out": result.timed_out,
+                    "stdout": _bounded_context(result.stdout, 8_000),
+                    "stderr": _bounded_context(result.stderr, 8_000),
+                }
+                observations.append(observation)
+                if result.exit_code != 0 or result.timed_out:
+                    return generated, {
+                        "kind": "source_workbench",
+                        "status": "fail",
+                        "error_message": (
+                            "isolated source workbench command timed out"
+                            if result.timed_out
+                            else "isolated source workbench command failed"
+                        ),
+                        "failed_command": observation,
+                        "observations": observations,
+                    }
+
+            changes = await self.source_sandbox.changes(sandbox_id)
+            changed_files: list[str] = []
+            deleted_files: list[str] = []
+            if changes is not None:
+                generated = apply_source_patch(generated, changes)
+                changed_files = sorted(file.path for file in changes.files)
+                deleted_files = sorted(changes.delete_paths)
+            return generated, {
+                "kind": "source_workbench",
+                "status": "pass",
+                "summary": final_summary,
+                "observations": observations,
+                "changed_files": changed_files,
+                "deleted_files": deleted_files,
+            }
+        finally:
+            await self.source_sandbox.destroy(sandbox_id)
+
+    async def _generate_and_submit_once(
         self,
         session_id: str,
         generated: GeneratedSource | None = None,
         failure_report: dict | None = None,
         existing_repair_history: list[dict] | None = None,
         build_slots_remaining: int = 1,
-    ) -> None:
+    ) -> int | None:
         usage_token = begin_token_usage_session(session_id)
         try:
             is_build_repair = failure_report is not None
@@ -378,7 +561,7 @@ class MachineWorkflow:
             best_validation_failures = 0 if failure_report is not None else None
             pending_source_review: SourceReview | None = None
             pending_source_review_source: GeneratedSource | None = None
-            source_changed_since_scenario = False
+            scenario_sync_required = False
             repair_failure_signatures: set[str] = set()
             reconsideration_signatures: set[str] = set()
 
@@ -487,6 +670,8 @@ class MachineWorkflow:
                     retry_base = generated
                     retry_scenario = working_scenario
                     patch_applied = False
+                    workbench_changed_source = False
+                    workbench_report: dict | None = None
                     prevalidated_review: SourceReview | None = None
                     if failure_report is not None:
                         repair_trigger = failure_report
@@ -605,6 +790,52 @@ class MachineWorkflow:
                             skill_snapshot,
                         )
                         prevalidated_review = reconsidered
+                    if self.source_sandbox is not None:
+                        workbench_base_checksum = _generated_source_checksum(generated)
+                        generated, workbench_report = await self._run_source_workbench(
+                            state.machine_information,
+                            working_scenario,
+                            generated,
+                        )
+                        if repair_history:
+                            repair_history[-1]["source_workbench_after"] = workbench_report
+                        if workbench_report["status"] != "pass":
+                            last_validation_error = InvalidSourceError(
+                                workbench_report.get(
+                                    "error_message", "isolated source workbench failed"
+                                ),
+                                workbench_report,
+                            )
+                            failure_report = workbench_report
+                            archive_path = None
+                            checksum = None
+                            continue
+                        workbench_changed_source = (
+                            _generated_source_checksum(generated) != workbench_base_checksum
+                        )
+                        if workbench_changed_source:
+                            prevalidated_review = None
+                            try:
+                                archive_path, checksum = self.source_archive.create(
+                                    session_id,
+                                    working_scenario,
+                                    generated,
+                                    repair_history,
+                                    skill_snapshot,
+                                )
+                            except InvalidSourceError as error:
+                                last_validation_error = error
+                                failure_report = {
+                                    "kind": "source_workbench_changes_validation",
+                                    **_invalid_source_report(error, "source_validation"),
+                                    "source_workbench": workbench_report,
+                                }
+                                archive_path = None
+                                checksum = None
+                                continue
+                        checksum = self.source_archive.record_workbench_report(
+                            archive_path, workbench_report
+                        )
                     if prevalidated_review is not None:
                         review = prevalidated_review
                     elif review_revalidation is not None:
@@ -613,7 +844,10 @@ class MachineWorkflow:
                             working_scenario,
                             generated,
                             review_skills,
-                            reconsideration=review_revalidation,
+                            reconsideration={
+                                **review_revalidation,
+                                "source_workbench": workbench_report,
+                            },
                         )
                         review_revalidation = None
                     elif patch_applied and (
@@ -659,6 +893,7 @@ class MachineWorkflow:
                                     if pending_source_review is None
                                     else "semantic_review"
                                 ),
+                                "source_workbench": workbench_report,
                             },
                         )
                         if not full_review_reasons:
@@ -678,6 +913,14 @@ class MachineWorkflow:
                             working_scenario,
                             generated,
                             review_skills,
+                            reconsideration=(
+                                {
+                                    "kind": "source_workbench_evidence",
+                                    "workbench": workbench_report,
+                                }
+                                if workbench_report is not None
+                                else None
+                            ),
                         )
                     error_targets = _source_review_error_targets(review)
                     review_report = _source_review_report(review)
@@ -688,11 +931,13 @@ class MachineWorkflow:
                         approved=review.approved,
                     )
                     if review.approved or scenario_text_only:
-                        if patch_applied:
-                            source_changed_since_scenario = True
+                        if (patch_applied or workbench_changed_source) and _source_review_contract(
+                            retry_base
+                        ) != _source_review_contract(generated):
+                            scenario_sync_required = True
                         pending_source_review = None
                         pending_source_review_source = None
-                        if source_changed_since_scenario or scenario_text_only:
+                        if scenario_sync_required or scenario_text_only:
                             scenario_feedback: dict | None = (
                                 review_report if scenario_text_only else None
                             )
@@ -782,7 +1027,7 @@ class MachineWorkflow:
                                     "resolved_by_scenario_sync" if scenario_text_only else None
                                 ),
                             )
-                            source_changed_since_scenario = False
+                            scenario_sync_required = False
                         logger.info(
                             "source candidate cleared for build",
                             extra={
@@ -803,36 +1048,39 @@ class MachineWorkflow:
                             "kind": "source_semantic_repair_retry",
                             "status": "fail",
                             "error_message": (
-                                "The replacement patch did not clear the fixed review scope or "
-                                "introduced a regression in a changed file. Rebuild one replacement "
-                                "patch from the unchanged base; do not layer another patch on the "
-                                "rejected candidate."
+                                "The current candidate still has unresolved fixed-scope findings or "
+                                "a regression in a changed file. Continue from this candidate and "
+                                "apply one minimal follow-up patch that preserves completed fixes."
                             ),
                             "blocking_review": _source_review_report(pending_source_review),
                             "candidate_review": candidate_report,
                             "rejected_patch": _serialized_source_patch(patch),
                         }
                         repair_history[-1]["semantic_review_after"] = candidate_report
-                        repair_history[-1]["candidate_status"] = "rejected_rolled_back"
-                        generated = pending_source_review_source
+                        repair_history[-1]["candidate_status"] = (
+                            "rejected_retained_for_followup"
+                        )
+                        pending_source_review = review
+                        pending_source_review_source = generated
                     elif patch_applied and build_repair_has_approved_semantic_review:
                         failure_report = {
                             "kind": "build_repair_semantic_retry",
                             "status": "fail",
                             "error_message": (
                                 "The build-failure repair introduced a semantic regression. "
-                                "Create one replacement patch from the pre-repair source that "
-                                "addresses both the build failure and this regression."
+                                "Continue from the repaired candidate and remove the regression "
+                                "without discarding the build fix."
                             ),
                             "original_trigger": _persistable_repair_trigger(repair_trigger),
                             "candidate_review": candidate_report,
                             "rejected_patch": _serialized_source_patch(patch),
                         }
                         repair_history[-1]["semantic_review_after"] = candidate_report
-                        repair_history[-1]["candidate_status"] = "rejected_rolled_back"
+                        repair_history[-1]["candidate_status"] = (
+                            "rejected_retained_for_followup"
+                        )
                         pending_source_review = review
-                        pending_source_review_source = retry_base
-                        generated = retry_base
+                        pending_source_review_source = generated
                     else:
                         failure_report = candidate_report
                         pending_source_review = review
@@ -879,7 +1127,7 @@ class MachineWorkflow:
             state.build_progress = build.get("progress", 0)
             state.status = SessionStatus.BUILD_QUEUED
             await self.repository.save(state)
-            await self._monitor_build(session_id, build_slots_remaining)
+            return build_slots_remaining
         except Exception as error:
             detail = exception_detail(error)
             logger.exception("machine workflow failed", extra={"session_id": session_id})
@@ -898,14 +1146,19 @@ class MachineWorkflow:
                 }
             state.repair_failure_report = failure_to_persist
             await self.repository.save(state)
+            return None
         finally:
             end_token_usage_session(usage_token)
 
-    async def _monitor_build(self, session_id: str, build_slots_remaining: int) -> None:
+    async def _graph_monitor_build(
+        self, graph_state: MachineWorkflowGraphState
+    ) -> MachineWorkflowGraphState:
+        session_id = graph_state["session_id"]
+        build_slots_remaining = graph_state.get("build_slots_remaining", 0)
         while True:
             state = await self.repository.get(session_id)
             if not state.build_id:
-                return
+                return {"outcome": "failed"}
             build_id = state.build_id
             try:
                 build = await self.build_client.get(build_id)
@@ -920,7 +1173,7 @@ class MachineWorkflow:
 
             state = await self.repository.get(session_id)
             if state.build_id != build_id:
-                return
+                return {"outcome": "failed"}
             state.build_status = build["status"]
             state.build_progress = build.get("progress", state.build_progress)
             if build["status"] == "completed":
@@ -931,7 +1184,7 @@ class MachineWorkflow:
                 state.artifact = self._distribution_artifact(artifacts)
                 state.status = SessionStatus.COMPLETED
                 await self.repository.save(state)
-                return
+                return {"outcome": "completed"}
             if build["status"] in {"failed", "cancelled"}:
                 state.error_message = build.get("error_message") or f"build {build['status']}"
                 state.repair_failure_report = None
@@ -939,19 +1192,18 @@ class MachineWorkflow:
                     state.build_repair_attempt_limit = state.build_repair_attempts
                     state.status = SessionStatus.FAILED
                     await self.repository.save(state)
-                    return
+                    return {"outcome": "failed"}
                 prepared = await self._prepare_build_repair(state)
                 if prepared is None:
-                    return
+                    return {"outcome": "failed"}
                 repair_source, repair_report, repair_history = prepared
-                await self._generate_and_submit(
-                    session_id,
-                    repair_source,
-                    repair_report,
-                    repair_history,
-                    build_slots_remaining,
-                )
-                return
+                return {
+                    "generated": repair_source,
+                    "failure_report": repair_report,
+                    "repair_history": repair_history,
+                    "build_slots_remaining": build_slots_remaining,
+                    "outcome": "repair",
+                }
             state.status = (
                 SessionStatus.BUILDING
                 if build["status"] in {"building", "uploading"}
@@ -1203,7 +1455,6 @@ def _source_review_contract(source: GeneratedSource) -> dict | None:
 
     return {
         "target_os": manifest.get("target_os"),
-        "required_files": sorted_values("required_files"),
         "services": sorted_values("services", "name", "protocol", "port"),
         "expected_vulnerabilities": sorted_values("expected_vulnerabilities", "cve_id", "name"),
         # Attack-step order is part of the intended chain and must remain significant.
@@ -1225,12 +1476,20 @@ def _source_review_scope_invalidation_reasons(
     if _source_review_contract(base_source) != _source_review_contract(candidate_source):
         reasons.append("the scenario manifest's review contract changed")
 
-    ignored_inventory_paths = {"contents/README.md"}
+    def is_support_path(path: str) -> bool:
+        name = path.rsplit("/", 1)[-1].lower()
+        return (
+            path == "contents/README.md"
+            or "/tests/" in path.lower()
+            or name.startswith(("test-", "test_"))
+            or name.endswith((".test.js", ".test.ts", ".spec.js", ".spec.ts"))
+        )
+
     base_inventory = {
-        file.path for file in base_source.files if file.path not in ignored_inventory_paths
+        file.path for file in base_source.files if not is_support_path(file.path)
     }
     candidate_inventory = {
-        file.path for file in candidate_source.files if file.path not in ignored_inventory_paths
+        file.path for file in candidate_source.files if not is_support_path(file.path)
     }
     if base_inventory != candidate_inventory:
         reasons.append("the generated implementation file inventory changed")
@@ -1242,7 +1501,20 @@ def _source_review_scope_invalidation_reasons(
             if finding.severity == "error"
             for path in finding.affected_files
         }
-    material_changed_files = changed_files - ignored_inventory_paths
+    supports_test_repair = any(
+        finding.severity == "error"
+        and finding.category in {"acceptance_test_gap", "unproven_exploit"}
+        for finding in blocking_review.findings
+    )
+    if supports_test_repair:
+        declared_repair_surface |= {
+            path
+            for path in changed_files
+            if is_support_path(path) or path == "contents/scenario_manifest.json"
+        }
+    material_changed_files = {
+        path for path in changed_files if path != "contents/README.md"
+    }
     if material_changed_files and not declared_repair_surface:
         reasons.append("the blocking review did not declare a bounded repair surface")
     elif not material_changed_files <= declared_repair_surface:
@@ -1404,6 +1676,11 @@ def _extract_build_failures(
         r"(?P<check_id>(?:health_checks|acceptance_tests)\[\d+\])\s+"
         r"exit=(?P<exit_code>\d+)\b"
     )
+    script_failure_pattern = re.compile(
+        r"\bSLSG_SCRIPT_FAIL\s+phase=(?P<phase>\S+)\s+"
+        r"source=(?P<source>\S+)\s+line=(?P<line>\d+)\s+"
+        r"exit=(?P<exit_code>\d+)\b"
+    )
     commands: list[str] = []
     failed_checks: list[dict[str, int | str]] = []
     contexts: list[str] = []
@@ -1412,6 +1689,21 @@ def _extract_build_failures(
     # Structured verification failures are more useful than generic Packer errors.
     # Capture them first so earlier non-fatal messages cannot consume the context limit.
     for index, line in enumerate(lines):
+        script_match = script_failure_pattern.search(line)
+        if script_match:
+            marker_indexes.add(index)
+            command = (
+                f"{script_match.group('source')}:{script_match.group('line')} "
+                f"(phase={script_match.group('phase')}, "
+                f"exit={script_match.group('exit_code')})"
+            )
+            if command not in commands:
+                commands.append(command)
+            start = max(0, index - 4)
+            end = min(len(lines), index + 2)
+            context = "\n".join(lines[start:end])
+            if context not in contexts and len(contexts) < 10:
+                contexts.append(context)
         check_match = check_failure_pattern.search(line)
         if check_match:
             marker_indexes.add(index)

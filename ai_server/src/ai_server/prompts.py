@@ -10,6 +10,11 @@ from .models import (
     rockyou_password_placeholder,
 )
 from .scenario_manifest import scenario_manifest_json_schema
+from .services.scenario_secrets import (
+    SYSTEM_FLAG_PLACEHOLDER,
+    USER_FLAG_PLACEHOLDER,
+    redact_scenario_flags,
+)
 
 GUIDANCE_SOURCE_MAX_CHARS = 40_000
 
@@ -72,12 +77,18 @@ def _rockyou_placeholder_map(graph: AttackGraph) -> str:
     return "ステップ別rockyouプレースホルダー:\n" + "\n".join(entries)
 
 
+def _scenario_definition_for_ai(scenario: ScenarioDraft) -> str:
+    return redact_scenario_flags(
+        _redact_passwords(scenario.definition, scenario.attack_graph), scenario
+    )
+
+
 def source_json_for_ai(current: GeneratedSource, scenario: ScenarioDraft) -> str:
-    """Redact a materialized password before review, repair, or synchronization."""
+    """Restore server-owned placeholders before content is sent to an AI model."""
     value = current.model_dump(mode="json")
     for source_file in value["files"]:
-        source_file["content"] = _redact_passwords(
-            source_file["content"], scenario.attack_graph
+        source_file["content"] = redact_scenario_flags(
+            _redact_passwords(source_file["content"], scenario.attack_graph), scenario
         )
     return json.dumps(value, ensure_ascii=False, indent=2)
 
@@ -149,7 +160,7 @@ def guidance_prompt(
 
 シナリオ設計書:
 ```markdown
-{_redact_passwords(scenario.definition, scenario.attack_graph)}
+{_scenario_definition_for_ai(scenario)}
 ```
 
 生成コード（関連度順、最大{GUIDANCE_SOURCE_MAX_CHARS}文字）:
@@ -763,10 +774,23 @@ def scenario_review_prompt(
 """
     reconsideration_section = ""
     if reconsideration is not None:
-        reconsideration_section = f"""
+        if reconsideration.get("kind") == "scenario_repair_verification":
+            reconsideration_section = f"""
+前回レビューから引き継ぐ固定修正スコープ:
+```json
+{redact_scenario_flags(_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph), scenario)}
+```
+これは新しいフル監査ではなく、直前の修正に対する検証である。blocking_reviewの各errorが解消したかを
+最初に判定し、未解消なら同じ根本原因として返す。明示されたremediationを満たした後で、同じstepへ
+より細かい実装要件を後出しして不合格を継続しない。新しいerrorは、修正箇所から直接生じた回帰、または
+前回findingと同じ根本原因を現在の文書から直接証明できる場合だけ返す。無関係な既存箇所の追加監査は
+ソース生成、ソースレビュー、Packer実行へ委ねる。
+"""
+        else:
+            reconsideration_section = f"""
 前回レビューの再検討資料:
 ```json
-{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+{redact_scenario_flags(_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph), scenario)}
 ```
 生成物の修正案がサーバー検証に失敗しました。修正案だけでなく、前回レビューの前提や修正先が
 誤っていた可能性も検討してください。修正案だけが誤りなら指摘を維持し、検証可能な修正内容へ具体化
@@ -803,7 +827,7 @@ System flag取得要件（正解値ではない）: {machine.needs_system_flag},
 
 シナリオ設計書:
 ```markdown
-{_redact_passwords(scenario.definition, scenario.attack_graph)}
+{_scenario_definition_for_ai(scenario)}
 ```
 {source_sync_scope}
 {reconsideration_section}
@@ -815,6 +839,7 @@ JSONのみを返してください:
 "remediation":"所有者・group・mode・実行主体を含む具体的な設計修正"}}]}}
 
 審査規則:
+- 初回は重大な不整合をまとめ、修正後は固定スコープを守る
 - プレイヤー向け紹介文の締めから、対象マシンを調査することとフラグを獲得することの両方が明確に
   読み取れない場合はsemantic_mismatchのerrorにする。特定の定型句や表記の完全一致は要求しない
 - プレイヤー向け紹介文が設計書と矛盾する、または具体的な侵入口、URLやパス、ポート、製品バージョン、
@@ -840,6 +865,9 @@ JSONのみを返してください:
   具体的根拠がなければunsupported_assumptionのerrorにする
 - 実装に必要なパス、サービス、ユーザー、権限遷移、検証方法が曖昧で、実装者が推測しなければ
   攻略成立性を保証できない場合はimplementation_gapまたはunsupported_assumptionのerrorにする
+- この工程では、特定フレームワーク内部のimport先、adapter実装、パッチ行、完成コードまで要求しない。
+  配布物、版、発火条件、入口、実行主体、観測成果の整合を見て、実使用はソースレビューとPackerで検証する。
+  本文がグラフと異なる配布物・経路を明示した場合はerrorだが、コード未生成だけではerrorにしない
 - acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
   飛ばした失敗を全く観測できない場合はacceptance_test_gapのerrorにする。ただし、同じ性質の追加ケースや
   網羅性向上だけを要求せず、実ビルドで判定する環境依存の懸念はwarningにする
@@ -883,16 +911,16 @@ def code_prompt(
     return f"""あなたは隔離された教育用Linux VMのプロビジョニングコードを作る専門家です。
 次のシナリオを{scenario.target_os}ベースのPacker VM内へ導入するファイル群を生成してください。
 
-{_redact_passwords(scenario.definition, scenario.attack_graph)}
+{_scenario_definition_for_ai(scenario)}
 
 検証済みの攻撃グラフ:
 {attack_graph_json_for_ai(scenario.attack_graph)}
 
 {_rockyou_placeholder_map(scenario.attack_graph)}
 
-配置する正解フラグ（未設定は配置しない）:
-- User flag: {scenario.user_flag or "未設定"}
-- System flag: {scenario.system_flag or "未設定"}
+配置するフラグ用のサーバー管理プレースホルダー（未設定は配置しない）:
+- User flag: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
+- System flag: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
 
 JSON以外は返さないでください。形式:
 {{"files":[{{"path":"contents/build.sh","content":"#!/bin/bash\\nset -euo pipefail\\n...","mode":"0755"}}]}}
@@ -943,7 +971,9 @@ JSON以外は返さないでください。形式:
 - 攻撃グラフのcve_title、cve_description、cwe_idsは公式情報から固定済みである。実装ではその
   メカニズムと前提条件を再現し、別の設定不備、模擬ハンドラ、同じ製品の別脆弱性へ置き換えない。
   再現できない場合はCVE名だけを付けた代替実装を作らない
-- 設定された正解フラグは1文字も変更せず、指定された配置先へそのまま保存する
+- 設定されたフラグは上記の型付きプレースホルダーを1文字も変更せず、指定された配置先へ保存する。
+  実値を推測せず、環境変数や外部入力による注入方式を新設しない。プレースホルダーはアーカイブ作成時に
+  サーバーが実値へ置換する
 
 {SCENARIO_MANIFEST_CONSTRAINTS}
 
@@ -964,6 +994,62 @@ JSON以外は返さないでください。形式:
 """
 
 
+def source_workbench_prompt(
+    machine: MachineInformation,
+    scenario: ScenarioDraft,
+    current: GeneratedSource,
+    observations: list[dict],
+    *,
+    commands_remaining: int,
+) -> str:
+    observation_json = json.dumps(observations[-8:], ensure_ascii=False, indent=2)
+    return f"""あなたは生成済みソースを隔離ワークベンチ内で検証する実装エージェントです。
+文章レビューではなく、現在のファイルに適したコマンドを1回ずつ実行し、構文、依存関係、コンパイル、
+既存テストを実証してください。残り実行回数は{commands_remaining}回です。
+
+マシン: {machine.name}
+対象OS: {scenario.target_os}
+
+現在のソース（秘密値はサーバー管理プレースホルダーのまま）:
+```json
+{source_json_for_ai(current, scenario)}
+```
+
+これまでの実行結果:
+```json
+{observation_json}
+```
+
+JSONのみを返してください。
+- 続ける場合:
+  {{"action":"run","command":{{"argv":["実行ファイル","引数"],"cwd":"contentsまたはその子",
+  "purpose":"この実行で証明すること","network_access":false,"run_as_root":false}},
+  "summary":"次の検証理由"}}
+- 十分に検証した、またはこのワークベンチで安全に実行できる検査がない場合:
+  {{"action":"finish","command":null,"summary":"完了理由と未検証事項"}}
+
+規則:
+- ワークベンチは対象OSに近い最小Debianから候補ごとに新規作成され、言語ランタイムを事前導入しない。
+  provision.shが導入するapt packageを確認し、必要なら最初に`apt-get update`、次に
+  `apt-get install -y --no-install-recommends ...`をrun_as_root=true、network_access=trueで実行して、
+  パッケージ名と導入過程を検証する。候補に書かれていないランタイムを便宜的に追加しない
+- shell文字列ではなくargvを返す。`sh -c`、`bash -c`、eval、sudo、su、systemctl、service、reboot、
+  mount、docker、podman、qemu、packer、SSHおよび絶対パスを使わない
+- cwdは生成ルート基準の相対パスで、通常はcontents。`..`を使わない
+- package.json、pyproject.toml、go.mod、pom.xml等、実在するファイルからコマンドを選ぶ。
+  特定フレームワークが使われていると推測して固定コマンドを要求しない
+- 最初に安価で決定的な検査を行い、その成功結果を繰り返さない。失敗したら別コマンドで迂回せず終了し、
+  修正エージェントへ具体的なstderrを渡せるようにする
+- OS/runtime導入のapt-getと、依存取得に必要なpackage managerコマンドだけnetwork_access=trueにできる。
+  npm/yarn/pnpmでは必ずscriptsを無効化し、lockfile生成ではpackage-lock-only等を使う。
+  curl/wgetや任意スクリプトへnetwork_access=trueを付けない
+- build.shとprovision.shはroot、systemd、OS変更を前提にするためここでは実行しない。これらは後段の
+  一時VMで完全に検証する。ただし、その中のruntime/package導入とアプリbuildに対応するコマンドは
+  個別に同じ順序で実行する。root実行はapt-get、apt、dpkgに限定し、それ以外はrun_as_root=falseにする
+- フラグ値、パスワード、外部秘密を推測・表示しない
+"""
+
+
 def repair_prompt(
     machine: MachineInformation,
     scenario: ScenarioDraft,
@@ -972,8 +1058,11 @@ def repair_prompt(
     skill_context: str = "",
 ) -> str:
     current_json = source_json_for_ai(current, scenario)
-    report_json = _redact_passwords(
-        json.dumps(failure_report, ensure_ascii=False, indent=2), scenario.attack_graph
+    report_json = redact_scenario_flags(
+        _redact_passwords(
+            json.dumps(failure_report, ensure_ascii=False, indent=2), scenario.attack_graph
+        ),
+        scenario,
     )
     return f"""あなたは生成済みの教育用VMソースを差分修正するエージェントです。
 新規生成はせず、検査またはPackerビルドで失敗した箇所だけを修正してください。
@@ -981,8 +1070,8 @@ def repair_prompt(
 マシン: {machine.name}
 シナリオID: {scenario.scenario_id}
 対象OS: {scenario.target_os}
-User flag正解値: {scenario.user_flag or "未設定"}
-System flag正解値: {scenario.system_flag or "未設定"}
+User flagプレースホルダー: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
+System flagプレースホルダー: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
 攻撃グラフ:
 ```json
 {attack_graph_json_for_ai(scenario.attack_graph)}
@@ -1028,6 +1117,8 @@ JSON以外は返さないでください。形式:
 - パッケージを変更する場合は、その名前からsystemd unit、ソケット、設定パスを推測せず、
   導入後に実在する名前をパッケージ情報またはsystemdから確認して関連設定を一貫して更新する
 - パスはcontents/以下の相対パスに限定し、絶対パスと..を使わない
+- フラグは上記の型付きプレースホルダーを維持する。実値を推測せず、環境変数や外部入力による
+  注入方式を新設しない。サーバーがアーカイブ作成時に実値へ置換する
 - files[].pathは生成ソース内の既存パスまたは追加パスであり、VM内の最終配置先ではない。
   `/var/www`、`/etc`、`/opt`などを直接files[].pathへ返さず、contents/app/、contents/config/、
   contents/scripts/以下を修正し、VMへの配置変更はprovision.shのinstall/cp/chownで行う
@@ -1099,7 +1190,7 @@ def scenario_sync_prompt(
 
 修復前のシナリオ:
 ```markdown
-{_redact_passwords(scenario.definition, scenario.attack_graph)}
+{_scenario_definition_for_ai(scenario)}
 ```
 
 修復後の実装ファイル:
@@ -1163,6 +1254,16 @@ manifestが表す攻撃ステップ・サービス・脆弱性・目的の契約
 だけに限定せず、ビルドを止めるfindingを今回の応答へ一度に全件列挙する。ただし、レビュー契約が変化
 したという事実だけをerrorにせず、現在の生成物に残る具体的な不整合を根拠に判定する。
 """
+        elif reconsideration.get("kind") == "source_workbench_evidence":
+            reconsideration_section = f"""
+隔離ソースワークベンチの実行証拠:
+```json
+{_redact_passwords(json.dumps(reconsideration, ensure_ascii=False, indent=2), scenario.attack_graph)}
+```
+これは前回レビューではなく、現在の候補へ実際に実行したコマンドの結果である。exit_code=0の検査が
+証明した構文、依存解決、compile、testを推測で否定せず、未実行のOS、systemd、権限、攻撃成立性まで
+証明したものとも扱わない。後者は一時VMとPackerへ委ねる。
+"""
         else:
             reconsideration_section = f"""
 前回レビューの再検討資料:
@@ -1184,8 +1285,8 @@ remediationが生成物のスキーマや不変条件と衝突していないか
 テーマ: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {scenario.target_os}
-User flag正解値: {scenario.user_flag or "未設定"}
-System flag正解値: {scenario.system_flag or "未設定"}
+User flagプレースホルダー: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
+System flagプレースホルダー: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
 攻撃グラフ:
 ```json
 {attack_graph_json_for_ai(scenario.attack_graph)}
@@ -1193,7 +1294,7 @@ System flag正解値: {scenario.system_flag or "未設定"}
 
 シナリオ設計書:
 ```markdown
-{_redact_passwords(scenario.definition, scenario.attack_graph)}
+{_scenario_definition_for_ai(scenario)}
 ```
 
 生成ファイル:
@@ -1225,7 +1326,8 @@ JSONのみを返してください:
   contents/scripts/verify.shはmanifestからのサーバー生成であり、filesに無いことを欠陥にしない
 - 再検討資料がある場合は、前回指摘と変更ファイルの直接の回帰を優先する。無関係な箇所を新規に精査して
   細粒度のブロッカーを後出しせず、新しいerrorは明白な致命的不整合を変更箇所から直接証明できる場合に限る
-- 設定された正解フラグが指定先へ正確に配置され、別の値へ変更されていないことを確認する
+- 型付きフラグプレースホルダーが指定先へ正確に配置され、別の値や独自の注入変数へ変更されて
+  いないことを確認する。実値はサーバー管理であり推測しない
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
 - flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から

@@ -117,6 +117,20 @@ RUNTIME_LIMITS = (
         "Automatic repair builds added to each explicitly started cycle.",
     ),
     RuntimeLimit(
+        "source_workbench_action_limit",
+        "SOURCE_WORKBENCH_ACTION_LIMIT",
+        "Source workbench actions",
+        "1–30",
+        "Maximum isolated command actions selected for one source candidate.",
+    ),
+    RuntimeLimit(
+        "source_sandbox_timeout_seconds",
+        "SOURCE_SANDBOX_TIMEOUT_SECONDS",
+        "Source sandbox API timeout",
+        "> 0–3,600 seconds",
+        "HTTP timeout for one isolated workbench operation.",
+    ),
+    RuntimeLimit(
         "download_url_ttl_seconds",
         "DOWNLOAD_URL_TTL_SECONDS",
         "Download URL lifetime",
