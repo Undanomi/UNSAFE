@@ -1677,6 +1677,49 @@ def _password_cracking_step_ids(scenario: ScenarioDraft) -> set[str]:
     }
 
 
+def _requests_third_party_poc(finding) -> bool:
+    if finding.category not in {"acceptance_test_gap", "unproven_exploit"}:
+        return False
+    text = f"{finding.evidence}\n{finding.remediation}".casefold()
+    remediation = finding.remediation.casefold()
+    poc_terms = (
+        "poc",
+        "proof of concept",
+        "proof-of-concept",
+        "exploit-db",
+        "exploitdb",
+        "packet storm",
+        "packetstorm",
+        "metasploit",
+        "公開 exploit",
+        "公開エクスプロイト",
+        "野良 exploit",
+        "野良エクスプロイト",
+    )
+    removal_terms = ("remove", "delete", "削除", "除去", "使わない", "実行しない")
+    return any(term in text for term in poc_terms) and not any(
+        term in remediation for term in removal_terms
+    )
+
+
+def _optional_exploit_finding(finding):
+    if finding.severity != "error" or not _requests_third_party_poc(finding):
+        return finding, False
+    return (
+        finding.model_copy(
+            update={
+                "severity": "warning",
+                "remediation": (
+                    "第三者PoCを自動テストやサンドボックスで取得・実行しないでください。"
+                    "READMEで攻略者へ入手を案内することはできます。生成物だけで安全な"
+                    "自己完結テストを作れなければ、攻撃固有の自動検証は省略できます。"
+                ),
+            }
+        ),
+        True,
+    )
+
+
 def _discard_framework_owned_scenario_findings(
     review: ScenarioReview,
     scenario: ScenarioDraft,
@@ -1686,13 +1729,16 @@ def _discard_framework_owned_scenario_findings(
     password_step_ids = _password_cracking_step_ids(scenario)
     retained = []
     discarded = 0
+    downgraded = 0
     for finding in review.findings:
         if _is_framework_owned_password_selection_finding(finding, password_step_ids):
             discarded += 1
             continue
-        retained.append(finding)
+        normalized, changed = _optional_exploit_finding(finding)
+        retained.append(normalized)
+        downgraded += int(changed)
 
-    if not discarded:
+    if not discarded and not downgraded:
         return review
     has_error = any(finding.severity == "error" for finding in retained)
     return ScenarioReview(
@@ -1700,6 +1746,7 @@ def _discard_framework_owned_scenario_findings(
         summary=(
             review.summary
             + f" Removed {discarded} finding(s) about framework-owned password selection."
+            + f" Downgraded {downgraded} optional exploit-verification finding(s)."
         ),
         findings=retained,
     )
@@ -1710,16 +1757,17 @@ def _discard_framework_owned_source_findings(
     scenario: ScenarioDraft,
 ) -> SourceReview:
     password_step_ids = _password_cracking_step_ids(scenario)
-    retained = [
-        finding
-        for finding in review.findings
-        if not _is_framework_owned_password_selection_finding(
-            finding,
-            password_step_ids,
-        )
-    ]
-    discarded = len(review.findings) - len(retained)
-    if not discarded:
+    retained = []
+    discarded = 0
+    downgraded = 0
+    for finding in review.findings:
+        if _is_framework_owned_password_selection_finding(finding, password_step_ids):
+            discarded += 1
+            continue
+        normalized, changed = _optional_exploit_finding(finding)
+        retained.append(normalized)
+        downgraded += int(changed)
+    if not discarded and not downgraded:
         return review
     has_error = any(finding.severity == "error" for finding in retained)
     return SourceReview(
@@ -1727,6 +1775,7 @@ def _discard_framework_owned_source_findings(
         summary=(
             review.summary
             + f" Removed {discarded} finding(s) about framework-owned password selection."
+            + f" Downgraded {downgraded} optional exploit-verification finding(s)."
         ),
         findings=retained,
     )

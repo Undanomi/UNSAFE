@@ -1229,6 +1229,115 @@ async def test_source_review_discards_framework_owned_rockyou_test_request() -> 
 
 
 @pytest.mark.asyncio
+async def test_source_review_does_not_require_third_party_poc_in_automated_tests() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-third-party-poc",
+        title="External PoC boundary",
+        definition="# Scenario\nThe learner may obtain a public PoC.",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The automated test does not run the public PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": [
+                            "contents/scenario_manifest.json",
+                            "contents/README.md",
+                        ],
+                        "evidence": (
+                            "README requires the learner to obtain a separate public PoC, "
+                            "but acceptance_tests do not execute it."
+                        ),
+                        "remediation": (
+                            "Download and execute that PoC in the acceptance test to prove "
+                            "the exploit."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/README.md", content="Obtain the PoC.")]
+            ),
+        )
+
+    assert review.approved is True
+    assert len(review.findings) == 1
+    assert review.findings[0].severity == "warning"
+    assert "READMEで攻略者へ入手を案内" in review.findings[0].remediation
+
+
+@pytest.mark.asyncio
+async def test_source_review_keeps_existing_automated_third_party_poc_as_error() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-unsafe-poc-test",
+        title="Unsafe PoC automation",
+        definition="# Scenario",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The acceptance test downloads and executes a third-party PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": ["contents/scenario_manifest.json"],
+                        "evidence": (
+                            "acceptance_tests uses curl to download poc.py from GitHub and "
+                            "executes it with python3."
+                        ),
+                        "remediation": (
+                            "Remove the third-party PoC from automated validation; skip this "
+                            "attack-specific test if no local replacement can be generated."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/scenario_manifest.json", content="{}")]
+            ),
+        )
+
+    assert review.approved is False
+    assert review.findings[0].severity == "error"
+
+
+@pytest.mark.asyncio
 async def test_invalid_non_cve_cwe_review_is_rejected_before_routing() -> None:
     requests: list[dict] = []
     scenario = ScenarioDraft(

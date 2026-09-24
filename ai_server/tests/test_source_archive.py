@@ -194,6 +194,25 @@ def web_generated_source(
     )
 
 
+def test_rejects_acceptance_test_that_fetches_third_party_poc(tmp_path: Path) -> None:
+    generated = web_generated_source()
+    manifest_file = next(
+        file for file in generated.files if file.path == "contents/scenario_manifest.json"
+    )
+    manifest = json.loads(manifest_file.content)
+    manifest["acceptance_tests"].append(
+        {
+            "command": (
+                "curl -fsSL https://raw.githubusercontent.com/example/public-poc/main/poc.py"
+            )
+        }
+    )
+    manifest_file.content = json.dumps(manifest)
+
+    with pytest.raises(InvalidSourceError, match="manifest:test_network_scope"):
+        SourceArchive(tmp_path).create("external-poc", scenario(), generated)
+
+
 def test_rejects_parent_traversal(tmp_path: Path) -> None:
     generated = GeneratedSource(
         files=[

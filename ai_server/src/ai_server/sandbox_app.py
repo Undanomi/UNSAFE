@@ -95,6 +95,56 @@ class DockerEngine:
         return response
 
 
+async def _make_workspace_writable(
+    engine: DockerEngine,
+    container_id: str,
+    relative_paths: list[str] | None = None,
+) -> None:
+    if relative_paths:
+        workspace_targets = sorted(
+            {
+                "/workspace/" + PurePosixPath(*path.parts[:index]).as_posix()
+                for raw_path in relative_paths
+                for path in [_safe_path(raw_path)]
+                for index in range(1, len(path.parts) + 1)
+            },
+            key=lambda path: (path.count("/"), path),
+        )
+        commands = (
+            ["chown", "65534:65534", *workspace_targets],
+            ["chmod", "u+rwX", *workspace_targets],
+        )
+    else:
+        commands = (
+            ["chown", "-R", "65534:65534", "/workspace"],
+            ["chmod", "-R", "u+rwX", "/workspace"],
+        )
+    for command in commands:
+        created = await engine.request(
+            "POST",
+            f"/containers/{container_id}/exec",
+            json={
+                "AttachStderr": True,
+                "AttachStdout": True,
+                "Cmd": command,
+                "User": "0:0",
+                "WorkingDir": "/",
+            },
+        )
+        exec_id = created.json()["Id"]
+        await engine.request(
+            "POST",
+            f"/exec/{exec_id}/start",
+            json={"Detach": False, "Tty": False},
+        )
+        inspected = await engine.request("GET", f"/exec/{exec_id}/json")
+        if int(inspected.json().get("ExitCode", 1)) != 0:
+            raise HTTPException(
+                status_code=502,
+                detail="could not make candidate workspace writable by sandbox user",
+            )
+
+
 def create_sandbox_app() -> FastAPI:
     token = os.environ.get("SOURCE_SANDBOX_TOKEN", "")
     if len(token) < 32:
@@ -261,26 +311,7 @@ def create_sandbox_app() -> FastAPI:
             content=_source_tar(session.source),
             headers={"Content-Type": "application/x-tar"},
         )
-        ownership_exec = await engine.request(
-            "POST",
-            f"/containers/{session.container_id}/exec",
-            json={
-                "AttachStderr": True,
-                "AttachStdout": True,
-                "Cmd": ["chown", "-R", "65534:65534", "/workspace"],
-                "User": "0:0",
-                "WorkingDir": "/",
-            },
-        )
-        ownership_exec_id = ownership_exec.json()["Id"]
-        await engine.request(
-            "POST",
-            f"/exec/{ownership_exec_id}/start",
-            json={"Detach": False, "Tty": False},
-        )
-        ownership_result = await engine.request("GET", f"/exec/{ownership_exec_id}/json")
-        if int(ownership_result.json().get("ExitCode", 1)) != 0:
-            raise HTTPException(status_code=502, detail="could not assign candidate workspace")
+        await _make_workspace_writable(engine, session.container_id)
 
     async def sandbox_worker() -> None:
         while True:
@@ -532,6 +563,14 @@ def create_sandbox_app() -> FastAPI:
                 params={"path": "/workspace", "copyUIDGID": "1"},
                 content=_source_tar(GeneratedSource(files=normalized_patch.files)),
                 headers={"Content-Type": "application/x-tar"},
+            )
+            # Docker archive extraction may recreate patched paths as root even when
+            # tar ownership metadata is present. Restore the disposable workspace to
+            # the unprivileged command user before any verification command runs.
+            await _make_workspace_writable(
+                engine,
+                session.container_id,
+                [file.path for file in normalized_patch.files],
             )
         session.source = updated_source
         session.last_activity = monotonic()

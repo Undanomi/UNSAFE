@@ -23,6 +23,7 @@ from ai_server.models import (
 from ai_server.sandbox_app import (
     _container_configuration,
     _demultiplex,
+    _make_workspace_writable,
     _read_workspace_tar,
     _source_tar,
     _validate_command,
@@ -60,6 +61,63 @@ def test_source_tar_makes_candidate_directories_owned_by_non_root_user() -> None
     assert members["contents/app"].isdir()
     assert members["contents"].uid == 65534
     assert members["contents/app"].uid == 65534
+
+
+class WorkspaceOwnershipResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def json(self) -> dict:
+        return self.payload
+
+
+class WorkspaceOwnershipEngine:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, str, dict]] = []
+        self.next_exec = 0
+
+    async def request(self, method: str, path: str, **kwargs) -> WorkspaceOwnershipResponse:
+        self.requests.append((method, path, kwargs))
+        if path.endswith("/exec"):
+            self.next_exec += 1
+            return WorkspaceOwnershipResponse({"Id": f"exec-{self.next_exec}"})
+        if path.endswith("/json"):
+            return WorkspaceOwnershipResponse({"ExitCode": 0})
+        return WorkspaceOwnershipResponse({})
+
+
+@pytest.mark.asyncio
+async def test_workspace_is_owned_and_writable_by_sandbox_user_after_archive_upload() -> None:
+    engine = WorkspaceOwnershipEngine()
+
+    await _make_workspace_writable(  # type: ignore[arg-type]
+        engine,
+        "container-1",
+        ["contents/app/package.json"],
+    )
+
+    create_payloads = [
+        kwargs["json"]
+        for method, path, kwargs in engine.requests
+        if method == "POST" and path == "/containers/container-1/exec"
+    ]
+    assert [payload["Cmd"] for payload in create_payloads] == [
+        [
+            "chown",
+            "65534:65534",
+            "/workspace/contents",
+            "/workspace/contents/app",
+            "/workspace/contents/app/package.json",
+        ],
+        [
+            "chmod",
+            "u+rwX",
+            "/workspace/contents",
+            "/workspace/contents/app",
+            "/workspace/contents/app/package.json",
+        ],
+    ]
+    assert all(payload["User"] == "0:0" for payload in create_payloads)
 
 
 def test_workspace_reader_ignores_dependency_symlinks_but_rejects_source_symlinks() -> None:

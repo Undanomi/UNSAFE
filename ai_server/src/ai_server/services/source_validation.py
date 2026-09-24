@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -45,6 +46,8 @@ MISSING_SYSTEMD_UNIT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+URL_PATTERN = re.compile(r"https?://[^\s'\"`<>]+", re.IGNORECASE)
+LOCAL_TEST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
@@ -72,6 +75,7 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
     if manifest is not None:
         manifest_schema_valid = _validate_manifest(root, manifest, scenario.target_os, add)
         if manifest_schema_valid:
+            _validate_local_test_commands(manifest, add)
             _validate_attack_graph(manifest, scenario.attack_graph, add)
             _validate_cve_grounding(manifest, scenario.attack_graph, add)
     _validate_password_selection(scenario.attack_graph, add)
@@ -195,6 +199,27 @@ def _validate_source_syntax(root: Path, add) -> None:
                     f"preflight:shell:{relative}",
                     message or "valid Bash syntax",
                 )
+
+
+def _validate_local_test_commands(manifest: dict, add) -> None:
+    external_urls: list[str] = []
+    for field in ("health_checks", "acceptance_tests"):
+        for check in manifest.get(field, []):
+            command = check.get("command", "") if isinstance(check, dict) else ""
+            for raw_url in URL_PATTERN.findall(command):
+                hostname = (urlsplit(raw_url).hostname or "").casefold()
+                if hostname not in LOCAL_TEST_HOSTS:
+                    external_urls.append(raw_url)
+    add(
+        "fail" if external_urls else "pass",
+        "manifest:test_network_scope",
+        (
+            "health and acceptance tests must not fetch external URLs: "
+            + ", ".join(sorted(set(external_urls)))
+            if external_urls
+            else "health and acceptance test URLs are local"
+        ),
+    )
 
 
 def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:

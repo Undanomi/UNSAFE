@@ -382,9 +382,16 @@ EXPLOITABILITY_VERIFICATION_CONSTRAINTS = """攻略成立性と意図しない�
   ファイルの取得、権限昇格なら実効UIDや保護対象へのアクセス変化などを確認する
 - 攻撃グラフの各requiresについて、前段の成果物なしでは後段が成功せず、前段で得た実値を使うと
   成功することを検証する。構築用スクリプトが成果物を知っていることを攻略可能性の証明に使わない
-- acceptance_testsには、攻撃者が利用する入口から実行するbenign control、exploit、negative controlを
-  ステップIDと対応付けて記載し、期待文字列をechoするだけ、ソースをgrepするだけ、DBを直接読むだけの
-  自己充足的なテストにしない
+- exploit検証は、生成した教材ソースと公式仕様から作れる自己完結した最小リクエストだけを使う。
+  GitHub、Exploit-DB、ブログ、gist等の第三者が公開したPoC、exploit script、Metasploit moduleを
+  build、provision、health check、acceptance test、source workbenchで取得・コピー・実行しない。
+  READMEやシナリオ本文で、攻略者自身がPoCを入手して使う手順を案内することは許可する
+- 安全で自己完結したexploit検証を生成できない場合は、その攻撃固有のacceptance testを省略してよい。
+  野良PoCで穴埋めせず、サービス起動、構文、版、設定、権限などPoCを必要としない検査だけを残す。
+  この省略だけをacceptance_test_gapやunproven_exploitのerrorとしてビルドを停止しない
+- acceptance_testsへexploit検証を記載できる場合は、攻撃者が利用する入口から実行するbenign control、
+  exploit、negative controlをステップIDと対応付け、期待文字列をechoするだけ、ソースをgrepするだけ、
+  DBを直接読むだけの自己充足的なテストにしない
 - acceptance test専用のmarker、payload、header、query等をアプリ側で特別扱いし、脆弱性を経由せず
   成功時のファイル作成や応答を直接発生させる分岐を実装しない
 - sudo、runuser、su等で攻略後のユーザーへ直接切り替えてflagを読む操作をexploitの証明に使わない。
@@ -868,9 +875,9 @@ JSONのみを返してください:
 - この工程では、特定フレームワーク内部のimport先、adapter実装、パッチ行、完成コードまで要求しない。
   配布物、版、発火条件、入口、実行主体、観測成果の整合を見て、実使用はソースレビューとPackerで検証する。
   本文がグラフと異なる配布物・経路を明示した場合はerrorだが、コード未生成だけではerrorにしない
-- acceptance test計画が、意図したexploitの成功、benign control、negative control、requiresを
-  飛ばした失敗を全く観測できない場合はacceptance_test_gapのerrorにする。ただし、同じ性質の追加ケースや
-  網羅性向上だけを要求せず、実ビルドで判定する環境依存の懸念はwarningにする
+- 安全な自己完結テストを作れない場合、攻撃固有のacceptance test不足はwarningに留める。第三者PoCを
+  自動テストへ要求しない。README等で攻略者に入手・利用を案内してよい。既存テストの常時成功、攻撃の
+  迂回、テスト用backdoorを直接確認できる場合だけerrorにする
 - warningは成立性を損なわない改善提案だけに使い、成立可否が不明な点をwarningへ弱めない
 - errorが1件でもあればapproved=false、errorがなければapproved=trueにする
 - evidenceには設計書または攻撃グラフの具体的な記述と、どの主体のどの操作が成功または失敗するかを
@@ -1079,6 +1086,9 @@ JSONのみを返してください。
 - OS/runtime導入のapt-getと、依存取得に必要なpackage managerコマンドだけnetwork_access=trueにできる。
   npm/yarn/pnpmでは必ずscriptsを無効化し、lockfile生成ではpackage-lock-only等を使う。
   curl/wgetや任意スクリプトへnetwork_access=trueを付けない
+- GitHub、Exploit-DB、ブログ、gist等から取得した第三者PoC、exploit script、Metasploit moduleを
+  ワークベンチ内で取得・コピー・実行しない。READMEで攻略者にその入手・利用を案内する記述は残してよい。
+  生成物だけで安全な自己完結テストを作れなければ、その攻撃固有の検証は行わず他の検査を続ける
 - build.shとprovision.sh全体はroot、systemd、OS変更を前提にするため実行しない。ただし両方を必ず読み、
   runtime/package導入、依存導入、アプリbuildだけでなく、独自のソース変換、導入後ファイル検査、
   fail-closed assertionも個別コマンドで同じ順序・条件に近づけて検証する。今回たまたま使われた技術を
@@ -1375,8 +1385,14 @@ JSONのみを返してください:
 - flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
   攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
   より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
-- 中核の攻撃について、攻撃固有の効果を全く証明せず、通常入力、エラー、接続成功だけを確認するテストは
-  unproven_exploitまたはacceptance_test_gapのerrorにする
+- 中核の攻撃について攻撃固有の効果を証明する安全な自己完結テストが無い場合はwarningに留め、
+  第三者PoCを自動テストへ追加するよう要求しない。READMEやシナリオ本文で攻略者自身へ入手・利用を
+  案内することは許可する。既存テストが通常入力、エラー、接続成功をexploit成功と偽っている、常に
+  成功する、または検証用backdoorで攻撃を迂回する場合だけunproven_exploitかacceptance_test_gapの
+  errorにする
+- provision、build、health_checks、acceptance_testsのいずれにも、GitHub、Exploit-DB、ブログ、gist等から
+  第三者PoCを取得・コピー・実行する処理を含めない。見つけた場合は自動検証から削除を求め、生成物だけで
+  代替テストを作れなければ攻撃固有の検証を省略する。READMEで攻略者へ入手・利用を案内するのは許可する
 - 実装された主脆弱性が攻撃グラフの種類と異なる場合はwrong_techniqueのerrorにする
 - CVEステップではcve_title、cve_description、cwe_idsを公式事実として、実装コードと設定が同じ
   発火条件と影響を実現しているか確認する。同製品の別脆弱性、一般的な設定不備、模擬エンドポイント、
