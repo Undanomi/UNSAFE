@@ -327,6 +327,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
         assert "ProtectSystem" in prompt
         assert "ReadWritePaths" in prompt
         assert "unit外の`runuser ... test -w`" in prompt
+        assert "各攻撃ステップの実行コンテキスト" in prompt
+        assert "元unitの制約を誤適用しない" in prompt
 
     workbench_prompt = source_workbench_prompt(
         machine,
@@ -337,6 +339,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     )
     assert "unit内でread-only" in workbench_prompt
     assert "unit外の`runuser ... test -w`成功" in workbench_prompt
+    assert "元processの制約を引き継がせない" in workbench_prompt
 
     review_prompt = source_review_prompt(machine, scenario, source)
     assert "独立した敵対的レビュー担当" in review_prompt
@@ -361,6 +364,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "mount namespaceを権限判定" in review_prompt
     assert "permission_blockerのerror" in review_prompt
     assert "host側で同じUIDへ`runuser`して書けるだけでは合格にしない" in review_prompt
+    assert "コンテキスト遷移が明示" in review_prompt
+    assert "元serviceの制約を誤適用しない" in review_prompt
 
     scoped_review_prompt = source_review_prompt(
         machine,
@@ -403,6 +408,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "実効UID" in scenario_review
     assert "ProtectSystem" in scenario_review
     assert "mount namespace" in scenario_review
+    assert "遷移先のnamespaceと実効権限" in scenario_review
     assert "benign control" in scenario_review
     assert "時系列の権限表" in scenario_review
     assert "相反する記述" in scenario_review
@@ -440,7 +446,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
-    assert len(scenario_review) < 5600
+    assert len(scenario_review) < 5700
     assert "重大な不整合をまとめ" in scenario_review
     assert "特定フレームワーク内部のimport先" in scenario_review
     assert "新しいフル監査ではなく" in focused_scenario_review

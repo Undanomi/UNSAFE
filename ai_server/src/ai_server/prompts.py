@@ -348,6 +348,10 @@ WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッシ
   `ProtectSystem`、`ProtectHome`、`ReadOnlyPaths`、`InaccessiblePaths`、`TemporaryFileSystem`と
   `ReadWritePaths`、`BindReadWritePaths`を突き合わせ、同じunitのmount namespaceから攻撃経路上の
   必須パスを読み書きできるようにする。unit外の`runuser ... test -w`だけを成立性の証拠にしない
+- 各攻撃ステップの実行コンテキストを、入口、process/service、namespace・container・chroot、UID/GID・
+  supplementary group、capability、mount、MAC、環境として追跡する。前段の成果物を使ってSSH等への再接続、
+  `su`・`sudo`、別service/APIへのlogin、cron・timer・setuid実行、container等への出入りを行うなら、後段は
+  遷移先のコンテキストで判定し、元unitの制約を誤適用しない。遷移に必要な成果物、設定、到達性は検証する
 - アップロード、cache、sessionなど攻略上必要な場所だけを書き込み可能にし、DocumentRoot全体への
   `chmod -R 777`、無差別な所有者変更、world-writable化で権限問題を回避しない
 """
@@ -907,7 +911,9 @@ permission_blockerになる、未権限主体が先に読めてpermission_shortc
 レビュー時点では実ファイルが未生成なので、一般的なアプリファイルやDB接続設定の全permissionを
 網羅していないことだけでerrorにせず、コード生成で安全に具体化できない攻撃連鎖上の曖昧さを示す。
 任意のコマンド・コード・式を実行可能な主体の能力を過小評価せず、操作方法や通信チャネルの変更だけを
-requiresの根拠にしない。flagは攻略後の主体だけが読めることを確認する。
+requiresの根拠にしない。前段成果物を使う再login、`su`・`sudo`、別service、cron・timer・setuid、
+container等への遷移が成立する場合は、後段を遷移先のnamespaceと実効権限で判定する。flagは攻略後の
+主体だけが読めることを確認する。
 
 {DESIGN_CONSTRAINTS}
 
@@ -1101,6 +1107,9 @@ JSONのみを返してください。
 - systemd unitが攻撃主体を起動する場合は、owner/group/modeだけでなく`ProtectSystem`、`ProtectHome`、
   `ReadOnlyPaths`、`ReadWritePaths`等を静的に照合する。攻撃経路に必要なパスがunit内でread-onlyなら、
   unit外の`runuser ... test -w`成功を根拠にせず、意図したパスだけを書込み可能に修正する
+- 前段成果物を使う再login、`su`・`sudo`、別service、cron・timer・setuid、container等への遷移が
+  攻撃グラフにある場合、後段を遷移先のnamespaceと実効権限で扱い、元processの制約を引き継がせない。
+  必要な資格情報・成果物と遷移先設定を確認し、無関係なhost側`runuser`を遷移成立の代用にしない
 - `contents/scripts/verify.sh`はアーカイブ作成時にサーバーが生成するため、ワークベンチの候補ソースには
   存在しない。このファイルの存在確認、読取り、修正を要求しない
 - 実装上の矛盾を見つけたら、脆弱性や攻撃経路を削除して通すのではなく、シナリオの意図を維持した
@@ -1394,6 +1403,10 @@ JSONのみを返してください:
   `ProtectSystem`、`ProtectHome`、`ReadOnlyPaths`、`InaccessiblePaths`により次工程で必要なパスが
   read-onlyまたは不可視で、`ReadWritePaths`や`BindReadWritePaths`にも例外がなければ
   permission_blockerのerrorにする。host側で同じUIDへ`runuser`して書けるだけでは合格にしない
+- 前段成果物を使う再login、`su`・`sudo`、別service/API、cron・timer・setuid、container等への
+  コンテキスト遷移が明示されている場合、後段を遷移先のnamespace、UID/GID、group、capability、mount、
+  MACで審査し、元serviceの制約を誤適用しない。成果物を取得・持出し・入力でき、遷移先が受理して
+  新しいコンテキストを実際に得られることを確認する
 - flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
   攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
   より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
