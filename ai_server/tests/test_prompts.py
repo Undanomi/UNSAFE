@@ -19,6 +19,7 @@ from ai_server.prompts import (
     scenario_review_prompt,
     scenario_sync_prompt,
     source_review_prompt,
+    source_workbench_prompt,
 )
 
 
@@ -323,6 +324,19 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
         assert "保護対象そのものを攻略前に直接開示" in prompt
         assert "オンライン認証試行" in prompt
         assert "経路の一意性や最短性を要求しない" in prompt
+        assert "ProtectSystem" in prompt
+        assert "ReadWritePaths" in prompt
+        assert "unit外の`runuser ... test -w`" in prompt
+
+    workbench_prompt = source_workbench_prompt(
+        machine,
+        scenario,
+        source,
+        [],
+        commands_remaining=5,
+    )
+    assert "unit内でread-only" in workbench_prompt
+    assert "unit外の`runuser ... test -w`成功" in workbench_prompt
 
     review_prompt = source_review_prompt(machine, scenario, source)
     assert "独立した敵対的レビュー担当" in review_prompt
@@ -344,6 +358,9 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "contents/scripts/verify.shはmanifestからのサーバー生成" in review_prompt
     assert "細粒度のブロッカーを後出しせず" in review_prompt
     assert "ビルドを止めるfindingを一度に全件列挙" in review_prompt
+    assert "mount namespaceを権限判定" in review_prompt
+    assert "permission_blockerのerror" in review_prompt
+    assert "host側で同じUIDへ`runuser`して書けるだけでは合格にしない" in review_prompt
 
     scoped_review_prompt = source_review_prompt(
         machine,
@@ -384,6 +401,8 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "permission_shortcut" in scenario_review
     assert "全親ディレクトリ" in scenario_review
     assert "実効UID" in scenario_review
+    assert "ProtectSystem" in scenario_review
+    assert "mount namespace" in scenario_review
     assert "benign control" in scenario_review
     assert "時系列の権限表" in scenario_review
     assert "相反する記述" in scenario_review
@@ -421,7 +440,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
-    assert len(scenario_review) < 5500
+    assert len(scenario_review) < 5600
     assert "重大な不整合をまとめ" in scenario_review
     assert "特定フレームワーク内部のimport先" in scenario_review
     assert "新しいフル監査ではなく" in focused_scenario_review

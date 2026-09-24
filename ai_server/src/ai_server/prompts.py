@@ -344,6 +344,10 @@ WEB_EXPERIENCE_AND_PERMISSION_CONSTRAINTS = """Web公開品質とパーミッシ
   `/var/www/html/index.php`なら、`namei -l /var/www/html/index.php`と
   `runuser -u www-data -- test -r /var/www/html/index.php`の両方を、scenario_manifest.jsonの
   health_checksまたはacceptance_testsへそれぞれ入れる
+- 攻撃主体がsystemd unit内で動く場合は、host側のowner/group/modeだけで書込み可能と判断しない。
+  `ProtectSystem`、`ProtectHome`、`ReadOnlyPaths`、`InaccessiblePaths`、`TemporaryFileSystem`と
+  `ReadWritePaths`、`BindReadWritePaths`を突き合わせ、同じunitのmount namespaceから攻撃経路上の
+  必須パスを読み書きできるようにする。unit外の`runuser ... test -w`だけを成立性の証拠にしない
 - アップロード、cache、sessionなど攻略上必要な場所だけを書き込み可能にし、DocumentRoot全体への
   `chmod -R 777`、無差別な所有者変更、world-writable化で権限問題を回避しない
 """
@@ -896,8 +900,9 @@ JSONのみを返してください:
   構造化値は生成側の責務であり、user_inputへ転嫁しない。難易度を上げる・要件を緩和するという提案を
   user_inputとして返さず、指定難易度の範囲で生成物を修正または再生成する
 
-権限レビューでは、時系列の権限表として攻撃前後の実効UID、重要パスと全親ディレクトリ、
-owner/group/mode、sudoers、capabilityを追う。同じ状態に相反する記述がある、意図した主体が読めず
+権限レビューでは、時系列の権限表で実効UID、重要パスと全親ディレクトリ、owner/group/mode、sudoers、
+capability、systemdの`ProtectSystem`、`ProtectHome`、`ReadOnlyPaths`、`ReadWritePaths`による
+mount namespaceを追う。相反する記述がある、意図した主体が読めず
 permission_blockerになる、未権限主体が先に読めてpermission_shortcutになる場合だけerrorにする。
 レビュー時点では実ファイルが未生成なので、一般的なアプリファイルやDB接続設定の全permissionを
 網羅していないことだけでerrorにせず、コード生成で安全に具体化できない攻撃連鎖上の曖昧さを示す。
@@ -1093,6 +1098,9 @@ JSONのみを返してください。
   runtime/package導入、依存導入、アプリbuildだけでなく、独自のソース変換、導入後ファイル検査、
   fail-closed assertionも個別コマンドで同じ順序・条件に近づけて検証する。今回たまたま使われた技術を
   汎用必須検査だと決めつけず、候補に実在する処理だけを検査する
+- systemd unitが攻撃主体を起動する場合は、owner/group/modeだけでなく`ProtectSystem`、`ProtectHome`、
+  `ReadOnlyPaths`、`ReadWritePaths`等を静的に照合する。攻撃経路に必要なパスがunit内でread-onlyなら、
+  unit外の`runuser ... test -w`成功を根拠にせず、意図したパスだけを書込み可能に修正する
 - `contents/scripts/verify.sh`はアーカイブ作成時にサーバーが生成するため、ワークベンチの候補ソースには
   存在しない。このファイルの存在確認、読取り、修正を要求しない
 - 実装上の矛盾を見つけたら、脆弱性や攻撃経路を削除して通すのではなく、シナリオの意図を維持した
@@ -1382,6 +1390,10 @@ JSONのみを返してください:
   いないことを確認する。実値はサーバー管理であり推測しない
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
+- 攻撃主体がsystemd service内で動く場合は、そのunitのmount namespaceを権限判定へ含める。
+  `ProtectSystem`、`ProtectHome`、`ReadOnlyPaths`、`InaccessiblePaths`により次工程で必要なパスが
+  read-onlyまたは不可視で、`ReadWritePaths`や`BindReadWritePaths`にも例外がなければ
+  permission_blockerのerrorにする。host側で同じUIDへ`runuser`して書けるだけでは合格にしない
 - flag、秘密、次工程の成果物が通常レスポンス、公開ファイル、過剰permission、検証用backdoor等から
   攻略前に直接取得できる場合だけunintended_shortcutのerrorにする。別の攻撃手法、オンライン認証試行、
   より短い攻略経路が存在することだけではerrorにせず、意図した経路の一意性や最短性を要求しない
