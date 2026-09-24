@@ -76,12 +76,27 @@ def _response(request: Request, state) -> SessionResponse:
     payload = state.model_dump()
     if state.scenario is not None:
         payload["scenario"] = strip_rockyou_selections(state.scenario).model_dump(mode="json")
+    failure = None
+    failure_report = state.repair_failure_report
+    if (
+        isinstance(failure_report, dict)
+        and failure_report.get("kind") == "ai_safety_refusal"
+        and isinstance(failure_report.get("summary"), str)
+        and failure_report["summary"].strip()
+    ):
+        failure = {
+            "kind": "ai_safety_refusal",
+            "summary": failure_report["summary"].strip(),
+            "retry_allowed": False,
+        }
+        payload["error_message"] = failure["summary"]
     return SessionResponse(
         **payload,
         scenario_events_url=events,
         download_url=download,
         user_flag=state.scenario.user_flag if state.scenario else None,
         system_flag=state.scenario.system_flag if state.scenario else None,
+        failure=failure,
     )
 
 

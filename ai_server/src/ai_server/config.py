@@ -29,6 +29,11 @@ class RuntimeLimitSettings(DatabaseSettings):
     gemini_max_output_tokens: int = Field(default=65536, ge=1024, le=65536)
     openai_max_output_tokens: int = Field(default=65536, ge=1024, le=128000)
     generation_retries: int = Field(default=3, ge=1, le=10)
+    ai_max_concurrent_requests: int = Field(default=1, ge=1, le=20)
+    ai_request_min_interval_seconds: float = Field(default=1, ge=0, le=60)
+    ai_transient_retry_attempts: int = Field(default=8, ge=1, le=20)
+    ai_transient_retry_max_seconds: float = Field(default=600, gt=0, le=3600)
+    ai_transient_retry_jitter_seconds: float = Field(default=0.5, ge=0, le=10)
     cve_min_year: int = Field(default=2024, ge=1999, le=2100)
     scenario_generation_attempts: int = Field(default=5, ge=1, le=10)
     source_generation_attempts: int = Field(default=3, ge=1, le=5)
@@ -37,8 +42,8 @@ class RuntimeLimitSettings(DatabaseSettings):
 
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
-    source_workbench_action_limit: int = Field(default=8, ge=1, le=30)
-    source_sandbox_timeout_seconds: float = Field(default=240, gt=0, le=3600)
+    source_workbench_action_limit: int = Field(default=20, ge=1, le=60)
+    source_sandbox_timeout_seconds: float = Field(default=660, gt=0, le=3600)
     download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)

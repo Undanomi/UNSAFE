@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -112,6 +115,74 @@ class _GeneratedArtifactValidationFailure(ValueError):
 
 class _ReviewReconsiderationExhausted(RuntimeError):
     """The reviewer repeated a repair request that cannot pass validation."""
+
+
+class AIProviderRequestError(Exception):
+    """A provider request cannot be completed within the bounded transport policy."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.retryable = retryable
+
+
+class AIProviderSafetyRefusalError(Exception):
+    """The provider refused a request for a safety or policy reason."""
+
+    def __init__(self, provider: str, detail: object) -> None:
+        reason = str(detail).strip()[:2000] or "reason was not provided"
+        self.summary = f"{provider} が安全ポリシー上の理由で処理を拒否しました: {reason}"
+        super().__init__(self.summary)
+
+
+class _SharedAIRequestGate:
+    """Pace all requests made by one application-wide provider client."""
+
+    def __init__(self, max_concurrent: int, min_interval_seconds: float) -> None:
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._pacing_lock = asyncio.Lock()
+        self._min_interval_seconds = min_interval_seconds
+        self._next_start = 0.0
+
+    async def request(
+        self,
+        operation: Callable[[], Awaitable[httpx.Response]],
+        *,
+        cooldown_for_response: Callable[[httpx.Response], float | None] | None = None,
+        transport_cooldown_seconds: float = 0,
+    ) -> httpx.Response:
+        async with self._semaphore:
+            async with self._pacing_lock:
+                loop = asyncio.get_running_loop()
+                delay = self._next_start - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                started = loop.time()
+                self._next_start = max(self._next_start, started) + self._min_interval_seconds
+            try:
+                response = await operation()
+            except httpx.TransportError:
+                if transport_cooldown_seconds > 0:
+                    await self.defer(transport_cooldown_seconds)
+                raise
+            if cooldown_for_response is not None:
+                cooldown = cooldown_for_response(response)
+                if cooldown is not None and cooldown > 0:
+                    await self.defer(cooldown)
+            return response
+
+    async def defer(self, delay_seconds: float) -> None:
+        async with self._pacing_lock:
+            loop = asyncio.get_running_loop()
+            self._next_start = max(self._next_start, loop.time() + delay_seconds)
 
 
 def _gemini_json_schema(value):
@@ -1451,9 +1522,12 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=SourceWorkbenchDecision,
-                    max_output_tokens=min(self.max_output_tokens, 4096),
+                    max_output_tokens=min(self.max_output_tokens, 16_384),
                 )
-                return SourceWorkbenchDecision.model_validate_json(response)
+                decision = SourceWorkbenchDecision.model_validate_json(response)
+                if decision.patch is not None:
+                    _validate_generated_file_payload(decision.patch.files)
+                return decision
             except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
@@ -1713,10 +1787,18 @@ class GeminiGenerator(_BaseGenerator):
                 usage.get("candidatesTokenCount"),
                 usage.get("totalTokenCount"),
             )
+        prompt_feedback = body.get("promptFeedback", {})
+        block_reason = (
+            prompt_feedback.get("blockReason") if isinstance(prompt_feedback, dict) else None
+        )
+        if block_reason and block_reason != "BLOCK_REASON_UNSPECIFIED":
+            raise AIProviderSafetyRefusalError("Gemini", block_reason)
         candidates = body.get("candidates", [])
         if not candidates:
             raise RuntimeError("Gemini returned no candidates")
         finish_reason = candidates[0].get("finishReason")
+        if finish_reason in {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
+            raise AIProviderSafetyRefusalError("Gemini", finish_reason)
         if finish_reason and finish_reason != "STOP":
             raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
         parts = candidates[0].get("content", {}).get("parts", [])
@@ -1736,6 +1818,181 @@ class OpenAIGenerator(_BaseGenerator):
             model=settings.openai_model,
             max_output_tokens=settings.openai_max_output_tokens,
         )
+        self._request_gate = _SharedAIRequestGate(
+            settings.ai_max_concurrent_requests,
+            settings.ai_request_min_interval_seconds,
+        )
+
+    @staticmethod
+    def _error_metadata(response: httpx.Response) -> tuple[str | None, str | None, str]:
+        detail = response.text.strip()[:2000]
+        try:
+            body = response.json()
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None, None, detail
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            return None, None, detail
+        error_type = error.get("type")
+        error_code = error.get("code")
+        return (
+            error_type if isinstance(error_type, str) else None,
+            error_code if isinstance(error_code, str) else None,
+            detail,
+        )
+
+    @staticmethod
+    def _is_retryable_response(
+        response: httpx.Response,
+        error_type: str | None,
+        error_code: str | None,
+    ) -> bool:
+        if response.status_code == 429:
+            permanent_codes = {
+                "billing_hard_limit_reached",
+                "credit_balance_exhausted",
+                "insufficient_quota",
+                "organization_spend_limit_exceeded",
+                "organization_usage_limit_exceeded",
+                "project_spend_limit_exceeded",
+                "usage_limit_reached",
+            }
+            if error_code in permanent_codes:
+                return False
+            if error_type in {
+                "authentication_error",
+                "billing_error",
+                "insufficient_quota",
+                "invalid_request_error",
+            }:
+                return error_code == "rate_limit_exceeded"
+            return True
+        return response.status_code in {408, 500, 502, 503, 504}
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float | None:
+        value = response.headers.get("Retry-After")
+        if value is None:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            seconds = (retry_at - datetime.now(UTC)).total_seconds()
+        if seconds < 0:
+            return 0.0
+        return seconds
+
+    async def _post_with_retry(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, object],
+    ) -> httpx.Response:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        attempts = self.settings.ai_transient_retry_attempts
+        max_elapsed = self.settings.ai_transient_retry_max_seconds
+        request_id = str(uuid4())
+        request_headers = {**headers, "X-Client-Request-Id": request_id}
+        for attempt_index in range(attempts):
+            response: httpx.Response | None = None
+            cause: httpx.TransportError | None = None
+            fallback_delay = min(60.0, 2.0**attempt_index)
+            jitter = random.uniform(0.0, self.settings.ai_transient_retry_jitter_seconds)
+            transport_delay = fallback_delay + jitter
+            response_delay: float | None = None
+
+            def cooldown_for_response(
+                candidate: httpx.Response,
+                fallback: float = fallback_delay,
+                jitter_seconds: float = jitter,
+            ) -> float | None:
+                nonlocal response_delay
+                error_type, error_code, _ = self._error_metadata(candidate)
+                if not self._is_retryable_response(candidate, error_type, error_code):
+                    return None
+                retry_after = self._retry_after_seconds(candidate)
+                response_delay = (
+                    retry_after if retry_after is not None else fallback
+                ) + jitter_seconds
+                return response_delay
+
+            try:
+                response = await self._request_gate.request(
+                    lambda: self.client.post(
+                        url,
+                        headers=request_headers,
+                        json=payload,
+                    ),
+                    cooldown_for_response=cooldown_for_response,
+                    transport_cooldown_seconds=transport_delay,
+                )
+            except httpx.TransportError as error:
+                cause = error
+                error_type = None
+                error_code = None
+                detail = str(error)
+                delay = transport_delay
+            else:
+                if response.status_code < 400:
+                    return response
+                error_type, error_code, detail = self._error_metadata(response)
+                if not self._is_retryable_response(response, error_type, error_code):
+                    raise AIProviderRequestError(
+                        "OpenAI request failed with a non-retryable response: "
+                        f"HTTP {response.status_code}, code={error_code or 'unknown'}; {detail}",
+                        status_code=response.status_code,
+                        error_code=error_code,
+                    )
+                assert response_delay is not None
+                delay = response_delay
+
+            attempts_exhausted = attempt_index + 1 >= attempts
+            elapsed = loop.time() - started
+            deadline_exhausted = elapsed + delay > max_elapsed
+            status_code = response.status_code if response is not None else None
+            if attempts_exhausted or deadline_exhausted:
+                reason = (
+                    "attempt limit reached" if attempts_exhausted else "retry window exhausted"
+                )
+                raise AIProviderRequestError(
+                    "OpenAI request remained temporarily unavailable: "
+                    f"{reason}; HTTP {status_code or 'transport'}, "
+                    f"code={error_code or 'unknown'}; {detail}",
+                    status_code=status_code,
+                    error_code=error_code,
+                    retryable=True,
+                ) from cause
+
+            logger.warning(
+                "OpenAI request temporarily unavailable; retrying in %.3fs "
+                "(attempt %d/%d, status=%s, code=%s)",
+                delay,
+                attempt_index + 1,
+                attempts,
+                status_code or "transport",
+                error_code or "unknown",
+                extra={
+                    "attempt": attempt_index + 1,
+                    "delay_seconds": round(delay, 3),
+                    "status_code": status_code,
+                    "error_type": error_type,
+                    "error_code": error_code,
+                    "openai_request_id": response.headers.get("x-request-id")
+                    if response is not None
+                    else None,
+                    "client_request_id": request_id,
+                },
+            )
+
+        raise AssertionError("OpenAI retry loop ended unexpectedly")
 
     async def _generate(
         self,
@@ -1768,24 +2025,14 @@ class OpenAIGenerator(_BaseGenerator):
         elif json_output:
             payload["text"] = {"format": {"type": "json_object"}}
 
-        response = await self.client.post(
+        response = await self._post_with_retry(
             "https://api.openai.com/v1/responses",
             headers={
                 "Authorization": (f"Bearer {self.settings.openai_api_key.get_secret_value()}"),
                 "Content-Type": "application/json",
             },
-            json=payload,
+            payload=payload,
         )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            detail = response.text.strip()[:2000]
-            message = f"{error}; OpenAI response: {detail}" if detail else str(error)
-            raise httpx.HTTPStatusError(
-                message,
-                request=error.request,
-                response=error.response,
-            ) from error
 
         body = response.json()
         usage = body.get("usage", {})
@@ -1798,6 +2045,8 @@ class OpenAIGenerator(_BaseGenerator):
         status = body.get("status")
         if status != "completed":
             detail = body.get("incomplete_details") or body.get("error") or status
+            if isinstance(detail, dict) and detail.get("reason") == "content_filter":
+                raise AIProviderSafetyRefusalError("OpenAI", detail["reason"])
             raise RuntimeError(f"OpenAI generation did not complete: {detail}")
 
         generated_parts: list[str] = []
@@ -1806,8 +2055,8 @@ class OpenAIGenerator(_BaseGenerator):
                 continue
             for content in output.get("content", []):
                 if content.get("type") == "refusal":
-                    raise RuntimeError(
-                        f"OpenAI refused the request: {content.get('refusal', 'unknown reason')}"
+                    raise AIProviderSafetyRefusalError(
+                        "OpenAI", content.get("refusal", "reason was not provided")
                     )
                 if content.get("type") == "output_text":
                     generated_parts.append(content.get("text", ""))

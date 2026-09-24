@@ -11,13 +11,14 @@ import tarfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+from time import monotonic
 from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 
-from .models import GeneratedSource, SourceFile, SourceWorkbenchCommand
+from .models import GeneratedSource, SourceFile, SourcePatch, SourceWorkbenchCommand
 
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
@@ -69,14 +70,15 @@ class SandboxSession:
     network_id: str | None = None
     error: str | None = None
     released: asyncio.Event = field(default_factory=asyncio.Event)
+    last_activity: float = field(default_factory=monotonic)
 
 
 class DockerEngine:
-    def __init__(self, socket_path: str) -> None:
+    def __init__(self, socket_path: str, request_timeout_seconds: float = 660) -> None:
         self.client = httpx.AsyncClient(
             transport=httpx.AsyncHTTPTransport(uds=socket_path),
             base_url="http://docker",
-            timeout=httpx.Timeout(180, connect=10),
+            timeout=httpx.Timeout(request_timeout_seconds, connect=10),
         )
 
     async def close(self) -> None:
@@ -99,7 +101,7 @@ def create_sandbox_app() -> FastAPI:
         raise RuntimeError("SOURCE_SANDBOX_TOKEN must contain at least 32 characters")
     execution_image = os.environ.get("SOURCE_SANDBOX_EXECUTION_IMAGE", "debian:13-slim")
     socket_path = os.environ.get("SOURCE_SANDBOX_DOCKER_SOCKET", "/var/run/docker.sock")
-    command_timeout = int(os.environ.get("SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS", "180"))
+    command_timeout = int(os.environ.get("SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS", "600"))
     max_concurrent = int(os.environ.get("SOURCE_SANDBOX_MAX_CONCURRENT", "2"))
     queue_capacity = int(os.environ.get("SOURCE_SANDBOX_QUEUE_CAPACITY", "100"))
     session_ttl = int(os.environ.get("SOURCE_SANDBOX_SESSION_TTL_SECONDS", "900"))
@@ -109,7 +111,7 @@ def create_sandbox_app() -> FastAPI:
     queue: asyncio.Queue[str] = asyncio.Queue(maxsize=queue_capacity)
     workers: list[asyncio.Task[None]] = []
     cleanup_tasks: set[asyncio.Task[None]] = set()
-    engine = DockerEngine(socket_path)
+    engine = DockerEngine(socket_path, request_timeout_seconds=command_timeout + 60)
     image_lock = asyncio.Lock()
     image_ready = False
 
@@ -307,10 +309,17 @@ def create_sandbox_app() -> FastAPI:
                 queue.task_done()
                 continue
             session.status = "ready"
+            session.last_activity = monotonic()
             try:
-                await asyncio.wait_for(session.released.wait(), timeout=session_ttl)
-            except TimeoutError:
-                session.status = "expired"
+                while not session.released.is_set():
+                    idle_seconds = monotonic() - session.last_activity
+                    remaining_ttl = max(0.0, session_ttl - idle_seconds)
+                    try:
+                        await asyncio.wait_for(session.released.wait(), timeout=remaining_ttl)
+                    except TimeoutError:
+                        if monotonic() - session.last_activity >= session_ttl:
+                            session.status = "expired"
+                            break
             finally:
                 await remove_runtime_resources(session)
                 sessions.pop(sandbox_id, None)
@@ -352,8 +361,11 @@ def create_sandbox_app() -> FastAPI:
     @app.post("/v1/sandboxes", dependencies=[Depends(authorize)], status_code=202)
     async def create(source: GeneratedSource) -> dict[str, str]:
         original = _validate_source(source)
+        normalized_source = GeneratedSource(
+            files=[original[path] for path in sorted(original)]
+        )
         sandbox_id = str(uuid4())
-        sessions[sandbox_id] = SandboxSession(source=source, original=original)
+        sessions[sandbox_id] = SandboxSession(source=normalized_source, original=original)
         try:
             queue.put_nowait(sandbox_id)
         except asyncio.QueueFull as error:
@@ -378,6 +390,8 @@ def create_sandbox_app() -> FastAPI:
         session = sessions.get(sandbox_id)
         if session is None:
             raise HTTPException(status_code=404, detail="sandbox not found")
+        if session.status in {"preparing", "ready"}:
+            session.last_activity = monotonic()
         queued_ids = [
             queued_id
             for queued_id, queued in sessions.items()
@@ -402,6 +416,7 @@ def create_sandbox_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="sandbox not found")
         if session.status != "ready" or session.container_id is None:
             raise HTTPException(status_code=409, detail=f"sandbox is {session.status}")
+        session.last_activity = monotonic()
         _validate_command(command)
         network_connected = False
         if command.network_access:
@@ -420,7 +435,13 @@ def create_sandbox_app() -> FastAPI:
                 json={
                     "AttachStderr": True,
                     "AttachStdout": True,
-                    "Cmd": command.argv,
+                    "Cmd": [
+                        "timeout",
+                        "--signal=KILL",
+                        "--kill-after=5s",
+                        f"{command_timeout}s",
+                        *command.argv,
+                    ],
                     "Env": [
                         "HOME=/tmp",
                         "LC_ALL=C.UTF-8",
@@ -440,18 +461,20 @@ def create_sandbox_app() -> FastAPI:
                         f"/exec/{exec_id}/start",
                         json={"Detach": False, "Tty": False},
                     ),
-                    timeout=command_timeout,
+                    timeout=command_timeout + 10,
                 )
             except TimeoutError:
                 await destroy_session(sandbox_id)
                 return {"exit_code": 124, "stdout": "", "stderr": "", "timed_out": True}
             stdout, stderr = _demultiplex(executed.content)
             inspected = await engine.request("GET", f"/exec/{exec_id}/json")
+            exit_code = int(inspected.json().get("ExitCode", 1))
+            session.last_activity = monotonic()
             return {
-                "exit_code": int(inspected.json().get("ExitCode", 1)),
+                "exit_code": exit_code,
                 "stdout": stdout,
                 "stderr": stderr,
-                "timed_out": False,
+                "timed_out": exit_code in {124, 137},
             }
         finally:
             if network_connected and sandbox_id in sessions:
@@ -463,6 +486,60 @@ def create_sandbox_app() -> FastAPI:
                 except httpx.HTTPError:
                     pass
 
+    @app.post("/v1/sandboxes/{sandbox_id}/patch", dependencies=[Depends(authorize)])
+    async def patch_source(sandbox_id: str, patch: SourcePatch) -> dict:
+        session = sessions.get(sandbox_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="sandbox not found")
+        if session.status != "ready" or session.container_id is None:
+            raise HTTPException(status_code=409, detail=f"sandbox is {session.status}")
+        normalized_patch, updated_source = _validate_workbench_patch(session.source, patch)
+        session.last_activity = monotonic()
+        if normalized_patch.delete_paths:
+            deleted = await engine.request(
+                "POST",
+                f"/containers/{session.container_id}/exec",
+                json={
+                    "AttachStderr": True,
+                    "AttachStdout": True,
+                    "Cmd": [
+                        "rm",
+                        "-f",
+                        "--",
+                        *[f"/workspace/{path}" for path in normalized_patch.delete_paths],
+                    ],
+                    "User": "65534:65534",
+                    "WorkingDir": "/workspace",
+                },
+            )
+            delete_exec_id = deleted.json()["Id"]
+            delete_result = await engine.request(
+                "POST",
+                f"/exec/{delete_exec_id}/start",
+                json={"Detach": False, "Tty": False},
+            )
+            delete_status = await engine.request("GET", f"/exec/{delete_exec_id}/json")
+            if int(delete_status.json().get("ExitCode", 1)) != 0:
+                _, stderr = _demultiplex(delete_result.content)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"could not delete patched source files: {stderr[:1000]}",
+                )
+        if normalized_patch.files:
+            await engine.request(
+                "PUT",
+                f"/containers/{session.container_id}/archive",
+                params={"path": "/workspace", "copyUIDGID": "1"},
+                content=_source_tar(GeneratedSource(files=normalized_patch.files)),
+                headers={"Content-Type": "application/x-tar"},
+            )
+        session.source = updated_source
+        session.last_activity = monotonic()
+        return {
+            "changed_files": sorted(file.path for file in normalized_patch.files),
+            "deleted_files": sorted(normalized_patch.delete_paths),
+        }
+
     @app.get("/v1/sandboxes/{sandbox_id}/changes", dependencies=[Depends(authorize)])
     async def changes(sandbox_id: str) -> dict:
         session = sessions.get(sandbox_id)
@@ -470,6 +547,7 @@ def create_sandbox_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="sandbox not found")
         if session.status != "ready" or session.container_id is None:
             raise HTTPException(status_code=409, detail=f"sandbox is {session.status}")
+        session.last_activity = monotonic()
         response = await engine.request(
             "GET",
             f"/containers/{session.container_id}/archive",
@@ -535,12 +613,62 @@ def _network_name(sandbox_id: str) -> str:
 
 
 def _safe_path(raw: str) -> PurePosixPath:
+    if len(raw) > 500:
+        raise HTTPException(status_code=400, detail="source path exceeds size limit")
     path = PurePosixPath(raw)
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise HTTPException(status_code=400, detail=f"unsafe source path: {raw}")
     if path.parts[0] != "contents":
         raise HTTPException(status_code=400, detail=f"source path must start with contents/: {raw}")
     return path
+
+
+def _validate_workbench_patch(
+    current: GeneratedSource, patch: SourcePatch
+) -> tuple[SourcePatch, GeneratedSource]:
+    files = {file.path: file for file in current.files}
+    normalized_files: list[SourceFile] = []
+    changed_paths: set[str] = set()
+    for source_file in patch.files:
+        path = _safe_path(source_file.path)
+        if any(part in IGNORED_PARTS for part in path.parts):
+            raise HTTPException(status_code=400, detail=f"patch targets ignored path: {path}")
+        normalized = path.as_posix()
+        if normalized in changed_paths:
+            raise HTTPException(status_code=400, detail=f"duplicate patch path: {normalized}")
+        changed_paths.add(normalized)
+        normalized_file = source_file.model_copy(update={"path": normalized})
+        if files.get(normalized) == normalized_file:
+            raise HTTPException(status_code=400, detail=f"patch does not change file: {normalized}")
+        files[normalized] = normalized_file
+        normalized_files.append(normalized_file)
+
+    normalized_deletes: list[str] = []
+    deleted_paths: set[str] = set()
+    for raw_path in patch.delete_paths:
+        path = _safe_path(raw_path)
+        normalized = path.as_posix()
+        if normalized in changed_paths:
+            raise HTTPException(
+                status_code=400,
+                detail=f"patch cannot replace and delete the same path: {normalized}",
+            )
+        if normalized in deleted_paths:
+            raise HTTPException(status_code=400, detail=f"duplicate delete path: {normalized}")
+        if normalized not in files:
+            raise HTTPException(status_code=400, detail=f"patch delete path does not exist: {normalized}")
+        deleted_paths.add(normalized)
+        normalized_deletes.append(normalized)
+        del files[normalized]
+
+    if not files:
+        raise HTTPException(status_code=400, detail="patch cannot delete every source file")
+    updated = GeneratedSource(files=[files[path] for path in sorted(files)])
+    _validate_source(updated)
+    return (
+        SourcePatch(files=normalized_files, delete_paths=normalized_deletes),
+        updated,
+    )
 
 
 def _validate_source(source: GeneratedSource) -> dict[str, SourceFile]:
@@ -596,9 +724,23 @@ def _validate_command(command: SourceWorkbenchCommand) -> None:
     cwd = PurePosixPath(command.cwd)
     if cwd.is_absolute() or not cwd.parts or cwd.parts[0] != "contents" or ".." in cwd.parts:
         raise HTTPException(status_code=400, detail="command cwd must be contents or its child")
-    executable = PurePosixPath(command.argv[0]).name
-    if command.argv[0] != executable or executable in BANNED_EXECUTABLES:
-        raise HTTPException(status_code=400, detail="command executable is not permitted")
+    executable_path = PurePosixPath(command.argv[0])
+    if executable_path.is_absolute() or not executable_path.parts or ".." in executable_path.parts:
+        raise HTTPException(
+            status_code=400,
+            detail="command executable must be a safe relative path",
+        )
+    executable = executable_path.name
+    if executable in BANNED_EXECUTABLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"command executable is prohibited: {executable}",
+        )
+    if command.run_as_root and command.argv[0] != executable:
+        raise HTTPException(
+            status_code=400,
+            detail="root package tools must be invoked by executable name",
+        )
     if command.run_as_root and executable not in ROOT_PACKAGE_MANAGERS:
         raise HTTPException(status_code=400, detail="root execution is limited to OS package tools")
     if not command.run_as_root and executable in ROOT_PACKAGE_MANAGERS:
@@ -643,14 +785,14 @@ def _read_workspace_tar(payload: bytes) -> dict[str, SourceFile]:
     total = 0
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:*") as archive:
         for member in archive:
-            if not member.isfile():
-                if member.issym() or member.islnk():
-                    raise HTTPException(status_code=400, detail="sandbox produced a symbolic link")
-                continue
             parts = PurePosixPath(member.name).parts
             if parts and parts[0] == "workspace":
                 parts = parts[1:]
             if not parts or any(part in IGNORED_PARTS for part in parts):
+                continue
+            if not member.isfile():
+                if member.issym() or member.islnk():
+                    raise HTTPException(status_code=400, detail="sandbox produced a symbolic link")
                 continue
             path = _safe_path(PurePosixPath(*parts).as_posix()).as_posix()
             extracted = archive.extractfile(member)

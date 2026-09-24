@@ -222,6 +222,69 @@ async def client(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_ai_safety_refusal_is_public_and_cannot_be_rebuilt(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    state = await app.state.repository.get(session_id)
+    state.machine_information = MachineInformation(
+        name="Blocked candidate",
+        visibility="private",
+        theme="Verification",
+        difficulty="Easy",
+    )
+    state.scenario = ScenarioDraft(
+        scenario_id="scenario-blocked-candidate",
+        title="Blocked candidate",
+        definition="# Blocked candidate",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="verify-candidate",
+                    title="Verify candidate",
+                    kind="reconnaissance",
+                    phase="reconnaissance",
+                    description="Verify the generated candidate.",
+                    implementation_steps=["Run the isolated verification."],
+                )
+            ]
+        ),
+    )
+    state.status = SessionStatus.FAILED
+    state.error_message = "internal workbench failure detail"
+    state.repair_failure_report = {
+        "kind": "ai_safety_refusal",
+        "status": "blocked",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+        "internal_observations": ["must not be exposed"],
+    }
+    await app.state.repository.save(state)
+
+    response = await http.get(f"/v1/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["failure"] == {
+        "kind": "ai_safety_refusal",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+    }
+    assert response.json()["error_message"] == response.json()["failure"]["summary"]
+    assert "internal workbench failure detail" not in response.text
+    assert "internal_observations" not in response.text
+
+    retry = await http.post(
+        f"/v1/sessions/{session_id}/machines",
+        json={"scenario_id": state.scenario.scenario_id},
+        headers=headers,
+    )
+
+    assert retry.status_code == 409
+    assert "安全上の理由でAIが処理を拒否" in retry.json()["detail"]
+    assert not app.state.workflow.is_running(session_id)
+
+
+@pytest.mark.asyncio
 async def test_complete_session_scenario_build_and_download(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}

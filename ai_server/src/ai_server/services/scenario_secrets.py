@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..models import ScenarioDraft
+from ..models import ScenarioDraft, rockyou_password_placeholder
 
 USER_FLAG_PLACEHOLDER = "__SLSG_USER_FLAG__"
 SYSTEM_FLAG_PLACEHOLDER = "__SLSG_SYSTEM_FLAG__"
@@ -45,5 +45,19 @@ def redact_scenario_flags(text: str, scenario: ScenarioDraft) -> str:
     for value, placeholder in sorted(
         scenario_flag_placeholders(scenario), key=lambda item: len(item[0]), reverse=True
     ):
+        result = result.replace(value, placeholder)
+    return result
+
+
+def redact_scenario_secrets(text: str, scenario: ScenarioDraft) -> str:
+    """Redact flags and construction-only password selections from diagnostic text."""
+
+    result = redact_scenario_flags(text, scenario)
+    replacements = [
+        (spec.password, rockyou_password_placeholder(step.step_id))
+        for step in scenario.attack_graph.steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    ]
+    for value, placeholder in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
         result = result.replace(value, placeholder)
     return result

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from ai_server.models import (
 )
 from ai_server.prompts import attack_graph_json_for_ai
 from ai_server.services.ai import (
+    AIProviderRequestError,
+    AIProviderSafetyRefusalError,
     CVEVerification,
     GeminiGenerator,
     OpenAIGenerator,
@@ -171,6 +174,188 @@ async def test_openai_generation_reports_incomplete_response() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(RuntimeError, match="max_output_tokens"):
             await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_reports_safety_refusal_distinctly() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "refusal",
+                                "refusal": "This request cannot be processed safely.",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderSafetyRefusalError, match="安全ポリシー"):
+            await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_retries_temporary_rate_limit_without_changing_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0", "x-request-id": "req-rate-limited"},
+                json={
+                    "error": {
+                        "type": "rate_limit_error",
+                        "code": "slow_down",
+                        "message": "Reduce request rate.",
+                    }
+                },
+            )
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await OpenAIGenerator(settings, client)._generate("unchanged prompt")
+
+    assert result == "generated"
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert requests[0].headers["X-Client-Request-Id"] == requests[1].headers[
+        "X-Client-Request-Id"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_does_not_retry_spend_limit() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "project_spend_limit_exceeded",
+                    "message": "Project spend limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError, match="non-retryable") as raised:
+            await OpenAIGenerator(settings, client)._generate("prompt")
+
+    assert raised.value.error_code == "project_spend_limit_exceeded"
+    assert raised.value.retryable is False
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_does_not_consume_model_output_retries() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "organization_usage_limit_exceeded",
+                    "message": "Organization usage limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        generation_retries=3,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError):
+            await OpenAIGenerator(settings, client).generate_source(
+                MachineInformation(
+                    name="Provider failure",
+                    visibility="private",
+                    theme="Retry separation",
+                    difficulty="Easy",
+                ),
+                ScenarioDraft(
+                    scenario_id="scenario-provider-failure",
+                    title="Provider failure",
+                    definition="# Provider failure",
+                    attack_graph=graph_without_objectives(),
+                ),
+            )
+
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_serializes_shared_requests() -> None:
+    active = 0
+    max_active = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_max_concurrent_requests=1,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = OpenAIGenerator(settings, client)
+        results = await asyncio.gather(
+            generator._generate("first"),
+            generator._generate("second"),
+        )
+
+    assert results == ["generated", "generated"]
+    assert max_active == 1
 
 
 @pytest.mark.asyncio

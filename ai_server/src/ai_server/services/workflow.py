@@ -21,12 +21,18 @@ from ..models import (
     SessionStatus,
     SourcePatch,
     SourceReview,
+    SourceWorkbenchCommand,
     scenario_is_valid_for_machine,
 )
 from ..repository import SessionRepository
 from ..skills.models import SkillPhase
 from ..skills.service import NoopSkillService, SkillResolver
-from .ai import AIGenerator, begin_token_usage_session, end_token_usage_session
+from .ai import (
+    AIGenerator,
+    AIProviderSafetyRefusalError,
+    begin_token_usage_session,
+    end_token_usage_session,
+)
 from .build_client import BuildClient
 from .errors import exception_detail
 from .rockyou import (
@@ -34,15 +40,18 @@ from .rockyou import (
     bind_rockyou_passwords,
     strip_rockyou_selections,
 )
+from .scenario_secrets import redact_scenario_secrets
 from .source_archive import InvalidSourceError, SourceArchive
 from .source_repair import apply_source_patch
-from .source_sandbox import SourceSandboxClient
+from .source_sandbox import SourceSandboxClient, SourceSandboxError
 from .source_validation import known_failed_resources
 
 logger = logging.getLogger(__name__)
 BUILD_POLL_INTERVAL_SECONDS = 5
 DISTRIBUTION_ARTIFACT_TYPE = "zip"
 MAX_SOURCE_REVIEW_RECONSIDERATIONS = 2
+MAX_WORKBENCH_POLICY_REJECTIONS = 4
+SOURCE_SANDBOX_KEEPALIVE_SECONDS = 60
 
 
 class MachineWorkflowGraphState(TypedDict, total=False):
@@ -73,7 +82,7 @@ class MachineWorkflow:
         rockyou_min_line: int = 1,
         rockyou_max_line: int = 1,
         source_sandbox: SourceSandboxClient | None = None,
-        source_workbench_action_limit: int = 8,
+        source_workbench_action_limit: int = 20,
     ) -> None:
         self.repository = repository
         self.generator = generator
@@ -200,6 +209,14 @@ class MachineWorkflow:
     async def start(self, session_id: str, scenario_id: str | None = None) -> SessionState:
         self.cancel_requests.discard(session_id)
         state = await self.repository.get(session_id)
+        if (
+            state.status == SessionStatus.FAILED
+            and isinstance(state.repair_failure_report, dict)
+            and state.repair_failure_report.get("kind") == "ai_safety_refusal"
+        ):
+            raise InvalidSessionStateError(
+                "安全上の理由でAIが処理を拒否したため、同じ候補は再ビルドできません。"
+            )
         if not state.machine_information or not state.scenario:
             raise InvalidSessionStateError(
                 "a generated scenario is required before machine creation"
@@ -402,11 +419,19 @@ class MachineWorkflow:
             state = await self.repository.get(session_id)
             state.status = SessionStatus.FAILED
             state.error_message = detail
-            state.repair_failure_report = {
-                "kind": "machine_workflow_graph",
-                "status": "failed",
-                "error_message": detail,
-            }
+            if isinstance(error, AIProviderSafetyRefusalError):
+                state.repair_failure_report = {
+                    "kind": "ai_safety_refusal",
+                    "status": "blocked",
+                    "summary": error.summary,
+                    "retry_allowed": False,
+                }
+            else:
+                state.repair_failure_report = {
+                    "kind": "machine_workflow_graph",
+                    "status": "failed",
+                    "error_message": detail,
+                }
             await self.repository.save(state)
 
     async def _graph_generate_and_submit(
@@ -436,6 +461,7 @@ class MachineWorkflow:
         machine: MachineInformation,
         scenario: ScenarioDraft,
         generated: GeneratedSource,
+        failure_context: dict | None = None,
     ) -> tuple[GeneratedSource, dict]:
         if self.source_sandbox is None:
             return generated, {
@@ -445,53 +471,303 @@ class MachineWorkflow:
                 "observations": [],
             }
 
+        initial_generated = generated
         sandbox_id = await self.source_sandbox.create(generated)
         observations: list[dict] = []
+        if failure_context is not None:
+            observations.append(
+                {
+                    "index": 0,
+                    "kind": "incoming_failure",
+                    "details": _bounded_context(
+                        redact_scenario_secrets(
+                            json.dumps(failure_context, ensure_ascii=False, default=str),
+                            scenario,
+                        ),
+                        12_000,
+                    ),
+                }
+            )
         final_summary = "workbench action limit reached after successful commands"
-        try:
-            for action_index in range(self.source_workbench_action_limit):
-                decision = await self.generator.next_source_workbench_action(
+        pending_verifications: dict[str, dict] = {}
+        unverified_patch = False
+        successful_verifications = 0
+        blocked_summary: str | None = None
+
+        def command_signature(command) -> str:
+            return json.dumps(
+                command.model_dump(mode="json", exclude={"purpose"}),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+        async def collect_changes() -> tuple[GeneratedSource, list[str], list[str]]:
+            changes = await self.source_sandbox.changes(sandbox_id)
+            if changes is None:
+                return generated, [], []
+            return (
+                apply_source_patch(initial_generated, changes),
+                sorted(file.path for file in changes.files),
+                sorted(changes.delete_paths),
+            )
+
+        async def next_decision():
+            task = asyncio.create_task(
+                self.generator.next_source_workbench_action(
                     machine,
                     scenario,
                     generated,
                     observations,
                     self.source_workbench_action_limit - action_index,
                 )
+            )
+            try:
+                while True:
+                    done, _ = await asyncio.wait(
+                        {task}, timeout=SOURCE_SANDBOX_KEEPALIVE_SECONDS
+                    )
+                    if done:
+                        return task.result()
+                    await self.source_sandbox.touch(sandbox_id)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+
+        try:
+            action_index = 0
+            policy_rejections = 0
+            while action_index < self.source_workbench_action_limit:
+                decision = await next_decision()
                 final_summary = decision.summary
                 if decision.action == "finish":
+                    if decision.finish_status == "blocked":
+                        blocked_summary = decision.summary
+                        observations.append(
+                            {
+                                "index": len(observations) + 1,
+                                "kind": "finish_blocked",
+                                "reason": decision.summary,
+                            }
+                        )
+                        break
+                    for signature, failed in list(pending_verifications.items()):
+                        if action_index >= self.source_workbench_action_limit:
+                            break
+                        command = SourceWorkbenchCommand.model_validate(failed["command"])
+                        try:
+                            result = await self.source_sandbox.execute(sandbox_id, command)
+                        except SourceSandboxError as error:
+                            if error.status_code != 400:
+                                raise
+                            action_index += 1
+                            observations.append(
+                                {
+                                    "index": len(observations) + 1,
+                                    "kind": "command",
+                                    "purpose": command.purpose,
+                                    "command": command.model_dump(mode="json"),
+                                    "intent": command.intent,
+                                    "automatic_recheck": True,
+                                    "exit_code": 126,
+                                    "timed_out": False,
+                                    "policy_rejected": True,
+                                    "accepted": False,
+                                    "blocking": True,
+                                    "stdout": "",
+                                    "stderr": _bounded_context(str(error), 8_000),
+                                }
+                            )
+                            continue
+                        action_index += 1
+                        command_succeeded = (
+                            not result.timed_out
+                            and result.exit_code in command.allowed_exit_codes
+                        )
+                        observation = {
+                            "index": len(observations) + 1,
+                            "kind": "command",
+                            "purpose": command.purpose,
+                            "command": command.model_dump(mode="json"),
+                            "intent": command.intent,
+                            "automatic_recheck": True,
+                            "exit_code": result.exit_code,
+                            "timed_out": result.timed_out,
+                            "stdout": _bounded_context(result.stdout, 8_000),
+                            "stderr": _bounded_context(result.stderr, 8_000),
+                            "accepted": command_succeeded,
+                            "blocking": not command_succeeded,
+                        }
+                        observations.append(observation)
+                        if command_succeeded:
+                            pending_verifications.pop(signature, None)
+                            unverified_patch = False
+                            successful_verifications += 1
+                            observation["resolved_failure_index"] = failed["index"]
+                        else:
+                            pending_verifications[signature] = observation
+                    if (
+                        pending_verifications
+                        or unverified_patch
+                        or successful_verifications == 0
+                    ):
+                        action_index += 1
+                        observations.append(
+                            {
+                                "index": len(observations) + 1,
+                                "kind": "finish_rejected",
+                                "reason": (
+                                    "all previously failing commands must pass after the patch"
+                                    if pending_verifications
+                                    else (
+                                        "the latest patch must be verified by a successful command"
+                                        if unverified_patch
+                                        else "at least one verification command must succeed"
+                                    )
+                                ),
+                                "pending_commands": [
+                                    item.get("command")
+                                    for item in pending_verifications.values()
+                                ],
+                            }
+                        )
+                        continue
                     break
+                if decision.action == "patch":
+                    assert decision.patch is not None
+                    try:
+                        updated = apply_source_patch(generated, decision.patch)
+                        await self.source_sandbox.apply_patch(sandbox_id, decision.patch)
+                    except (InvalidSourceError, SourceSandboxError) as error:
+                        if isinstance(error, SourceSandboxError) and error.status_code != 400:
+                            raise
+                        policy_rejections += 1
+                        observations.append(
+                            {
+                                "index": len(observations) + 1,
+                                "kind": "patch_rejected",
+                                "changed_files": sorted(
+                                    file.path for file in decision.patch.files
+                                ),
+                                "deleted_files": sorted(decision.patch.delete_paths),
+                                "error": _bounded_context(str(error), 8_000),
+                            }
+                        )
+                        if policy_rejections >= MAX_WORKBENCH_POLICY_REJECTIONS:
+                            raise SourceSandboxError(
+                                "source workbench agent repeatedly proposed invalid patches"
+                            ) from error
+                        continue
+                    action_index += 1
+                    generated = updated
+                    unverified_patch = True
+                    observations.append(
+                        {
+                            "index": len(observations) + 1,
+                            "kind": "patch",
+                            "summary": decision.summary,
+                            "changed_files": sorted(file.path for file in decision.patch.files),
+                            "deleted_files": sorted(decision.patch.delete_paths),
+                            "verification_required": True,
+                        }
+                    )
+                    continue
                 assert decision.command is not None
-                result = await self.source_sandbox.execute(sandbox_id, decision.command)
+                try:
+                    result = await self.source_sandbox.execute(sandbox_id, decision.command)
+                except SourceSandboxError as error:
+                    if error.status_code != 400:
+                        raise
+                    policy_rejections += 1
+                    observations.append(
+                        {
+                            "index": len(observations) + 1,
+                            "purpose": decision.command.purpose,
+                            "command": decision.command.model_dump(mode="json"),
+                            "intent": decision.command.intent,
+                            "exit_code": 126,
+                            "timed_out": False,
+                            "policy_rejected": True,
+                            "blocking": False,
+                            "stdout": "",
+                            "stderr": _bounded_context(str(error), 8_000),
+                        }
+                    )
+                    if policy_rejections >= MAX_WORKBENCH_POLICY_REJECTIONS:
+                        raise SourceSandboxError(
+                            "source workbench agent repeatedly proposed commands rejected by "
+                            "sandbox policy"
+                        ) from error
+                    continue
+                action_index += 1
                 observation = {
-                    "index": action_index + 1,
+                    "index": len(observations) + 1,
+                    "kind": "command",
                     "purpose": decision.command.purpose,
                     "command": decision.command.model_dump(mode="json"),
+                    "intent": decision.command.intent,
                     "exit_code": result.exit_code,
                     "timed_out": result.timed_out,
                     "stdout": _bounded_context(result.stdout, 8_000),
                     "stderr": _bounded_context(result.stderr, 8_000),
                 }
                 observations.append(observation)
-                if result.exit_code != 0 or result.timed_out:
-                    return generated, {
-                        "kind": "source_workbench",
-                        "status": "fail",
-                        "error_message": (
-                            "isolated source workbench command timed out"
-                            if result.timed_out
-                            else "isolated source workbench command failed"
-                        ),
-                        "failed_command": observation,
-                        "observations": observations,
-                    }
+                command_succeeded = (
+                    not result.timed_out
+                    and result.exit_code in decision.command.allowed_exit_codes
+                )
+                observation["accepted"] = command_succeeded
+                observation["blocking"] = (
+                    decision.command.intent == "verify" and not command_succeeded
+                )
+                if not command_succeeded:
+                    if decision.command.intent == "verify":
+                        pending_verifications[command_signature(decision.command)] = observation
+                    continue
+                if decision.command.intent == "verify":
+                    unverified_patch = False
+                    successful_verifications += 1
+                    resolved = pending_verifications.pop(
+                        command_signature(decision.command), None
+                    )
+                    if resolved is not None:
+                        observation["resolved_failure_index"] = resolved["index"]
 
-            changes = await self.source_sandbox.changes(sandbox_id)
-            changed_files: list[str] = []
-            deleted_files: list[str] = []
-            if changes is not None:
-                generated = apply_source_patch(generated, changes)
-                changed_files = sorted(file.path for file in changes.files)
-                deleted_files = sorted(changes.delete_paths)
+            if (
+                blocked_summary is not None
+                or pending_verifications
+                or unverified_patch
+                or successful_verifications == 0
+            ):
+                unresolved = list(pending_verifications.values())
+                generated, changed_files, deleted_files = await collect_changes()
+                return generated, {
+                    "kind": "source_workbench",
+                    "status": "fail",
+                    "error_message": (
+                        "source workbench agent reported a technical verification blocker"
+                        if blocked_summary is not None
+                        else (
+                            "source workbench action budget ended before the failing command passed"
+                            if pending_verifications
+                            else (
+                                "source workbench action budget ended before the latest patch was verified"
+                                if unverified_patch
+                                else "source workbench ended without a successful verification command"
+                            )
+                        )
+                    ),
+                    "blocked_summary": blocked_summary,
+                    "failed_command": unresolved[-1] if unresolved else None,
+                    "failed_commands": unresolved,
+                    "observations": observations,
+                    "changed_files": changed_files,
+                    "deleted_files": deleted_files,
+                    "candidate_changes_preserved": bool(changed_files or deleted_files),
+                    "successful_verifications": successful_verifications,
+                }
+
+            generated, changed_files, deleted_files = await collect_changes()
             return generated, {
                 "kind": "source_workbench",
                 "status": "pass",
@@ -499,6 +775,7 @@ class MachineWorkflow:
                 "observations": observations,
                 "changed_files": changed_files,
                 "deleted_files": deleted_files,
+                "successful_verifications": successful_verifications,
             }
         finally:
             await self.source_sandbox.destroy(sandbox_id)
@@ -672,8 +949,14 @@ class MachineWorkflow:
                     patch_applied = False
                     workbench_changed_source = False
                     workbench_report: dict | None = None
+                    workbench_failure_context = failure_report
+                    resume_preserved_workbench_candidate = bool(
+                        isinstance(failure_report, dict)
+                        and failure_report.get("kind") == "source_workbench"
+                        and failure_report.get("candidate_changes_preserved") is True
+                    )
                     prevalidated_review: SourceReview | None = None
-                    if failure_report is not None:
+                    if failure_report is not None and not resume_preserved_workbench_candidate:
                         repair_trigger = failure_report
                         repair_context = {
                             **failure_report,
@@ -734,6 +1017,11 @@ class MachineWorkflow:
                                     "deleted_files": sorted(patch.delete_paths),
                                 }
                             )
+                    elif resume_preserved_workbench_candidate:
+                        # The workbench already repaired the candidate and checkpointed its
+                        # filesystem diff. Revalidate that exact candidate in a fresh sandbox
+                        # instead of asking a second AI repair pass to rewrite it again.
+                        failure_report = None
                     try:
                         archive_path, checksum = self.source_archive.create(
                             session_id,
@@ -796,10 +1084,18 @@ class MachineWorkflow:
                             state.machine_information,
                             working_scenario,
                             generated,
+                            workbench_failure_context,
                         )
                         if repair_history:
                             repair_history[-1]["source_workbench_after"] = workbench_report
                         if workbench_report["status"] != "pass":
+                            if (
+                                workbench_report.get("successful_verifications") == 0
+                                and not workbench_report.get("candidate_changes_preserved")
+                            ):
+                                raise RuntimeError(
+                                    "source workbench produced no successful verification evidence"
+                                )
                             last_validation_error = InvalidSourceError(
                                 workbench_report.get(
                                     "error_message", "isolated source workbench failed"
@@ -1134,7 +1430,14 @@ class MachineWorkflow:
             state = await self.repository.get(session_id)
             state.status = SessionStatus.FAILED
             state.error_message = detail
-            if isinstance(failure_report, dict):
+            if isinstance(error, AIProviderSafetyRefusalError):
+                failure_to_persist = {
+                    "kind": "ai_safety_refusal",
+                    "status": "blocked",
+                    "summary": error.summary,
+                    "retry_allowed": False,
+                }
+            elif isinstance(failure_report, dict):
                 failure_to_persist = _persistable_repair_trigger(failure_report)
             elif isinstance(persisted_failure_context, dict):
                 failure_to_persist = _persistable_repair_trigger(persisted_failure_context)

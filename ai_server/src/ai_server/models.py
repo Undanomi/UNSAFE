@@ -531,8 +531,10 @@ class SourceWorkbenchCommand(BaseModel):
     argv: list[str] = Field(min_length=1, max_length=32)
     cwd: str = Field(default="contents", min_length=1, max_length=500)
     purpose: str = Field(min_length=1, max_length=1000)
+    intent: Literal["inspect", "verify"] = "inspect"
     network_access: bool = False
     run_as_root: bool = False
+    allowed_exit_codes: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=8)
 
     @field_validator("argv")
     @classmethod
@@ -541,16 +543,27 @@ class SourceWorkbenchCommand(BaseModel):
             raise ValueError("workbench command arguments must be non-empty bounded strings")
         return values
 
+    @field_validator("allowed_exit_codes")
+    @classmethod
+    def exit_codes_are_unique_bytes(cls, values: list[int]) -> list[int]:
+        if len(values) != len(set(values)) or any(value < 0 or value > 255 for value in values):
+            raise ValueError("allowed exit codes must be unique values from 0 through 255")
+        return sorted(values)
+
 
 class SourceWorkbenchDecision(BaseModel):
-    action: Literal["run", "finish"]
+    action: Literal["run", "patch", "finish"]
     command: SourceWorkbenchCommand | None = None
+    patch: SourcePatch | None = None
+    finish_status: Literal["verified", "blocked"] = "verified"
     summary: str = Field(min_length=1, max_length=2000)
 
     @model_validator(mode="after")
-    def command_matches_action(self) -> SourceWorkbenchDecision:
+    def payload_matches_action(self) -> SourceWorkbenchDecision:
         if (self.action == "run") != (self.command is not None):
             raise ValueError("command is required exactly when action is run")
+        if (self.action == "patch") != (self.patch is not None):
+            raise ValueError("patch is required exactly when action is patch")
         return self
 
 
@@ -602,11 +615,18 @@ class CreateMachineRequest(BaseModel):
     scenario_id: str | None = None
 
 
+class SessionFailureFeedback(BaseModel):
+    kind: Literal["ai_safety_refusal"]
+    summary: str = Field(min_length=1, max_length=2000)
+    retry_allowed: bool = False
+
+
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
     user_flag: str | None = None
     system_flag: str | None = None
+    failure: SessionFailureFeedback | None = None
 
 
 class DownloadURLResponse(BaseModel):

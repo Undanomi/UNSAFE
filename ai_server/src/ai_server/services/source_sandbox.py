@@ -10,7 +10,9 @@ from ..models import GeneratedSource, SourceFile, SourcePatch, SourceWorkbenchCo
 
 
 class SourceSandboxError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,7 @@ class SourceSandboxClient:
         client: httpx.AsyncClient,
         base_url: str,
         token: str,
-        wait_timeout_seconds: float = 240,
+        wait_timeout_seconds: float = 660,
     ) -> None:
         self.client = client
         self.base_url = base_url.rstrip("/")
@@ -84,6 +86,24 @@ class SourceSandboxClient:
             timed_out=bool(body.get("timed_out", False)),
         )
 
+    async def touch(self, sandbox_id: str) -> None:
+        response = await self.client.get(
+            f"{self.base_url}/v1/sandboxes/{sandbox_id}",
+            headers=self.headers,
+        )
+        self._raise(response)
+        status = response.json().get("status")
+        if status != "ready":
+            raise SourceSandboxError(f"source sandbox became unavailable: {status}")
+
+    async def apply_patch(self, sandbox_id: str, patch: SourcePatch) -> None:
+        response = await self.client.post(
+            f"{self.base_url}/v1/sandboxes/{sandbox_id}/patch",
+            headers=self.headers,
+            json=patch.model_dump(mode="json"),
+        )
+        self._raise(response)
+
     async def changes(self, sandbox_id: str) -> SourcePatch | None:
         response = await self.client.get(
             f"{self.base_url}/v1/sandboxes/{sandbox_id}/changes",
@@ -113,5 +133,6 @@ class SourceSandboxClient:
         except httpx.HTTPStatusError as error:
             detail = response.text[:2000]
             raise SourceSandboxError(
-                f"source sandbox returned {response.status_code}: {detail}"
+                f"source sandbox returned {response.status_code}: {detail}",
+                status_code=response.status_code,
             ) from error

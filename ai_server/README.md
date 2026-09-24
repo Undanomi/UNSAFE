@@ -94,6 +94,12 @@ CVE検証・生成・修復・レビューなど単一の構造化AI操作内で
 `GENERATION_RETRIES`（既定値3）です。ソース修復で意味契約が変わった場合、またはレビューが
 シナリオ本文の修正を要求した場合に、実装と本文を同期して再レビューする回数は
 `SCENARIO_SYNC_ATTEMPTS`（既定値3）で、ソース生成回数とは別に記録されます。
+OpenAIへの通信は全ワークフローで共有するキューを通し、既定では同時1リクエスト、開始間隔1秒に
+抑えます。一時的な429・503・通信障害は`Retry-After`を優先し、指定がなければ指数バックオフと
+ジッターで最大8回・合計600秒まで再試行します。課金残高、組織・プロジェクトのspend limit、
+usage limitは待機しても回復しないため再試行しません。これらは`AI_MAX_CONCURRENT_REQUESTS`、
+`AI_REQUEST_MIN_INTERVAL_SECONDS`、`AI_TRANSIENT_RETRY_ATTEMPTS`、
+`AI_TRANSIENT_RETRY_MAX_SECONDS`、`AI_TRANSIENT_RETRY_JITTER_SECONDS`で変更できます。
 CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定値2024）で変更できます。
 完成したシナリオは保存前に独立したAI呼び出しで意味レビューされます。攻撃グラフとの一貫性、
 前提ステップを飛ばす近道、実装可能性、acceptance test計画に加え、実行主体、owner/group/mode、
@@ -117,18 +123,31 @@ Packer上の受入試験へ委ねます。攻撃グラフを修正・再生成�
 意味レビューの前には、生成候補ごとの隔離ワークベンチを作ります。実行環境は既定で
 `debian:13-slim`から毎回新規作成し、Node.js、Pythonなどの言語runtimeはあらかじめ入れません。
 AIは生成済みの`provision.sh`を読み、そこに宣言されたOS packageを候補内で実際に導入してから、
-構文検査、依存解決、コンパイル、既存テストを1コマンドずつ実行します。これにより、runtimeの
-package名や導入手順そのものも検証対象になります。共有されるのは読み取り元の不変なベースイメージだけで、
+構文検査、依存解決、コンパイル、既存テスト、およびprovision固有の導入後検査を1コマンドずつ実行します。
+コマンドは調査と合否検証を区別し、`cat`や`stat`など調査上の失敗を修正完了のブロッカーにしません。
+合否検証が失敗した場合はコンテナを破棄せず、同じ候補内で実際の依存物を調査し、生成ソースへ限定パッチを
+適用します。完了時には失敗した検証をシステム側が同じ条件で再実行します。操作枠を使い切ってもSandboxの
+ソース差分を候補へ回収してからコンテナを破棄するため、package managerが生成したlockfileや有効な途中修正を
+次の修復ループへ引き継ぎます。これにより、runtimeのpackage名や導入手順そのものも検証対象になります。
+Workbenchの合格には少なくとも1件の合否検証成功を必須とし、調査だけでの完了、検証拒否、説明だけの
+`finish`を合格にはしません。明示的な検証拒否や、変更も検証証拠もないまま操作枠を使い切った場合は、
+根拠のないソース修正を繰り返さずワークフローを明確に失敗させます。候補内のREADMEやログは未信頼データとして
+扱い、そこに含まれる指示や作業拒否をエージェントへの命令として扱いません。
+`contents/scripts/verify.sh`は後段のアーカイブ作成時にサーバーが生成するため、Workbench内の存在確認対象には
+しません。共有されるのは読み取り元の不変なベースイメージだけで、
 コンテナ、書き込み可能なroot filesystem、`/workspace`、`/tmp`、導入済みpackage、生成物は候補ごとに
 独立し、検証終了時に破棄されます。実フラグとパスワードはワークベンチへ渡しません。
 
 ワークベンチ要求は単一の`source-sandbox`サービス内のFIFOキューで受け付け、既定では同時に2候補まで
 実行します。`SOURCE_SANDBOX_MAX_CONCURRENT`で同時実行数、`SOURCE_SANDBOX_QUEUE_CAPACITY`で待機上限、
-`SOURCE_SANDBOX_SESSION_TTL_SECONDS`で候補の最大保持時間を変更できます。キューはコンテナを共有する
+`SOURCE_SANDBOX_SESSION_TTL_SECONDS`で操作のない候補の保持時間を変更できます。キューはコンテナを共有する
 ためのものではなく、DockerホストのCPU・メモリ・package download負荷を制御するものです。
 キューは単一の`source-sandbox`プロセスが所有し、サービス再起動時は同じラベルを持つ孤立候補を
 先に削除してから受付を再開します。
 各候補コンテナには1GiB、2 CPU、256 processの上限を設定し、通常コマンドは非rootで実行します。
+調査、パッチ、再検証を含む操作枠は`SOURCE_WORKBENCH_ACTION_LIMIT`（既定値20）で変更できます。
+各コマンドの既定タイムアウトは`SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS=600`（10分）です。API通信は
+終了処理の猶予を含めて`SOURCE_SANDBOX_TIMEOUT_SECONDS=660`とし、コマンドより先に切断しないようにします。
 root実行と一時的なnetwork接続はOS package導入コマンドだけに制限します。systemd、サービス起動、
 Packer固有処理、完全なプロビジョニングはこの軽量環境で代用せず、後段の使い捨てVMで検証します。
 networkも候補ごとに専用bridgeを作り、ソース投入前に切断し、package導入コマンドの間だけ再接続して

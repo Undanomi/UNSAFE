@@ -376,6 +376,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     argv=["apt-get", "update"],
                     cwd="contents",
                     purpose="Validate package repository availability in a fresh target container.",
+                    intent="verify",
                     network_access=True,
                     run_as_root=True,
                 ),
