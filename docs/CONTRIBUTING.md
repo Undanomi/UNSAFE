@@ -151,53 +151,70 @@ docker compose --profile dev --profile seed --profile admin up --build
 <details>
 <summary>フロントエンド</summary>
 
-`frontend/.env` に Firebase の Web アプリ・Admin SDK の値、`FRONTEND_POSTGRES_PASSWORD` を設定します。必要なら `FRONTEND_PORT` も変更します。
-
 ```bash
 cd frontend
 cp .env.example .env
+cp -n .env.example .env.local
+```
+
+`.env` に `FRONTEND_POSTGRES_PASSWORD` と Firebase Admin SDK、`.env.local` に `NEXT_PUBLIC_*` を設定します。既存の `.env.local` は上書きされず、`.env` より優先されます。
+
+```bash
 docker compose --profile dev up --build
 ```
 
-別の AI サーバーと接続する場合、コンテナから到達できる `AI_SERVER_URL` を設定します。既定の `http://host.docker.internal:8000` は Docker Desktop 向けです。AI サーバーがなければ生成機能は使えません。
+AI サーバーに接続する場合は `.env` の `AI_SERVER_URL` を設定します（既定値は Docker Desktop 向け。未接続なら生成不可）。
 
 </details>
 
 <details>
 <summary>AI サーバー</summary>
 
-`ai_server/.env` に `AI_POSTGRES_PASSWORD`・`BUILD_SERVER_TOKEN`・`SOURCE_SANDBOX_TOKEN`・`DOWNLOAD_SIGNING_SECRET` を設定します。実際に生成する場合は `AI_PROVIDER` と対応する API キーも必要です。
-
 ```bash
 cd ai_server
 cp .env.example .env
+```
+
+`.env` に `AI_POSTGRES_PASSWORD` と、32文字以上の `BUILD_SERVER_TOKEN`・`SOURCE_SANDBOX_TOKEN`・`DOWNLOAD_SIGNING_SECRET` を設定します。生成には `AI_PROVIDER` と API キーが必要です（API を使わない場合は `stub`）。
+
+```bash
 docker compose --env-file .env up --build
 ```
 
-ビルドサーバーがなければ VM ビルドは完了しません。単体 Compose 同士は別ネットワークで、ビルド API はホストにも公開されません。連携には通信経路、`AI_BUILD_SERVER_URL`、相手の `INTERNAL_API_TOKEN` と一致する `BUILD_SERVER_TOKEN` が必要です。`DATABASE_URL` の `<password>` はホスト上で直接起動する場合の設定です。Compose ではコンテナ用の接続先に上書きされます。
+VM ビルドには、ビルドサーバーとの通信経路、`AI_BUILD_SERVER_URL`、共通の `BUILD_SERVER_TOKEN` / `INTERNAL_API_TOKEN` が必要です（ビルド API はホスト非公開）。
 
 </details>
 
 <details>
 <summary>ビルドサーバー</summary>
 
-`build_server/.env` に `BUILD_POSTGRES_PASSWORD`・`INTERNAL_API_TOKEN`・`KVM_GID` を設定します。
-
 ```bash
 cd build_server
 cp .env.example .env
+```
+
+`.env` に `BUILD_POSTGRES_PASSWORD`、32文字以上の `INTERNAL_API_TOKEN`、`stat -c '%g' /dev/kvm` で得た `KVM_GID` を設定し、[VM ビルド用イメージ](#vm-ビルド用イメージ)を配置します。
+
+```bash
 docker compose up --build
 ```
+
+ビルド API はホストに公開されません。
 
 </details>
 
 ## 停止する
 
-起動したディレクトリで、`--profile` を指定して停止してください。以下はリポジトリルートから全体を起動した場合のコマンド例です。`down -v` は volume と保存データも削除するため、必要な場合だけ使ってください。
+起動したディレクトリで、該当するコマンドを実行します。
 
-```bash
-docker compose --profile dev --profile seed --profile admin down
-```
+| 起動元 | 停止コマンド |
+| --- | --- |
+| リポジトリルート | `docker compose --profile dev --profile seed --profile admin down` |
+| `frontend/` | `docker compose --profile dev down` |
+| `ai_server/` | `docker compose --env-file .env down` |
+| `build_server/` | `docker compose down` |
+
+`down -v` は volume と保存データも削除するため、必要な場合だけ使ってください。
 
 ## 開発から PR まで
 
