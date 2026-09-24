@@ -51,17 +51,16 @@ SLSG への貢献を歓迎します。以下に記載の方法で、気軽に参
 - **フロントエンドの開発・テスト**：Node.js 24、pnpm 10
 - **AI サーバーの開発・テスト**：Python 3.13、uv
 - **ビルドサーバーの開発・テスト**：Go 1.25
-- **Docker を使わない VM ビルド**：Packer、QEMU、PostgreSQL
 
 ### Firebase
 
-1. [Firebase コンソール](https://console.firebase.google.com/)で開発用プロジェクトと Web アプリを作成し、`apiKey`、`authDomain`、`projectId`、`appId` を控えます。
+1. [Firebase コンソール](https://console.firebase.google.com/) で開発用プロジェクトと Web アプリを作成し、`apiKey`、`authDomain`、`projectId`、`appId` を控えます。
 2. Authentication のログイン方法で Google を有効にし、承認済みドメインに `localhost` があることを確認します。新規プロジェクトでは自動登録されない場合があります（[Google ログインの手順](https://firebase.google.com/docs/auth/web/google-signin)）。
 3. プロジェクト設定の「サービス アカウント」から Admin SDK 用の秘密鍵を取得し、`project_id`、`client_email`、`private_key` を控えます（[Admin SDK の手順](https://firebase.google.com/docs/admin/setup)）。
 
 ### Gemini / OpenAI
 
-実際にシナリオを生成する場合は、**どちらか一方**を設定します。API 接続を使わない確認には `AI_PROVIDER=stub` を使えます。
+実際にシナリオを生成する場合は、どちらか一方を設定します。AI を使わない場合は `AI_PROVIDER=stub` を指定します。
 
 | 選択 | AI サーバー側の設定 | キーの取得 |
 | --- | --- | --- |
@@ -81,7 +80,6 @@ cp frontend/.env.example frontend/.env.local
 | --- | --- | --- |
 | `.env` | `AI_POSTGRES_PASSWORD`、`BUILD_POSTGRES_PASSWORD`、`FRONTEND_POSTGRES_PASSWORD` | DB ごとに異なるランダム値 |
 | `.env` | `INTERNAL_API_TOKEN`、`BUILD_SERVER_TOKEN` | 両方に同じ32文字以上のランダム値 |
-| `.env` | `NEXT_PUBLIC_FIREBASE_API_KEY`、`NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`、`NEXT_PUBLIC_FIREBASE_PROJECT_ID`、`NEXT_PUBLIC_FIREBASE_APP_ID` | Firebase Web アプリの設定 |
 | `.env` | `FIREBASE_ADMIN_PROJECT_ID`、`FIREBASE_ADMIN_CLIENT_EMAIL`、`FIREBASE_ADMIN_PRIVATE_KEY` | Admin SDK のサービスアカウント設定。秘密鍵の改行は `\n` として記載 |
 | `.env` | `AI_PROVIDER`、`GEMINI_API_KEY` または `OPENAI_API_KEY` | 利用する AI プロバイダーとその API キー |
 | `.env` | `SQLADMIN_USERNAME`、`SQLADMIN_PASSWORD`、`SQLADMIN_SESSION_SECRET`、`SQLADMIN_SECURE_COOKIES` | SQLAdmin の認証情報と Cookie 設定。ルートの `.env.example` にはないため追記 |
@@ -89,7 +87,7 @@ cp frontend/.env.example frontend/.env.local
 | `frontend/.env.local` | `NEXT_PUBLIC_FIREBASE_API_KEY`、`NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`、`NEXT_PUBLIC_FIREBASE_PROJECT_ID`、`NEXT_PUBLIC_FIREBASE_APP_ID` | 開発用フロントエンドが読む Firebase Web アプリの設定 |
 
 > [!CAUTION]
-> 開発用フロントエンドには `frontend/.env.local` が必要です。ルートの `.env` だけに公開値を書いてもブラウザには反映されません。
+> 開発用フロントエンドが Firebase Web アプリの設定を読むには、`frontend/.env.local` に値を設定する必要があります。
 
 ### ランダム値の生成
 
@@ -132,39 +130,11 @@ bash 02_install.sh
 
 ### （推奨）サービス全体で起動する
 
-リポジトリルートで実行します。AI サーバー、ビルドサーバー、各 DB、開発用フロントエンド、SQLAdmin が起動し、サンプルデータも投入されます。
+リポジトリルートで実行します。AI サーバー、ビルドサーバー、各 DB、開発用フロントエンド、SQLAdmin が起動し、サンプルデータも投入されます。環境変数の変更後はフロントエンドを再起動してください。
 
 ```bash
 docker compose --profile dev --profile seed --profile admin up --build
 ```
-
-- 環境変数の変更後はフロントエンドを再起動してください。production 用 `frontend` イメージの `NEXT_PUBLIC_*` を変えた場合は再ビルドが必要です。
-
-> [!CAUTION]
-> Docker Desktop ではファイル変更の検知に時間がかかり、Next.js の Fast Refresh が遅れる場合があります。
-
-<details>
-<summary>--profile seed について</summary>
-
-`--profile seed` を指定すると、フロントエンド DB のマイグレーション後、シードデータが投入されます。
-
-</details>
-
-<details>
-<summary>--profile admin について</summary>
-
-`--profile admin` を指定すると、AI サーバーの DB を確認・編集できる SQLAdmin が起動します。起動前にルートの `.env` に次を追記してください。
-
-```dotenv
-SQLADMIN_USERNAME=admin
-SQLADMIN_PASSWORD=<十分に長いランダムなパスワード>
-SQLADMIN_SESSION_SECRET=<32文字以上のランダム値>
-SQLADMIN_SECURE_COOKIES=false
-```
-
-`ai_server/` から単体起動する場合は、同じ設定を `ai_server/.env` に追加し、起動コマンドに `--profile admin` を付けます。管理画面のポートはローカルホストにだけ公開されます。既存データを編集できるため、実行中の処理に関わる値の変更には注意してください。
-
-</details>
 
 ### ページ対応表
 
@@ -223,13 +193,11 @@ docker compose up --build
 
 ## 停止する
 
-起動したディレクトリで、profile を指定して停止してください。以下はリポジトリルートから全体を起動した場合のコマンド例です。
+起動したディレクトリで、`--profile` を指定して停止してください。以下はリポジトリルートから全体を起動した場合のコマンド例です。`down -v` は volume と保存データも削除するため、必要な場合だけ使ってください。
 
 ```bash
 docker compose --profile dev --profile seed --profile admin down
 ```
-
-`down -v` は volume と保存データも削除するため、必要な場合だけ使ってください。
 
 ## 開発から PR まで
 
