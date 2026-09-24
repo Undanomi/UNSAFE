@@ -1,16 +1,16 @@
-# SLSG
+# UNSAFE
 
-[![デモサイト Live](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
+[![デモサイト](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
 
 <p align="center">
-  <a href="https://www.youtube.com">
+  <a href="https://slsg.konekotech.com/">
     <img src="docs/images/title.png" alt="タイトル" width="640">
   </a>
 </p>
 
 ## 目次
 
-- [SLSGについて](#slsgについて)
+- [UNSAFEについて](#unsafeについて)
 - [今後の展望](#今後の展望)
 - [構成](#構成)
   - [リポジトリ構成](#リポジトリ構成)
@@ -25,19 +25,19 @@
 - [Contributing](#contributing)
 - [License](#license)
 
-## SLSGについて
+## UNSAFEについて
 
 ISC2の「Cybersecurity Workforce Study 2023」によると、2023年の日本のサイバーセキュリティ人材の需給ギャップは約11万人と推計されています（[ISC2の調査報告書](https://www.isc2.org/-/media/Project/ISC2/Main/Media/documents/research/ISC2_Cybersecurity_Workforce_Study_2023.pdf)、[経済産業省による紹介](https://www.meti.go.jp/press/2025/05/20250514002/20250514002.html)）。
 
 人材を育てるには、知識を学ぶだけでなく、実際に手を動かして攻撃や防御の仕組みを理解する機会が欠かせません。一方、実践的な演習には、テーマの設定からシナリオの設計、環境の構築、動作検証まで多くの準備が必要です。課題を一つ作るにも時間と専門知識が要るため、学習者の関心や習熟度に合う課題を継続して用意するのは容易ではありません。
 
-SLSG（Security Learning Scenario Generator）は、この負担を減らし、学習者に応じた実践機会を提供するサービスです。ユーザーが学びたいテーマ、難易度、フラグの条件などをチャットで指定すると、生成 AI が演習シナリオと仮想マシンのソースを作成し、検証・ビルドまでをノンストップで実行します。ビルドが完了したマシンは Web ブラウザ経由からダウンロードすることが可能で、ユーザーの環境で起動して演習を行うことができます。
+UNSAFE（UN-danomi Security AI Framework for Education）は、この負担を減らし、学習者に応じた実践機会を提供するサービスです。ユーザーが学びたいテーマ、難易度、フラグの条件などをチャットで指定すると、生成 AI が演習シナリオと仮想マシンのソースを作成し、検証・ビルドまでをノンストップで実行します。ビルドが完了したマシンは Web ブラウザ経由からダウンロードすることが可能で、ユーザーの環境で起動して演習を行うことができます。
 
 自分の目的に合うマシンを作れるほか、他の利用者が公開したマシンにも挑戦できます。行き詰まったときは、マシンの詳細画面にあるヒントや誘導問題を手がかりに、解き方を考えながら学習を進められます。
 
 ## 今後の展望
 
-より多くの学習者が目的に合う演習に取り組めるよう、次の方向で SLSG の発展を検討しています。
+より多くの学習者が目的に合う演習に取り組めるよう、次の方向で UNSAFE の発展を検討しています。
 
 - **演習の幅を広げる**：現在の Debian ベースのマシンに加え、対応 OS や扱えるテーマを増やし、学べる技術や難易度の選択肢を広げます。
 - **生成品質を高める**：シナリオ、生成したソース、完成したマシンの整合性を確認する仕組みを改善し、意図した手順で取り組める課題を安定して提供することを目指します。
