@@ -101,7 +101,7 @@ UNSAFE（UN-danomi Security AI Framework for Education）は、この負担を�
 
 ## Contributing
 
-このプロジェクトへの貢献を歓迎します。参加方法は [CONTRIBUTING](CONTRIBUTING.md) をご覧ください。
+このプロジェクトへの貢献を歓迎します。参加方法は [CONTRIBUTING](docs/CONTRIBUTING.md) をご覧ください。
 
 ## License
 
