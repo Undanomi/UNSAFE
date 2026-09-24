@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,7 +27,13 @@ class RuntimeLimitSettings(DatabaseSettings):
     """Non-secret AI server limits shared with the read-only admin dashboard."""
 
     gemini_max_output_tokens: int = Field(default=65536, ge=1024, le=65536)
+    openai_max_output_tokens: int = Field(default=65536, ge=1024, le=128000)
     generation_retries: int = Field(default=3, ge=1, le=10)
+    ai_max_concurrent_requests: int = Field(default=1, ge=1, le=20)
+    ai_request_min_interval_seconds: float = Field(default=1, ge=0, le=60)
+    ai_transient_retry_attempts: int = Field(default=8, ge=1, le=20)
+    ai_transient_retry_max_seconds: float = Field(default=600, gt=0, le=3600)
+    ai_transient_retry_jitter_seconds: float = Field(default=0.5, ge=0, le=10)
     cve_min_year: int = Field(default=2024, ge=1999, le=2100)
     scenario_generation_attempts: int = Field(default=5, ge=1, le=10)
     source_generation_attempts: int = Field(default=3, ge=1, le=5)
@@ -35,6 +42,8 @@ class RuntimeLimitSettings(DatabaseSettings):
 
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
+    source_workbench_action_limit: int = Field(default=20, ge=1, le=60)
+    source_sandbox_timeout_seconds: float = Field(default=660, gt=0, le=3600)
     download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
 
     scenario_chunk_size: int = Field(default=320, ge=1, le=4096)
@@ -54,6 +63,9 @@ class Settings(RuntimeLimitSettings):
     ai_provider: str = "gemini"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.6-luna"
+    openai_reasoning_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "medium"
     github_token: str | None = None
 
     rockyou_path: Path = Path("/app/data/rockyou.txt")
@@ -62,6 +74,11 @@ class Settings(RuntimeLimitSettings):
 
     build_server_url: str = "http://localhost:8080"
     build_server_token: SecretStr = Field(min_length=32)
+    source_sandbox_enabled: bool = False
+    source_sandbox_url: str = "http://localhost:8090"
+    source_sandbox_token: SecretStr = SecretStr(
+        "local-development-source-sandbox-token-change-me"
+    )
     download_signing_secret: SecretStr = SecretStr(
         "local-development-download-signing-secret-change-me"
     )
@@ -69,11 +86,20 @@ class Settings(RuntimeLimitSettings):
     skills_enabled: bool = True
 
     @model_validator(mode="after")
+    def validate_ai_provider(self) -> Settings:
+        self.ai_provider = self.ai_provider.strip().lower()
+        if self.ai_provider not in {"gemini", "openai", "stub"}:
+            raise ValueError("AI_PROVIDER must be one of: gemini, openai, stub")
+        return self
+
+    @model_validator(mode="after")
     def validate_download_signing_settings(self) -> Settings:
         if len(self.download_signing_secret.get_secret_value()) < 32:
             raise ValueError("DOWNLOAD_SIGNING_SECRET must contain at least 32 characters")
         if self.rockyou_min_line > self.rockyou_max_line:
             raise ValueError("ROCKYOU_MIN_LINE must not exceed ROCKYOU_MAX_LINE")
+        if self.source_sandbox_enabled and len(self.source_sandbox_token.get_secret_value()) < 32:
+            raise ValueError("SOURCE_SANDBOX_TOKEN must contain at least 32 characters")
         return self
 
 

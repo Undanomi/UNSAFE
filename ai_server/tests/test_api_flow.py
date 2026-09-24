@@ -15,6 +15,7 @@ from ai_server.models import (
     Artifact,
     AttackGraph,
     AttackStep,
+    GeneratedSource,
     MachineInformation,
     ScenarioDraft,
     ScenarioReview,
@@ -29,7 +30,11 @@ from ai_server.models import (
 )
 from ai_server.repository import SessionNotFoundError
 from ai_server.services.errors import ScenarioInputRevisionRequiredError
-from ai_server.services.workflow import MachineWorkflow
+from ai_server.services.workflow import (
+    MachineWorkflow,
+    _extract_build_failures,
+    _source_review_scope_invalidation_reasons,
+)
 
 
 class FakeAsyncStream(httpx.AsyncByteStream):
@@ -168,6 +173,39 @@ def test_distribution_artifact_does_not_fallback_to_qcow2() -> None:
         MachineWorkflow._distribution_artifact([old_artifact])
 
 
+def test_extract_build_failures_prioritizes_structured_check_marker() -> None:
+    log = "\n".join(
+        [f"non-fatal error {index}" for index in range(12)]
+        + [
+            "SLSG_CHECK_START health_checks[4]",
+            "service returned an unexpected state",
+            "SLSG_CHECK_FAIL health_checks[4] exit=3",
+            "packer exited with non-zero status",
+        ]
+    )
+
+    _commands, failed_checks, contexts = _extract_build_failures(log)
+
+    assert failed_checks == [{"check_id": "health_checks[4]", "exit_code": 3}]
+    assert "SLSG_CHECK_START health_checks[4]" in contexts[0]
+    assert "SLSG_CHECK_FAIL health_checks[4] exit=3" in contexts[0]
+
+
+def test_extract_build_failures_uses_structured_script_location() -> None:
+    log = (
+        "installing dependencies\n"
+        "npm ERR! build failed\n"
+        "SLSG_SCRIPT_FAIL phase=provision "
+        "source=./scripts/provision.sh line=42 exit=1\n"
+        "packer exited with non-zero status"
+    )
+
+    commands, _failed_checks, contexts = _extract_build_failures(log)
+
+    assert commands[0] == "./scripts/provision.sh:42 (phase=provision, exit=1)"
+    assert "npm ERR! build failed" in contexts[0]
+
+
 @pytest.fixture
 async def client(tmp_path: Path):
     settings = Settings(
@@ -181,6 +219,69 @@ async def client(tmp_path: Path):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as test_client:
             yield test_client, app, fake_build
+
+
+@pytest.mark.asyncio
+async def test_ai_safety_refusal_is_public_and_cannot_be_rebuilt(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    state = await app.state.repository.get(session_id)
+    state.machine_information = MachineInformation(
+        name="Blocked candidate",
+        visibility="private",
+        theme="Verification",
+        difficulty="Easy",
+    )
+    state.scenario = ScenarioDraft(
+        scenario_id="scenario-blocked-candidate",
+        title="Blocked candidate",
+        definition="# Blocked candidate",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="verify-candidate",
+                    title="Verify candidate",
+                    kind="reconnaissance",
+                    phase="reconnaissance",
+                    description="Verify the generated candidate.",
+                    implementation_steps=["Run the isolated verification."],
+                )
+            ]
+        ),
+    )
+    state.status = SessionStatus.FAILED
+    state.error_message = "internal workbench failure detail"
+    state.repair_failure_report = {
+        "kind": "ai_safety_refusal",
+        "status": "blocked",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+        "internal_observations": ["must not be exposed"],
+    }
+    await app.state.repository.save(state)
+
+    response = await http.get(f"/v1/sessions/{session_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["failure"] == {
+        "kind": "ai_safety_refusal",
+        "summary": "The candidate cannot be safely verified in the isolated environment.",
+        "retry_allowed": False,
+    }
+    assert response.json()["error_message"] == response.json()["failure"]["summary"]
+    assert "internal workbench failure detail" not in response.text
+    assert "internal_observations" not in response.text
+
+    retry = await http.post(
+        f"/v1/sessions/{session_id}/machines",
+        json={"scenario_id": state.scenario.scenario_id},
+        headers=headers,
+    )
+
+    assert retry.status_code == 409
+    assert "安全上の理由でAIが処理を拒否" in retry.json()["detail"]
+    assert not app.state.workflow.is_running(session_id)
 
 
 @pytest.mark.asyncio
@@ -703,7 +804,10 @@ async def test_machine_information_change_requires_stale_generation_to_cancel_fi
 
 
 async def create_failed_build_state(
-    app, status: SessionStatus = SessionStatus.FAILED
+    app,
+    status: SessionStatus = SessionStatus.FAILED,
+    *,
+    semantic_review_approved: bool = False,
 ) -> SessionState:
     state = await app.state.repository.create("user-123")
     state.machine_information = MachineInformation(
@@ -737,6 +841,18 @@ async def create_failed_build_state(
     previous_archive, previous_checksum = app.state.workflow.source_archive.create(
         state.session_id, state.scenario, previous_source
     )
+    if semantic_review_approved:
+        previous_checksum = app.state.workflow.source_archive.record_semantic_review(
+            previous_archive,
+            {
+                "kind": "source_semantic_review",
+                "status": "pass",
+                "error_message": "The source passed semantic review.",
+                "summary": {"passed": 1, "failed": 0, "warnings": 0},
+                "checks": [],
+            },
+            approved=True,
+        )
     state.source_path = str(previous_archive.parent / "source")
     state.source_checksum = previous_checksum
     state.build_id = "f4122fe0-ca91-4ba6-813b-0f6acba0e8d5"
@@ -744,6 +860,58 @@ async def create_failed_build_state(
     state.error_message = "packer failed"
     state.status = status
     return await app.state.repository.save(state)
+
+
+@pytest.mark.asyncio
+async def test_build_repair_reuses_prior_approved_review_scope(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app, semantic_review_approved=True)
+    review_contexts: list[dict | None] = []
+
+    async def review(
+        _machine,
+        _scenario,
+        _current,
+        _skills=None,
+        reconsideration=None,
+    ) -> SourceReview:
+        review_contexts.append(reconsideration)
+        return SourceReview(
+            approved=False,
+            summary="A late unrelated concern was raised.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    category="implementation_mismatch",
+                    affected_files=["contents/app/unmodified.php"],
+                    evidence="This file was not changed by the build repair.",
+                    remediation="Do not reopen unrelated source during build repair.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.review_source = review
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert len(review_contexts) == 1
+    assert review_contexts[0] is not None
+    assert review_contexts[0]["kind"] == "source_repair_verification"
+    assert review_contexts[0]["repair_origin"] == "build_failure"
+    assert fake_build.submitted_archive is not None
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        report = json.loads(archive.read("repair_report.json"))
+    assert report["source_semantic_review"]["status"] == "approved"
+    assert report["source_semantic_review"]["report"]["checks"][0]["status"] == "warn"
 
 
 @pytest.mark.asyncio
@@ -796,9 +964,23 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     state = await create_failed_build_state(app)
     assert state.scenario is not None
     authoritative_graph = state.scenario.attack_graph
-    fake_build.packer_log_response = "+ command before failure\nerror detail"
+    original_description = state.scenario.scenario_description
+    original_definition = state.scenario.definition
+    sync_calls = 0
+    fake_build.packer_log_response = (
+        "irrelevant package installation noise\n"
+        "another unrelated build line\n"
+        "one more unrelated build line\n"
+        "unrelated setup completed\n"
+        "+ command before failure\n"
+        "SLSG_CHECK_START acceptance_tests[3]\n"
+        "error detail\n"
+        "SLSG_CHECK_FAIL acceptance_tests[3] exit=7"
+    )
 
     async def synchronize_scenario(machine, scenario, current) -> ScenarioRevision:
+        nonlocal sync_calls
+        sync_calls += 1
         rewritten_graph = scenario.attack_graph.model_copy(
             update={
                 "steps": [
@@ -835,11 +1017,9 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert submitted_state.build_repair_attempt_limit == 3
     assert submitted_state.scenario is not None
     assert submitted_state.scenario.attack_graph == authoritative_graph
-    assert (
-        submitted_state.scenario.scenario_description
-        == "Updated player introduction after source repair."
-    )
-    assert submitted_state.scenario.definition == "retry synchronized with repaired source"
+    assert submitted_state.scenario.scenario_description == original_description
+    assert submitted_state.scenario.definition == original_definition
+    assert sync_calls == 0
     assert fake_build.submitted_request["idempotency_key"].startswith(
         f"ai-session-{state.session_id}-"
     )
@@ -852,13 +1032,18 @@ async def test_failed_packer_build_repairs_source(client) -> None:
     assert "contents/README.md" in repair_report
     assert "command before failure" in repair_report
     assert "error detail" in repair_report
-    assert '"failed_commands"' in repair_report
+    assert "irrelevant package installation noise" not in repair_report
+    assert '"packer_log_tail"' not in repair_report
+    assert '"failed_commands"' not in repair_report
+    assert '"failed_checks"' in repair_report
+    assert '"check_id": "acceptance_tests[3]"' in repair_report
+    assert '"exit_code": 7' in repair_report
     assert '"failure_log_context"' in repair_report
-    assert '"scenario_sync_status": "approved"' in repair_report
+    assert '"scenario_sync_status"' not in repair_report
 
 
 @pytest.mark.asyncio
-async def test_scenario_review_feedback_revises_scenario_without_another_code_patch(client) -> None:
+async def test_operational_source_repair_does_not_trigger_scenario_sync(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -923,15 +1108,15 @@ async def test_scenario_review_feedback_revises_scenario_without_another_code_pa
 
     assert fake_build.submitted_request is not None
     assert len(repair_reports) == 1
-    assert sync_feedback[0] is None
-    assert sync_feedback[1]["kind"] == "scenario_sync_review"
+    assert sync_feedback == []
+    assert review_calls == 0
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.scenario is not None
-    assert submitted.scenario.definition == "review feedback applied"
+    assert submitted.scenario.definition == state.scenario.definition
 
 
 @pytest.mark.asyncio
-async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(client) -> None:
+async def test_operational_repair_does_not_open_scenario_review_gate(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -981,33 +1166,18 @@ async def test_repeated_scenario_rejection_never_routes_feedback_to_code_repair(
     assert response.status_code == 202
     for _ in range(100):
         current = await app.state.repository.get(state.session_id)
-        if current.status == SessionStatus.FAILED:
+        if fake_build.submitted_request is not None:
             break
         await asyncio.sleep(0.01)
 
-    assert current.status == SessionStatus.FAILED
+    assert current.status in {SessionStatus.BUILD_QUEUED, SessionStatus.COMPLETED}
     assert len(repair_reports) == 1
-    assert len(feedback_seen) == app.state.workflow.source_generation_attempts
-    assert feedback_seen[0] is None
-    assert all(feedback is not None for feedback in feedback_seen[1:])
-    assert fake_build.submitted_request is None
-
-    # Keep the actual failed phase when a user retries. A stale failed build_id must
-    # not relabel a scenario-sync failure as a Packer failure.
-    restarted = await http.post(
-        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
-    )
-    assert restarted.status_code == 202
-    for _ in range(100):
-        current = await app.state.repository.get(state.session_id)
-        if len(repair_reports) >= 2 and current.status == SessionStatus.FAILED:
-            break
-        await asyncio.sleep(0.01)
-    assert repair_reports[1]["kind"] == "scenario_sync_review"
+    assert feedback_seen == []
+    assert fake_build.submitted_request is not None
 
 
 @pytest.mark.asyncio
-async def test_cve_scenario_sync_rejection_returns_to_source_repair(client) -> None:
+async def test_operational_repair_skips_unrelated_scenario_review(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -1075,9 +1245,13 @@ async def test_cve_scenario_sync_rejection_returns_to_source_repair(client) -> N
         await asyncio.sleep(0.01)
 
     assert fake_build.submitted_request is not None
-    assert len(repair_reports) == 2
-    assert repair_reports[1]["kind"] == "scenario_sync_review"
-    assert "CVE-2026-42533" in repair_reports[1]["error_message"]
+    assert len(repair_reports) == 1
+    assert review_calls == 0
+    assert fake_build.submitted_archive is not None
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        report = json.loads(archive.read("repair_report.json"))
+    assert "scenario_sync_status" not in report["attempts"][-1]
+    assert "CVE-2026-42533" not in json.dumps(report, ensure_ascii=False)
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.status in {SessionStatus.BUILD_QUEUED, SessionStatus.COMPLETED}
     assert submitted.source_generation_attempts < submitted.source_generation_attempt_limit
@@ -1443,6 +1617,11 @@ async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> 
                     )
                 ]
             )
+        index = next(
+            (file for file in current.files if file.path == "contents/app/index.php"),
+            None,
+        )
+        assert index is not None and "echo '<td>';" in index.content
         return SourcePatch(
             files=[
                 SourceFile(
@@ -1467,6 +1646,7 @@ async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> 
                         step_id="web-entry",
                         severity="error",
                         category="acceptance_test_gap",
+                        affected_files=["contents/app/index.php"],
                         evidence="The test queries the database directly instead of using SQLi.",
                         remediation="Exercise the vulnerable web route and assert leaked data.",
                     )
@@ -1481,6 +1661,7 @@ async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> 
                         step_id="web-entry",
                         severity="error",
                         category="implementation_mismatch",
+                        affected_files=["contents/app/index.php"],
                         evidence="contents/app/index.php ends in the middle of result rendering.",
                         remediation="Complete the PHP result loop and response markup.",
                     )
@@ -1503,14 +1684,198 @@ async def test_source_repair_regression_gets_a_fresh_semantic_review(client) -> 
     assert fake_build.submitted_request is not None
     assert review_calls == 3
     assert repair_contexts[1]["checks"][0]["name"] == ("semantic:acceptance_test_gap:web-entry")
-    assert repair_contexts[2]["checks"][0]["name"] == ("semantic:implementation_mismatch:web-entry")
+    assert repair_contexts[2]["kind"] == "source_semantic_repair_retry"
+    assert repair_contexts[2]["candidate_review"]["checks"][0]["name"] == (
+        "semantic:implementation_mismatch:web-entry"
+    )
     with zipfile.ZipFile(fake_build.submitted_archive) as archive:
         index = archive.read("contents/app/index.php").decode()
     assert "htmlspecialchars" in index
 
 
 @pytest.mark.asyncio
-async def test_semantic_review_nonprogress_is_returned_to_source_reviewer(client) -> None:
+async def test_unrelated_late_semantic_findings_do_not_expand_fixed_scope(client) -> None:
+    http, app, fake_build = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    state = await create_failed_build_state(app)
+    repair_contexts: list[dict] = []
+    review_calls = 0
+
+    async def repair(_machine, _scenario, current, failure_report, _skills=None) -> SourcePatch:
+        repair_contexts.append(failure_report)
+        readme = next(file for file in current.files if file.path == "contents/README.md")
+        return SourcePatch(
+            files=[
+                SourceFile(
+                    path=readme.path,
+                    content=readme.content + f"\nRepair {len(repair_contexts)}.\n",
+                    mode=readme.mode,
+                )
+            ]
+        )
+
+    async def review(*_args, **_kwargs) -> SourceReview:
+        nonlocal review_calls
+        categories = ["acceptance_test_gap", "implementation_mismatch", "wrong_technique"]
+        category = categories[min(review_calls, len(categories) - 1)]
+        review_calls += 1
+        return SourceReview(
+            approved=False,
+            summary=f"Late review finding {review_calls}.",
+            findings=[
+                SourceReviewFinding(
+                    step_id="web-entry",
+                    severity="error",
+                    category=category,
+                    evidence=f"A different late-stage concern was raised ({category}).",
+                    remediation="Request another unrelated source change.",
+                )
+            ],
+        )
+
+    app.state.workflow.generator.repair_source = repair
+    app.state.workflow.generator.review_source = review
+
+    response = await http.post(
+        f"/v1/sessions/{state.session_id}/machines", json={}, headers=headers
+    )
+    assert response.status_code == 202
+    for _ in range(100):
+        if fake_build.submitted_request is not None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert fake_build.submitted_request is not None
+    assert review_calls == 2
+    assert len(repair_contexts) == 2
+    assert fake_build.submitted_archive is not None
+    with zipfile.ZipFile(fake_build.submitted_archive) as archive:
+        report = json.loads(archive.read("repair_report.json"))
+    semantic_review = report["source_semantic_review"]
+    assert semantic_review["status"] == "approved"
+    assert semantic_review["report"]["checks"][0]["status"] == "warn"
+    assert "out-of-scope late finding" in semantic_review["report"]["error_message"]
+
+
+def test_full_source_reaudit_depends_on_contract_or_repair_surface_changes() -> None:
+    manifest = {
+        "target_os": "debian-12",
+        "required_files": [
+            "contents/build.sh",
+            "contents/scripts/provision.sh",
+        ],
+        "services": [{"name": "web", "protocol": "http", "port": 80}],
+        "acceptance_tests": [{"command": "curl -fsS http://127.0.0.1/"}],
+        "expected_vulnerabilities": [{"name": "SQLi", "description": "SQL injection"}],
+        "health_checks": [{"command": "systemctl is-active apache2"}],
+        "attack_steps": [
+            {
+                "step_id": "web-entry",
+                "kind": "sqli",
+                "requires": [],
+                "achieves": ["credential"],
+            }
+        ],
+        "objectives": [],
+    }
+
+    def source(current_manifest: dict, provision: str = "install web\n") -> GeneratedSource:
+        return GeneratedSource(
+            files=[
+                SourceFile(
+                    path="contents/scenario_manifest.json",
+                    content=json.dumps(current_manifest),
+                ),
+                SourceFile(path="contents/build.sh", content="run provision\n"),
+                SourceFile(path="contents/scripts/provision.sh", content=provision),
+                SourceFile(path="contents/app/index.php", content="<?php vulnerable();"),
+            ]
+        )
+
+    review = SourceReview(
+        approved=False,
+        summary="Provisioning needs a local repair.",
+        findings=[
+            SourceReviewFinding(
+                step_id="web-entry",
+                severity="error",
+                category="implementation_mismatch",
+                affected_files=["contents/scripts/provision.sh"],
+                evidence="The provision command is incomplete.",
+                remediation="Repair the provision command.",
+            )
+        ],
+    )
+    base = source(manifest)
+    local_candidate = source(manifest, provision="install web\nconfigure web\n")
+    assert _source_review_scope_invalidation_reasons(
+        base,
+        local_candidate,
+        review,
+        {"contents/scripts/provision.sh"},
+    ) == []
+
+    test_only_manifest = {**manifest, "acceptance_tests": [{"command": "test exploit"}]}
+    manifest_review = review.model_copy(
+        update={
+            "findings": [
+                review.findings[0].model_copy(
+                    update={"affected_files": ["contents/scenario_manifest.json"]}
+                )
+            ]
+        }
+    )
+    assert _source_review_scope_invalidation_reasons(
+        base,
+        source(test_only_manifest),
+        manifest_review,
+        {"contents/scenario_manifest.json"},
+    ) == []
+
+    test_support_candidate = source(test_only_manifest)
+    test_support_candidate.files.append(
+        SourceFile(path="contents/tests/test-exploit.sh", content="#!/bin/bash\nexit 0\n")
+    )
+    test_gap_review = manifest_review.model_copy(
+        update={
+            "findings": [
+                manifest_review.findings[0].model_copy(
+                    update={"category": "acceptance_test_gap"}
+                )
+            ]
+        }
+    )
+    assert _source_review_scope_invalidation_reasons(
+        base,
+        test_support_candidate,
+        test_gap_review,
+        {"contents/scenario_manifest.json", "contents/tests/test-exploit.sh"},
+    ) == []
+
+    changed_contract = {
+        **manifest,
+        "services": [{"name": "web", "protocol": "http", "port": 8080}],
+    }
+    assert "review contract changed" in " ".join(
+        _source_review_scope_invalidation_reasons(
+            base,
+            source(changed_contract),
+            manifest_review,
+            {"contents/scenario_manifest.json"},
+        )
+    )
+    assert "expanded beyond" in " ".join(
+        _source_review_scope_invalidation_reasons(
+            base,
+            source(manifest),
+            review,
+            {"contents/app/index.php"},
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_source_repair_review_receives_a_fixed_scope(client) -> None:
     http, app, fake_build = client
     headers = {"X-Authenticated-User-ID": "user-123"}
     state = await create_failed_build_state(app)
@@ -1574,14 +1939,14 @@ async def test_semantic_review_nonprogress_is_returned_to_source_reviewer(client
         await asyncio.sleep(0.01)
 
     assert fake_build.submitted_request is not None
-    assert review_calls == 3
+    assert review_calls == 2
     assert len(repair_contexts) == 2
     assert len(reconsiderations) == 1
-    assert reconsiderations[0]["kind"] == "source_semantic_review_nonprogress"
-    assert (
-        reconsiderations[0]["review_before_repair"]["checks"][0]["repair_target"] == "source_code"
+    assert reconsiderations[0]["kind"] == "source_repair_verification"
+    assert reconsiderations[0]["blocking_review"]["checks"][0]["repair_target"] == (
+        "source_code"
     )
-    assert reconsiderations[0]["source_before_repair"] != reconsiderations[0]["source_after_repair"]
+    assert reconsiderations[0]["changed_files"] == ["contents/README.md"]
 
 
 @pytest.mark.asyncio
@@ -1725,11 +2090,10 @@ async def test_scenario_text_source_review_finding_routes_to_scenario_sync(clien
 
     assert fake_build.submitted_request is not None
     assert len(repair_contexts) == 1
-    assert review_calls == 3
+    assert review_calls == 1
     assert sync_feedback[0]["kind"] == "source_semantic_review"
     assert sync_feedback[0]["checks"][0]["repair_target"] == "scenario_text"
-    assert reconsiderations[0]["kind"] == "source_semantic_review_nonprogress"
-    assert reconsiderations[0]["attempted_change"] == {"kind": "scenario_sync"}
+    assert reconsiderations == []
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.scenario is not None
     assert submitted.scenario.definition == "The target uses MariaDB."

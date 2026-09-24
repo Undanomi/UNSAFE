@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -21,7 +22,15 @@ from ai_server.models import (
     SourceReview,
 )
 from ai_server.prompts import attack_graph_json_for_ai
-from ai_server.services.ai import CVEVerification, GeminiGenerator
+from ai_server.services.ai import (
+    AIProviderRequestError,
+    AIProviderSafetyRefusalError,
+    CVEVerification,
+    GeminiGenerator,
+    OpenAIGenerator,
+    begin_token_usage_session,
+    end_token_usage_session,
+)
 from ai_server.services.errors import ScenarioInputRevisionRequiredError, exception_detail
 
 
@@ -68,7 +77,8 @@ def test_ai_graph_serialization_redacts_late_bound_password() -> None:
 
     serialized = attack_graph_json_for_ai(graph)
     assert "22062531" not in serialized
-    assert ROCKYOU_PASSWORD_PLACEHOLDER in serialized
+    assert '"password": null' in serialized
+    assert ROCKYOU_PASSWORD_PLACEHOLDER not in serialized
     assert '"line_number": null' in serialized
     assert '"search_space_lines": null' in serialized
 
@@ -101,6 +111,290 @@ def verified_cve_graph() -> AttackGraph:
             )
         ]
     )
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_uses_responses_api_and_structured_output() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return openai_response(
+            {"approved": True, "summary": "The source is consistent.", "findings": []}
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        openai_reasoning_effort="low",
+        openai_max_output_tokens=32000,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await OpenAIGenerator(settings, client)._generate(
+            "Return the source review as JSON.",
+            json_output=True,
+            response_schema=SourceReview,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+
+    assert SourceReview.model_validate_json(review).approved is True
+    request = requests[0]
+    assert request.url == "https://api.openai.com/v1/responses"
+    assert request.headers["Authorization"] == "Bearer test-openai-key"
+    payload = json.loads(request.content)
+    assert payload["model"] == "gpt-5.6-luna"
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["max_output_tokens"] == 32000
+    assert payload["store"] is False
+    response_format = payload["text"]["format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["strict"] is True
+    assert response_format["schema"]["additionalProperties"] is False
+    assert response_format["schema"]["required"] == ["approved", "summary", "findings"]
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_reports_incomplete_response() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [],
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(RuntimeError, match="max_output_tokens"):
+            await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_reports_safety_refusal_distinctly() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "refusal",
+                                "refusal": "This request cannot be processed safely.",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderSafetyRefusalError, match="安全ポリシー"):
+            await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_retries_temporary_rate_limit_without_changing_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0", "x-request-id": "req-rate-limited"},
+                json={
+                    "error": {
+                        "type": "rate_limit_error",
+                        "code": "slow_down",
+                        "message": "Reduce request rate.",
+                    }
+                },
+            )
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await OpenAIGenerator(settings, client)._generate("unchanged prompt")
+
+    assert result == "generated"
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert requests[0].headers["X-Client-Request-Id"] == requests[1].headers[
+        "X-Client-Request-Id"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_does_not_retry_spend_limit() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "project_spend_limit_exceeded",
+                    "message": "Project spend limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError, match="non-retryable") as raised:
+            await OpenAIGenerator(settings, client)._generate("prompt")
+
+    assert raised.value.error_code == "project_spend_limit_exceeded"
+    assert raised.value.retryable is False
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_does_not_consume_model_output_retries() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "organization_usage_limit_exceeded",
+                    "message": "Organization usage limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        generation_retries=3,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError):
+            await OpenAIGenerator(settings, client).generate_source(
+                MachineInformation(
+                    name="Provider failure",
+                    visibility="private",
+                    theme="Retry separation",
+                    difficulty="Easy",
+                ),
+                ScenarioDraft(
+                    scenario_id="scenario-provider-failure",
+                    title="Provider failure",
+                    definition="# Provider failure",
+                    attack_graph=graph_without_objectives(),
+                ),
+            )
+
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_serializes_shared_requests() -> None:
+    active = 0
+    max_active = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_max_concurrent_requests=1,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = OpenAIGenerator(settings, client)
+        results = await asyncio.gather(
+            generator._generate("first"),
+            generator._generate("second"),
+        )
+
+    assert results == ["generated", "generated"]
+    assert max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_uses_shared_source_generation_workflow() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return openai_response(
+            {
+                "files": [
+                    {
+                        "path": "contents/build.sh",
+                        "content": "#!/bin/bash\nset -euo pipefail\n",
+                        "mode": "0755",
+                    }
+                ]
+            }
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        source = await OpenAIGenerator(settings, client).generate_source(
+            MachineInformation(
+                name="OpenAI source",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            ),
+            ScenarioDraft(
+                scenario_id="scenario-openai-source",
+                title="OpenAI source",
+                definition="# OpenAI source",
+                attack_graph=graph_without_objectives(),
+            ),
+        )
+
+    assert source.files[0].path == "contents/build.sh"
 
 
 @pytest.mark.asyncio
@@ -417,6 +711,60 @@ async def test_vm_source_repair_uses_source_patch_schema() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scenario_sync_keeps_authoritative_graph_and_ignores_returned_copy() -> None:
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return gemini_response(
+            {
+                "scenario_description": "Investigate the synchronized machine.",
+                "definition": "# Synchronized scenario",
+                "summary": "Updated implementation details.",
+                # This reproduces the malformed copy that previously aborted sync.
+                "attack_graph": {
+                    "objectives": [],
+                    "steps": [
+                        {
+                            "step_id": "sqli-user-hash",
+                            "title": "Extract a user hash",
+                            "kind": "web_vulnerability",
+                            "phase": "initial_access",
+                            "description": "Use the intended SQL injection.",
+                            "cve_title": "CVE metadata copied onto a non-CVE step",
+                            "cve_description": "This must not be parsed during prose sync.",
+                            "cwe_ids": ["CWE-89"],
+                            "implementation_steps": ["Send the training request."],
+                        }
+                    ],
+                },
+            }
+        )
+
+    machine = MachineInformation(
+        name="Test", visibility="private", theme="Web", difficulty="Easy"
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-test",
+        title="Test",
+        scenario_description="Investigate the machine.",
+        definition="# Original scenario",
+        attack_graph=graph_without_objectives(),
+    )
+    current = GeneratedSource(files=[SourceFile(path="contents/README.md", content="test")])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        revision = await GeminiGenerator(
+            Settings(gemini_api_key="test-key"), client
+        ).synchronize_scenario(machine, scenario, current)
+
+    assert revision.attack_graph == scenario.attack_graph
+    assert revision.definition == "# Synchronized scenario"
+    schema = requests[0]["generationConfig"]["responseJsonSchema"]
+    assert "attack_graph" not in schema["properties"]
+
+
+@pytest.mark.asyncio
 async def test_vm_source_generation_retries_duplicate_embedded_paths() -> None:
     requests: list[dict] = []
 
@@ -717,6 +1065,276 @@ async def test_scenario_review_uses_independent_permission_focused_verdict() -> 
     assert "permission_blocker" in request_prompt
     schema = requests[0]["generationConfig"]["responseJsonSchema"]
     assert "permission_shortcut" in json.dumps(schema)
+
+
+@pytest.mark.asyncio
+async def test_scenario_review_discards_framework_owned_rockyou_findings() -> None:
+    graph = AttackGraph(
+        steps=[
+            AttackStep(
+                step_id="crack-user-hash",
+                title="Crack user hash",
+                kind="password_cracking",
+                phase="credential_access",
+                description="Crack the leaked password hash.",
+                implementation_steps=["Store a runtime-generated password hash."],
+                password_cracking=PasswordCrackingSpec(
+                    wordlist="rockyou.txt",
+                    hash_algorithm="SHA-256",
+                    hash_runtime="php",
+                    hash_api="hash",
+                    hashcat_mode=1400,
+                    target_crack_seconds=150,
+                ),
+            )
+        ]
+    )
+    scenario = ScenarioDraft(
+        scenario_id="scenario-rockyou-review",
+        title="Rockyou review",
+        definition="# Scenario",
+        attack_graph=graph,
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The reviewer mixed framework and implementation responsibilities.",
+                "findings": [
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "implementation_gap",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "rockyou.txtの取得元、プロビジョニングへの受け渡し、配置先が"
+                            "定義されていません。"
+                        ),
+                        "remediation": "固定した取得元とchecksumを設計書へ記載してください。",
+                    },
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "warning",
+                        "category": "implementation_gap",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "約150秒の測定に使うHashcat CPU実行環境とハードウェアが"
+                            "特定されていません。"
+                        ),
+                        "remediation": "ベンチマーク条件を記録してください。",
+                    },
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "broken_chain",
+                        "repair_target": "scenario_text",
+                        "repair_fields": [],
+                        "evidence": (
+                            "The login handler compares the submitted plaintext directly to the "
+                            "stored digest, so the cracked plaintext cannot authenticate."
+                        ),
+                        "remediation": "Use the declared hash verification API in the login path.",
+                    },
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_scenario(
+            MachineInformation(
+                name="Rockyou boundary",
+                visibility="private",
+                theme="Hash cracking",
+                difficulty="Medium",
+            ),
+            scenario,
+        )
+
+    assert review.approved is False
+    assert len(review.findings) == 1
+    assert review.findings[0].category == "broken_chain"
+    assert "Removed 2 finding(s)" in review.summary
+
+
+@pytest.mark.asyncio
+async def test_source_review_discards_framework_owned_rockyou_test_request() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-rockyou-source-review",
+        title="Rockyou source review",
+        definition="# Scenario",
+        attack_graph=AttackGraph(
+            steps=[
+                AttackStep(
+                    step_id="crack-user-hash",
+                    title="Crack user hash",
+                    kind="password_cracking",
+                    phase="credential_access",
+                    description="Crack the leaked password hash.",
+                    implementation_steps=["Store a runtime-generated password hash."],
+                    password_cracking=PasswordCrackingSpec(
+                        wordlist="rockyou.txt",
+                        hash_algorithm="SHA-256",
+                        hash_runtime="php",
+                        hash_api="hash",
+                        hashcat_mode=1400,
+                        target_crack_seconds=150,
+                    ),
+                )
+            ]
+        ),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The generated test does not inspect the server wordlist.",
+                "findings": [
+                    {
+                        "step_id": "crack-user-hash",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": ["contents/scenario_manifest.json"],
+                        "evidence": (
+                            "No acceptance test proves that the selected password is contained "
+                            "in rockyou.txt or checks its line_number."
+                        ),
+                        "remediation": "Add a test that reads the wordlist and verifies membership.",
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="Rockyou boundary",
+                visibility="private",
+                theme="Hash cracking",
+                difficulty="Medium",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n")]
+            ),
+        )
+
+    assert review.approved is True
+    assert review.findings == []
+    assert "Removed 1 finding(s)" in review.summary
+
+
+@pytest.mark.asyncio
+async def test_source_review_does_not_require_third_party_poc_in_automated_tests() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-third-party-poc",
+        title="External PoC boundary",
+        definition="# Scenario\nThe learner may obtain a public PoC.",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The automated test does not run the public PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": [
+                            "contents/scenario_manifest.json",
+                            "contents/README.md",
+                        ],
+                        "evidence": (
+                            "README requires the learner to obtain a separate public PoC, "
+                            "but acceptance_tests do not execute it."
+                        ),
+                        "remediation": (
+                            "Download and execute that PoC in the acceptance test to prove "
+                            "the exploit."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/README.md", content="Obtain the PoC.")]
+            ),
+        )
+
+    assert review.approved is True
+    assert len(review.findings) == 1
+    assert review.findings[0].severity == "warning"
+    assert "READMEで攻略者へ入手を案内" in review.findings[0].remediation
+
+
+@pytest.mark.asyncio
+async def test_source_review_keeps_existing_automated_third_party_poc_as_error() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-unsafe-poc-test",
+        title="Unsafe PoC automation",
+        definition="# Scenario",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The acceptance test downloads and executes a third-party PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": ["contents/scenario_manifest.json"],
+                        "evidence": (
+                            "acceptance_tests uses curl to download poc.py from GitHub and "
+                            "executes it with python3."
+                        ),
+                        "remediation": (
+                            "Remove the third-party PoC from automated validation; skip this "
+                            "attack-specific test if no local replacement can be generated."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/scenario_manifest.json", content="{}")]
+            ),
+        )
+
+    assert review.approved is False
+    assert review.findings[0].severity == "error"
 
 
 @pytest.mark.asyncio
@@ -1031,12 +1649,16 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
     assert attempts == 2
     assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
+    verification_prompt = requests[4]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
     assert "permission_blocker" in retry_prompt
     assert "No mode is specified for the parent directory." in retry_prompt
     assert "Specify and validate owner, group, and mode." in retry_prompt
     assert "# Generated scenario attempt 2" in retry_prompt
     assert "文書全体を生成し直してはいけません" in retry_prompt
+    assert "scenario_repair_verification" in verification_prompt
+    assert "新しいフル監査ではなく" in verification_prompt
+    assert "より細かい実装要件を後出し" in verification_prompt
     graph_prompts = [
         request
         for request in requests
@@ -1108,7 +1730,7 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="Persisted draft was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)
@@ -1125,6 +1747,93 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
     assert len(observer.recorded) == 2
     assert observer.recorded[-1][1] is not None
     assert observer.recorded[-1][1].approved is True
+
+
+@pytest.mark.asyncio
+async def test_scenario_correction_uses_only_the_current_review(monkeypatch) -> None:
+    machine = MachineInformation(
+        name="Focused Repair", visibility="private", theme="Web", difficulty="Easy"
+    )
+    persisted = ScenarioDraft(
+        scenario_id="scenario-focused-repair",
+        title="Focused Repair",
+        scenario_description="Inspect the machine and obtain the flags.",
+        definition="# Scenario\n\nBase implementation plan.",
+        attack_graph=graph_without_objectives(),
+    )
+    first_review = ScenarioReview(
+        approved=False,
+        summary="First issue.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate",
+                severity="error",
+                category="implementation_gap",
+                evidence="OBSOLETE_FIRST_DIAGNOSTIC",
+                remediation="Apply the first focused repair.",
+            )
+        ],
+    )
+
+    class Observer:
+        resume_scenario = persisted
+        resume_review = first_review
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    correction_prompts: list[str] = []
+    review_calls = 0
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=2), client
+        )
+
+        async def generate(prompt, **_kwargs):
+            correction_prompts.append(prompt)
+            if len(correction_prompts) == 1:
+                old = "Base implementation plan."
+                new = "Base implementation plan with the first repair."
+            else:
+                old = "Base implementation plan with the first repair."
+                new = "Base implementation plan with both repairs."
+            return json.dumps(
+                {
+                    "scenario_description": None,
+                    "definition_replacements": [{"old": old, "new": new}],
+                }
+            )
+
+        async def review(_machine, _scenario, **_kwargs):
+            nonlocal review_calls
+            review_calls += 1
+            if review_calls == 1:
+                return ScenarioReview(
+                    approved=False,
+                    summary="Second issue.",
+                    findings=[
+                        ScenarioReviewFinding(
+                            step_id="enumerate",
+                            severity="error",
+                            category="implementation_gap",
+                            evidence="CURRENT_SECOND_DIAGNOSTIC",
+                            remediation="Apply the second focused repair.",
+                        )
+                    ],
+                )
+            return ScenarioReview(approved=True, summary="Focused repairs are complete.")
+
+        monkeypatch.setattr(generator, "_generate", generate)
+        monkeypatch.setattr(generator, "review_scenario", review)
+        scenario = await generator.generate_scenario(machine, on_attempt=Observer())
+
+    assert scenario.definition.endswith("both repairs.")
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" in correction_prompts[0]
+    assert "CURRENT_SECOND_DIAGNOSTIC" in correction_prompts[1]
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" not in correction_prompts[1]
 
 
 @pytest.mark.asyncio
@@ -1345,7 +2054,7 @@ async def test_resumed_graph_review_revises_graph_before_scenario_text(monkeypat
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="The mismatch was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)
@@ -1519,7 +2228,7 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
 
 
 @pytest.mark.asyncio
-async def test_terminal_unsupported_assumption_requests_input_revision() -> None:
+async def test_generated_graph_issue_cannot_be_routed_to_user_input() -> None:
     graph = {
         "objectives": [],
         "steps": [
@@ -1551,8 +2260,84 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
                     "severity": "error",
                     "category": "unsupported_assumption",
                     "repair_target": "user_input",
+                    "repair_fields": ["difficulty"],
                     "evidence": "The design assumes a stable RCE without an exploit method.",
                     "remediation": "Raise the difficulty or relax the required impact.",
+                }
+            ],
+        },
+        {
+            "approved": True,
+            "summary": "The generated design must be repaired without changing user input.",
+            "findings": [],
+        },
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(responses.pop(0))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=3),
+            client,
+        )
+        scenario = await generator.generate_scenario(
+            MachineInformation(
+                name="Test",
+                visibility="private",
+                theme="Web",
+                difficulty="Easy",
+            )
+        )
+
+    assert scenario.scenario_id
+    assert responses == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_input_contradiction_requests_input_revision() -> None:
+    graph = {
+        "objectives": [
+            {
+                "objective_id": "system-flag",
+                "objective_type": "system_flag",
+                "description": (
+                    "Do not grant sudo for vim, and obtain the flag through sudo vim."
+                ),
+            }
+        ],
+        "steps": [
+            {
+                "step_id": "privilege-escalation",
+                "title": "Escalate privileges",
+                "kind": "privilege_escalation",
+                "phase": "privilege_escalation",
+                "description": "Exercise the requested training path.",
+                "requires": [],
+                "achieves": ["system-flag"],
+                "cve_id": None,
+                "implementation_steps": ["Prepare the service."],
+            }
+        ],
+    }
+    responses = [
+        graph,
+        {
+            "scenario_description": "Training scenario.",
+            "definition": "# Training scenario",
+        },
+        {
+            "approved": False,
+            "summary": "The two explicit flag requirements contradict each other.",
+            "findings": [
+                {
+                    "step_id": None,
+                    "severity": "error",
+                    "category": "input_contradiction",
+                    "repair_target": "user_input",
+                    "repair_fields": ["system_flag_details"],
+                    "evidence": "The input both forbids sudo vim and requires sudo vim.",
+                    "remediation": "Remove either of the contradictory sudo vim requirements.",
                 }
             ],
         },
@@ -1573,11 +2358,16 @@ async def test_terminal_unsupported_assumption_requests_input_revision() -> None
                     visibility="private",
                     theme="Web",
                     difficulty="Easy",
+                    needs_system_flag=True,
+                    system_flag_details=(
+                        "Do not grant sudo for vim, and obtain the flag through sudo vim."
+                    ),
                 )
             )
 
     assert captured.value.code == "scenario_input_revision_required"
-    assert captured.value.findings[0]["category"] == "unsupported_assumption"
+    assert captured.value.findings[0]["category"] == "input_contradiction"
+    assert captured.value.findings[0]["repair_fields"] == ["system_flag_details"]
     assert responses == []
 
 
@@ -1802,6 +2592,50 @@ def test_debian_package_requires_target_release_osv_evidence() -> None:
     assert "Debian:13" in verification.compatibility_reason
 
 
+def test_official_cve_facts_derive_title_from_description_when_cna_title_is_missing() -> None:
+    facts = GeminiGenerator._official_cve_facts(
+        "CVE-2025-55182",
+        {
+            "state": "PUBLISHED",
+            "title": None,
+            "descriptions": [
+                {
+                    "lang": "en",
+                    "value": (
+                        "React Server Components contain a remote code execution issue. "
+                        "An unauthenticated attacker can exploit it."
+                    ),
+                }
+            ],
+            "problem_types": [],
+            "references": [],
+            "official_cve_url": "https://www.cve.org/CVERecord?id=CVE-2025-55182",
+        },
+    )
+
+    assert facts["title"] == (
+        "React Server Components contain a remote code execution issue."
+    )
+    assert facts["description"] == (
+        "React Server Components contain a remote code execution issue. "
+        "An unauthenticated attacker can exploit it."
+    )
+
+
+def test_official_cve_facts_still_require_an_official_description() -> None:
+    with pytest.raises(
+        ValueError, match="CVE-2025-55182 official record is missing a description"
+    ):
+        GeminiGenerator._official_cve_facts(
+            "CVE-2025-55182",
+            {
+                "state": "PUBLISHED",
+                "title": None,
+                "descriptions": [],
+            },
+        )
+
+
 def test_cve_verification_rejects_unjustified_source_build() -> None:
     with pytest.raises(ValueError, match="source build requires evidence"):
         CVEVerification(
@@ -1979,3 +2813,68 @@ def gemini_response(value) -> httpx.Response:
             ]
         },
     )
+
+
+def openai_response(value) -> httpx.Response:
+    generated_text = value if isinstance(value, str) else json.dumps(value)
+    return httpx.Response(
+        200,
+        json={
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": generated_text}],
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
+async def test_provider_usage_is_recorded_for_current_session(provider: str) -> None:
+    recorded: list[tuple[str, int, int, int]] = []
+
+    async def record(session_id: str, input_tokens: int, output_tokens: int, total: int):
+        recorded.append((session_id, input_tokens, output_tokens, total))
+
+    if provider == "gemini":
+        response = gemini_response("generated")
+        payload = json.loads(response.content)
+        payload["usageMetadata"] = {
+            "promptTokenCount": 120,
+            "candidatesTokenCount": 30,
+            "totalTokenCount": 155,
+        }
+        response = httpx.Response(200, json=payload)
+        settings = Settings(gemini_api_key="test-key")
+        generator_type = GeminiGenerator
+    else:
+        response = openai_response("generated")
+        payload = json.loads(response.content)
+        payload["usage"] = {
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "total_tokens": 150,
+        }
+        response = httpx.Response(200, json=payload)
+        settings = Settings(
+            ai_provider="openai", openai_api_key="test-openai-key", _env_file=None
+        )
+        generator_type = OpenAIGenerator
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        generator = generator_type(settings, client)
+        generator.set_token_usage_recorder(record)
+        token = begin_token_usage_session("session-token-test")
+        try:
+            assert await generator._generate("prompt") == "generated"
+        finally:
+            end_token_usage_session(token)
+
+    expected_total = 155 if provider == "gemini" else 150
+    assert recorded == [("session-token-test", 120, 30, expected_total)]

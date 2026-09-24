@@ -1,7 +1,7 @@
 import "server-only"
 
 import type { ChatAnswers } from "@/stores/chat"
-import type { MachineGuidance } from "@/stores/machine-detail"
+import type { MachineGuidance } from "@/types/machine-detail"
 
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -23,6 +23,11 @@ export type AiSessionResponse = {
   download_url: string | null
   user_flag: string | null
   system_flag: string | null
+  failure: {
+    kind: "ai_safety_refusal"
+    summary: string
+    retry_allowed: false
+  } | null
   scenario: {
     scenario_id: string
     title: string

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import random
 import re
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar, Token
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -24,9 +29,11 @@ from ..models import (
     ScenarioGeneration,
     ScenarioReview,
     ScenarioRevision,
+    ScenarioTextRevision,
     SourceFile,
     SourcePatch,
     SourceReview,
+    SourceWorkbenchDecision,
 )
 from ..prompts import (
     attack_graph_json_for_ai,
@@ -41,12 +48,28 @@ from ..prompts import (
     scenario_review_prompt,
     scenario_sync_prompt,
     source_review_prompt,
+    source_workbench_prompt,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext, SkillPhase
 from ..skills.planning import context_for_graph
 from ..skills.renderer import SkillRenderer
 from ..skills.selector import SkillSelector
 from .errors import ScenarioInputRevisionRequiredError
+
+logger = logging.getLogger(__name__)
+_TOKEN_USAGE_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "ai_token_usage_session_id", default=None
+)
+TokenUsageRecorder = Callable[[str, int, int, int], Awaitable[None]]
+
+
+def begin_token_usage_session(session_id: str) -> Token:
+    return _TOKEN_USAGE_SESSION_ID.set(session_id)
+
+
+def end_token_usage_session(token: Token) -> None:
+    _TOKEN_USAGE_SESSION_ID.reset(token)
+
 
 CVE_PATTERN = re.compile(r"^CVE-(\d{4})-\d{4,7}$")
 SCENARIO_DEFINITION_TARGET_CHARS = 10_500
@@ -94,6 +117,74 @@ class _ReviewReconsiderationExhausted(RuntimeError):
     """The reviewer repeated a repair request that cannot pass validation."""
 
 
+class AIProviderRequestError(Exception):
+    """A provider request cannot be completed within the bounded transport policy."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
+        self.retryable = retryable
+
+
+class AIProviderSafetyRefusalError(Exception):
+    """The provider refused a request for a safety or policy reason."""
+
+    def __init__(self, provider: str, detail: object) -> None:
+        reason = str(detail).strip()[:2000] or "reason was not provided"
+        self.summary = f"{provider} が安全ポリシー上の理由で処理を拒否しました: {reason}"
+        super().__init__(self.summary)
+
+
+class _SharedAIRequestGate:
+    """Pace all requests made by one application-wide provider client."""
+
+    def __init__(self, max_concurrent: int, min_interval_seconds: float) -> None:
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._pacing_lock = asyncio.Lock()
+        self._min_interval_seconds = min_interval_seconds
+        self._next_start = 0.0
+
+    async def request(
+        self,
+        operation: Callable[[], Awaitable[httpx.Response]],
+        *,
+        cooldown_for_response: Callable[[httpx.Response], float | None] | None = None,
+        transport_cooldown_seconds: float = 0,
+    ) -> httpx.Response:
+        async with self._semaphore:
+            async with self._pacing_lock:
+                loop = asyncio.get_running_loop()
+                delay = self._next_start - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                started = loop.time()
+                self._next_start = max(self._next_start, started) + self._min_interval_seconds
+            try:
+                response = await operation()
+            except httpx.TransportError:
+                if transport_cooldown_seconds > 0:
+                    await self.defer(transport_cooldown_seconds)
+                raise
+            if cooldown_for_response is not None:
+                cooldown = cooldown_for_response(response)
+                if cooldown is not None and cooldown > 0:
+                    await self.defer(cooldown)
+            return response
+
+    async def defer(self, delay_seconds: float) -> None:
+        async with self._pacing_lock:
+            loop = asyncio.get_running_loop()
+            self._next_start = max(self._next_start, loop.time() + delay_seconds)
+
+
 def _gemini_json_schema(value):
     if isinstance(value, list):
         return [_gemini_json_schema(item) for item in value]
@@ -108,6 +199,21 @@ def _gemini_json_schema(value):
             schema[key] = {name: _gemini_json_schema(child) for name, child in item.items()}
         else:
             schema[key] = _gemini_json_schema(item)
+    return schema
+
+
+def _openai_json_schema(value):
+    """Convert Pydantic's schema to the strict subset accepted by Responses."""
+    if isinstance(value, list):
+        return [_openai_json_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    schema = {key: _openai_json_schema(item) for key, item in value.items() if key != "default"}
+    properties = schema.get("properties")
+    if schema.get("type") == "object" and isinstance(properties, dict):
+        schema["required"] = list(properties)
+        schema["additionalProperties"] = False
     return schema
 
 
@@ -219,6 +325,15 @@ class AIGenerator(Protocol):
         skills: SkillContext | None = None,
     ) -> SourcePatch: ...
 
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision: ...
+
     async def synchronize_scenario(
         self,
         machine: MachineInformation,
@@ -237,10 +352,44 @@ class AIGenerator(Protocol):
     ) -> SourceReview: ...
 
 
-class GeminiGenerator:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+class _BaseGenerator:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient,
+        *,
+        model: str,
+        max_output_tokens: int,
+    ) -> None:
         self.settings = settings
         self.client = client
+        self.model = model
+        self.max_output_tokens = max_output_tokens
+        self.token_usage_recorder: TokenUsageRecorder | None = None
+
+    def set_token_usage_recorder(self, recorder: TokenUsageRecorder) -> None:
+        self.token_usage_recorder = recorder
+
+    async def _record_token_usage(
+        self, input_tokens: object, output_tokens: object, total_tokens: object
+    ) -> None:
+        session_id = _TOKEN_USAGE_SESSION_ID.get()
+        if session_id is None or self.token_usage_recorder is None:
+            return
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (input_tokens, output_tokens, total_tokens)
+        ):
+            logger.warning("AI provider returned invalid token usage metadata")
+            return
+        try:
+            await self.token_usage_recorder(
+                session_id, input_tokens, output_tokens, total_tokens
+            )
+        except Exception:
+            logger.exception(
+                "could not persist AI token usage", extra={"session_id": session_id}
+            )
 
     async def _generate(
         self,
@@ -250,55 +399,7 @@ class GeminiGenerator:
         response_schema: type[BaseModel] | None = None,
         max_output_tokens: int | None = None,
     ) -> str:
-        if not self.settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is required when AI_PROVIDER=gemini")
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.settings.gemini_model}:generateContent"
-        )
-        generation_config: dict[str, object] = {}
-        if json_output or response_schema is not None:
-            generation_config["responseMimeType"] = "application/json"
-        if response_schema is not None:
-            generation_config["responseJsonSchema"] = _gemini_json_schema(
-                response_schema.model_json_schema()
-            )
-        if max_output_tokens is not None:
-            generation_config["maxOutputTokens"] = max_output_tokens
-        contents = [{"role": "user", "parts": [{"text": prompt}]}]
-        request_body: dict[str, object] = {
-            "contents": contents,
-            "generationConfig": generation_config,
-        }
-
-        response = await self.client.post(
-            url,
-            headers={"x-goog-api-key": self.settings.gemini_api_key or ""},
-            json=request_body,
-        )
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            detail = response.text.strip()[:2000]
-            message = f"{error}; Gemini response: {detail}" if detail else str(error)
-            raise httpx.HTTPStatusError(
-                message,
-                request=error.request,
-                response=error.response,
-            ) from error
-        candidates = response.json().get("candidates", [])
-        if not candidates:
-            raise RuntimeError("Gemini returned no candidates")
-        finish_reason = candidates[0].get("finishReason")
-        if finish_reason and finish_reason != "STOP":
-            raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
-        parts = candidates[0].get("content", {}).get("parts", [])
-        if any("functionCall" in part for part in parts):
-            raise RuntimeError("Gemini requested an unavailable function tool")
-        generated_text = "".join(part.get("text", "") for part in parts).strip()
-        if not generated_text:
-            raise RuntimeError("Gemini returned an empty response")
-        return generated_text
+        raise NotImplementedError
 
     async def _draft_attack_graph(
         self,
@@ -315,7 +416,7 @@ class GeminiGenerator:
             ),
             json_output=True,
             response_schema=AttackGraph,
-            max_output_tokens=self.settings.gemini_max_output_tokens,
+            max_output_tokens=self.max_output_tokens,
         )
         try:
             value = json.loads(response)
@@ -355,7 +456,7 @@ class GeminiGenerator:
                     step[field_name] = default.copy() if isinstance(default, list) else default
             if isinstance(step, dict) and step.get("kind") != "password_cracking":
                 step["password_cracking"] = None
-        GeminiGenerator._clear_password_selections(raw_graph)
+        _BaseGenerator._clear_password_selections(raw_graph)
         return raw_graph
 
     @staticmethod
@@ -392,7 +493,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=AttackGraph,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 value = json.loads(response)
                 raw_graph = value.get("attack_graph", value) if isinstance(value, dict) else value
@@ -461,7 +562,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioGeneration,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 compacted = ScenarioGeneration.model_validate_json(compacted_response)
                 if len(compacted.definition) > SCENARIO_DEFINITION_TARGET_CHARS:
@@ -510,7 +611,7 @@ class GeminiGenerator:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioCorrection,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 last_attempted_correction = response
                 correction = ScenarioCorrection.model_validate_json(response)
@@ -779,8 +880,17 @@ class GeminiGenerator:
                 ),
                 "",
             )
-        if not title or not description:
-            raise ValueError(f"{cve_id} official record is missing a title or description")
+        if not description:
+            raise ValueError(f"{cve_id} official record is missing a description")
+        if not title:
+            # A CNA title is optional in the CVE record schema.  Keep the
+            # downstream display title deterministic and grounded in the
+            # official record by deriving it from the first description
+            # sentence instead of asking the model to invent one.
+            normalized_description = re.sub(r"\s+", " ", description).strip()
+            title = re.split(
+                r"(?<=[.!?])\s+", normalized_description, maxsplit=1
+            )[0]
         cwe_ids: list[str] = []
         for problem in evidence.get("problem_types") or []:
             if not isinstance(problem, dict):
@@ -969,6 +1079,7 @@ JSONのみを返してください:
             if on_attempt is not None:
                 await on_attempt()
             attempt_phase = "attack_graph_generation"
+            graph_changed_this_attempt = False
             try:
                 if graph is None:
                     candidate = await self._draft_attack_graph(
@@ -977,6 +1088,7 @@ JSONのみを返してください:
                     self._validate_skill_cves(candidate, resolved_skills, machine)
                     graph = await self._verify_attack_graph(machine, candidate)
                     pending_graph_review = None
+                    graph_changed_this_attempt = previous_scenario is not None
                 elif pending_graph_review is not None:
                     try:
                         graph = await self._revise_attack_graph(
@@ -1019,6 +1131,7 @@ JSONのみを返してください:
                         )
                         await _record_scenario_draft(on_attempt, previous_scenario)
                     pending_graph_review = None
+                    graph_changed_this_attempt = True
                 await _record_attack_graph(on_attempt, graph)
                 attempt_phase = "scenario_generation"
                 scenario_skill_context = SkillRenderer.render(
@@ -1034,7 +1147,7 @@ JSONのみを返してください:
                         ),
                         json_output=True,
                         response_schema=ScenarioGeneration,
-                        max_output_tokens=self.settings.gemini_max_output_tokens,
+                        max_output_tokens=self.max_output_tokens,
                     )
                     try:
                         generated = await self._parse_or_compact_scenario_generation(
@@ -1062,12 +1175,23 @@ JSONのみを返してください:
                         attack_graph=graph,
                     )
                 else:
+                    active_review_feedback = (
+                        [
+                            "scenario_semantic_review: "
+                            + json.dumps(
+                                _compact_scenario_review(pending_scenario_review),
+                                ensure_ascii=False,
+                            )
+                        ]
+                        if pending_scenario_review is not None
+                        else rejected[-1:]
+                    )
                     try:
                         scenario = await self._correct_scenario(
                             machine,
                             graph,
                             previous_scenario,
-                            rejected,
+                            active_review_feedback,
                             scenario_skill_context,
                         )
                     except _GeneratedArtifactValidationFailure as error:
@@ -1099,7 +1223,26 @@ JSONのみを返してください:
                 previous_scenario = scenario
                 await _record_scenario_draft(on_attempt, scenario)
                 attempt_phase = "scenario_review"
-                review = await self.review_scenario(machine, scenario)
+                repair_scope = (
+                    pending_scenario_review
+                    if pending_scenario_review is not None and not graph_changed_this_attempt
+                    else None
+                )
+                review = await self.review_scenario(
+                    machine,
+                    scenario,
+                    review_context=(
+                        "repair_verification" if repair_scope is not None else "generation"
+                    ),
+                    reconsideration=(
+                        {
+                            "kind": "scenario_repair_verification",
+                            "blocking_review": _compact_scenario_review(repair_scope),
+                        }
+                        if repair_scope is not None
+                        else None
+                    ),
+                )
                 await _record_scenario_draft(on_attempt, scenario, review)
                 self._raise_for_user_input(review)
                 if review.approved:
@@ -1158,11 +1301,11 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=ScenarioReview,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 review = ScenarioReview.model_validate_json(response)
                 self._validate_scenario_review(review, scenario, review_context)
-                return review
+                return _discard_framework_owned_scenario_findings(review, scenario)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
@@ -1195,6 +1338,20 @@ JSONのみを返してください:
                     "attack_graph_regeneration is only valid for an independently broken "
                     "dependency graph or an unsupported graph assumption; prose mismatches "
                     "must target scenario_text"
+                )
+            if finding.repair_target == "user_input" and (
+                finding.category != "input_contradiction" or finding.step_id is not None
+            ):
+                raise ValueError(
+                    "user_input is only valid for an explicit input_contradiction without "
+                    "a generated attack-graph step_id"
+                )
+            if (
+                finding.category == "input_contradiction"
+                and finding.repair_target != "user_input"
+            ):
+                raise ValueError(
+                    "input_contradiction findings must target user_input"
                 )
             if finding.repair_target == "source_code" and review_context != "source_sync":
                 raise ValueError(
@@ -1247,7 +1404,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=GeneratedSource,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 generated = GeneratedSource.model_validate_json(response)
                 _validate_generated_file_payload(generated.files)
@@ -1273,7 +1430,7 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=GuidancePlan,
-                    max_output_tokens=min(self.settings.gemini_max_output_tokens, 4096),
+                    max_output_tokens=min(self.max_output_tokens, 4096),
                 )
                 guidance = GuidancePlan.model_validate_json(response)
                 serialized = guidance.model_dump_json().casefold()
@@ -1328,7 +1485,7 @@ JSONのみを返してください:
                     ),
                     json_output=True,
                     response_schema=SourcePatch,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
                 patch = SourcePatch.model_validate_json(response)
                 _validate_generated_file_payload(patch.files)
@@ -1341,6 +1498,40 @@ JSONのみを返してください:
                     "rejected_model_output": response[:12_000] if response else None,
                 }
         raise RuntimeError(f"Could not repair VM source: {last_error}")
+
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        last_error: Exception | None = None
+        prompt = source_workbench_prompt(
+            machine,
+            scenario,
+            current,
+            observations,
+            commands_remaining=commands_remaining,
+        )
+        for _ in range(self.settings.generation_retries):
+            response: str | None = None
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=SourceWorkbenchDecision,
+                    max_output_tokens=min(self.max_output_tokens, 16_384),
+                )
+                decision = SourceWorkbenchDecision.model_validate_json(response)
+                if decision.patch is not None:
+                    _validate_generated_file_payload(decision.patch.files)
+                return decision
+            except (httpx.HTTPError, RuntimeError, TypeError, ValueError) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error, response)
+        raise RuntimeError(f"Could not choose a source workbench action: {last_error}")
 
     async def synchronize_scenario(
         self,
@@ -1357,26 +1548,20 @@ JSONのみを返してください:
                 response = await self._generate(
                     prompt,
                     json_output=True,
-                    response_schema=ScenarioRevision,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    response_schema=ScenarioTextRevision,
+                    max_output_tokens=self.max_output_tokens,
                 )
-                revision = ScenarioRevision.model_validate_json(response)
-                expected_objectives = {
-                    (objective.objective_id, objective.objective_type)
-                    for objective in scenario.attack_graph.objectives
-                }
-                revised_objectives = {
-                    (objective.objective_id, objective.objective_type)
-                    for objective in revision.attack_graph.objectives
-                }
-                if revised_objectives != expected_objectives:
-                    raise ValueError("scenario revision must preserve flag objectives")
+                text_revision = ScenarioTextRevision.model_validate_json(response)
+                revision = ScenarioRevision(
+                    scenario_description=text_revision.scenario_description,
+                    definition=text_revision.definition,
+                    attack_graph=scenario.attack_graph,
+                    summary=text_revision.summary,
+                )
                 revision_text = (
                     revision.scenario_description
                     + "\n"
                     + revision.definition
-                    + "\n"
-                    + revision.attack_graph.model_dump_json()
                 ).casefold()
                 for flag in (scenario.user_flag, scenario.system_flag):
                     if flag and flag.casefold() in revision_text:
@@ -1411,13 +1596,523 @@ JSONのみを返してください:
                     prompt,
                     json_output=True,
                     response_schema=SourceReview,
-                    max_output_tokens=self.settings.gemini_max_output_tokens,
+                    max_output_tokens=self.max_output_tokens,
                 )
-                return SourceReview.model_validate_json(response)
+                review = SourceReview.model_validate_json(response)
+                return _discard_framework_owned_source_findings(review, scenario)
             except (httpx.HTTPError, RuntimeError, ValueError) as error:
                 last_error = error
                 prompt = _prompt_with_rejection(prompt, error, response)
         raise RuntimeError(f"Could not review VM source: {last_error}")
+
+
+def _is_framework_owned_password_selection_finding(
+    finding,
+    password_step_ids: set[str],
+) -> bool:
+    if finding.step_id not in password_step_ids:
+        return False
+    text = f"{finding.evidence}\n{finding.remediation}".casefold()
+    wordlist_terms = (
+        "rockyou",
+        "wordlist",
+        "ワードリスト",
+        "辞書ファイル",
+    )
+    selection_infrastructure_terms = (
+        "取得",
+        "入手",
+        "配置",
+        "配置先",
+        "受け渡し",
+        "存在",
+        "ファイルパス",
+        "参照先",
+        "checksum",
+        "整合性",
+        "含まれ",
+        "line_number",
+        "search_space_lines",
+        "download",
+        "location",
+        "provisioning input",
+    )
+    benchmark_terms = (
+        "測定",
+        "ベンチマーク",
+        "ハードウェア",
+        "実行環境",
+        "探索時間",
+        "クラック時間",
+        "target_crack_seconds",
+        "benchmark",
+        "hardware",
+        "cpu",
+        "gpu",
+    )
+    benchmark_context_terms = (
+        "hashcat",
+        "john",
+        "秒",
+        "探索時間",
+        "クラック時間",
+        "速度",
+        "候補選定",
+        "crack",
+    )
+    requests_wordlist_infrastructure = any(term in text for term in wordlist_terms) and any(
+        term in text for term in selection_infrastructure_terms
+    )
+    requests_selection_benchmark = any(term in text for term in benchmark_terms) and any(
+        term in text for term in benchmark_context_terms
+    )
+    return requests_wordlist_infrastructure or requests_selection_benchmark
+
+
+def _password_cracking_step_ids(scenario: ScenarioDraft) -> set[str]:
+    return {
+        step.step_id
+        for step in scenario.attack_graph.steps
+        if step.password_cracking is not None
+    }
+
+
+def _requests_third_party_poc(finding) -> bool:
+    if finding.category not in {"acceptance_test_gap", "unproven_exploit"}:
+        return False
+    text = f"{finding.evidence}\n{finding.remediation}".casefold()
+    remediation = finding.remediation.casefold()
+    poc_terms = (
+        "poc",
+        "proof of concept",
+        "proof-of-concept",
+        "exploit-db",
+        "exploitdb",
+        "packet storm",
+        "packetstorm",
+        "metasploit",
+        "公開 exploit",
+        "公開エクスプロイト",
+        "野良 exploit",
+        "野良エクスプロイト",
+    )
+    removal_terms = ("remove", "delete", "削除", "除去", "使わない", "実行しない")
+    return any(term in text for term in poc_terms) and not any(
+        term in remediation for term in removal_terms
+    )
+
+
+def _optional_exploit_finding(finding):
+    if finding.severity != "error" or not _requests_third_party_poc(finding):
+        return finding, False
+    return (
+        finding.model_copy(
+            update={
+                "severity": "warning",
+                "remediation": (
+                    "第三者PoCを自動テストやサンドボックスで取得・実行しないでください。"
+                    "READMEで攻略者へ入手を案内することはできます。生成物だけで安全な"
+                    "自己完結テストを作れなければ、攻撃固有の自動検証は省略できます。"
+                ),
+            }
+        ),
+        True,
+    )
+
+
+def _discard_framework_owned_scenario_findings(
+    review: ScenarioReview,
+    scenario: ScenarioDraft,
+) -> ScenarioReview:
+    """Remove findings that ask generated artifacts to revalidate server-owned secrets."""
+
+    password_step_ids = _password_cracking_step_ids(scenario)
+    retained = []
+    discarded = 0
+    downgraded = 0
+    for finding in review.findings:
+        if _is_framework_owned_password_selection_finding(finding, password_step_ids):
+            discarded += 1
+            continue
+        normalized, changed = _optional_exploit_finding(finding)
+        retained.append(normalized)
+        downgraded += int(changed)
+
+    if not discarded and not downgraded:
+        return review
+    has_error = any(finding.severity == "error" for finding in retained)
+    return ScenarioReview(
+        approved=not has_error,
+        summary=(
+            review.summary
+            + f" Removed {discarded} finding(s) about framework-owned password selection."
+            + f" Downgraded {downgraded} optional exploit-verification finding(s)."
+        ),
+        findings=retained,
+    )
+
+
+def _discard_framework_owned_source_findings(
+    review: SourceReview,
+    scenario: ScenarioDraft,
+) -> SourceReview:
+    password_step_ids = _password_cracking_step_ids(scenario)
+    retained = []
+    discarded = 0
+    downgraded = 0
+    for finding in review.findings:
+        if _is_framework_owned_password_selection_finding(finding, password_step_ids):
+            discarded += 1
+            continue
+        normalized, changed = _optional_exploit_finding(finding)
+        retained.append(normalized)
+        downgraded += int(changed)
+    if not discarded and not downgraded:
+        return review
+    has_error = any(finding.severity == "error" for finding in retained)
+    return SourceReview(
+        approved=not has_error,
+        summary=(
+            review.summary
+            + f" Removed {discarded} finding(s) about framework-owned password selection."
+            + f" Downgraded {downgraded} optional exploit-verification finding(s)."
+        ),
+        findings=retained,
+    )
+
+
+class GeminiGenerator(_BaseGenerator):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+        super().__init__(
+            settings,
+            client,
+            model=settings.gemini_model,
+            max_output_tokens=settings.gemini_max_output_tokens,
+        )
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        json_output: bool = False,
+        response_schema: type[BaseModel] | None = None,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        if not self.settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is required when AI_PROVIDER=gemini")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        generation_config: dict[str, object] = {}
+        if json_output or response_schema is not None:
+            generation_config["responseMimeType"] = "application/json"
+        if response_schema is not None:
+            generation_config["responseJsonSchema"] = _gemini_json_schema(
+                response_schema.model_json_schema()
+            )
+        if max_output_tokens is not None:
+            generation_config["maxOutputTokens"] = max_output_tokens
+        response = await self.client.post(
+            url,
+            headers={"x-goog-api-key": self.settings.gemini_api_key or ""},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": generation_config,
+            },
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            detail = response.text.strip()[:2000]
+            message = f"{error}; Gemini response: {detail}" if detail else str(error)
+            raise httpx.HTTPStatusError(
+                message,
+                request=error.request,
+                response=error.response,
+            ) from error
+        body = response.json()
+        usage = body.get("usageMetadata", {})
+        if isinstance(usage, dict):
+            await self._record_token_usage(
+                usage.get("promptTokenCount"),
+                usage.get("candidatesTokenCount"),
+                usage.get("totalTokenCount"),
+            )
+        prompt_feedback = body.get("promptFeedback", {})
+        block_reason = (
+            prompt_feedback.get("blockReason") if isinstance(prompt_feedback, dict) else None
+        )
+        if block_reason and block_reason != "BLOCK_REASON_UNSPECIFIED":
+            raise AIProviderSafetyRefusalError("Gemini", block_reason)
+        candidates = body.get("candidates", [])
+        if not candidates:
+            raise RuntimeError("Gemini returned no candidates")
+        finish_reason = candidates[0].get("finishReason")
+        if finish_reason in {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
+            raise AIProviderSafetyRefusalError("Gemini", finish_reason)
+        if finish_reason and finish_reason != "STOP":
+            raise RuntimeError(f"Gemini generation stopped with {finish_reason}")
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if any("functionCall" in part for part in parts):
+            raise RuntimeError("Gemini requested an unavailable function tool")
+        generated_text = "".join(part.get("text", "") for part in parts).strip()
+        if not generated_text:
+            raise RuntimeError("Gemini returned an empty response")
+        return generated_text
+
+
+class OpenAIGenerator(_BaseGenerator):
+    def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
+        super().__init__(
+            settings,
+            client,
+            model=settings.openai_model,
+            max_output_tokens=settings.openai_max_output_tokens,
+        )
+        self._request_gate = _SharedAIRequestGate(
+            settings.ai_max_concurrent_requests,
+            settings.ai_request_min_interval_seconds,
+        )
+
+    @staticmethod
+    def _error_metadata(response: httpx.Response) -> tuple[str | None, str | None, str]:
+        detail = response.text.strip()[:2000]
+        try:
+            body = response.json()
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None, None, detail
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            return None, None, detail
+        error_type = error.get("type")
+        error_code = error.get("code")
+        return (
+            error_type if isinstance(error_type, str) else None,
+            error_code if isinstance(error_code, str) else None,
+            detail,
+        )
+
+    @staticmethod
+    def _is_retryable_response(
+        response: httpx.Response,
+        error_type: str | None,
+        error_code: str | None,
+    ) -> bool:
+        if response.status_code == 429:
+            permanent_codes = {
+                "billing_hard_limit_reached",
+                "credit_balance_exhausted",
+                "insufficient_quota",
+                "organization_spend_limit_exceeded",
+                "organization_usage_limit_exceeded",
+                "project_spend_limit_exceeded",
+                "usage_limit_reached",
+            }
+            if error_code in permanent_codes:
+                return False
+            if error_type in {
+                "authentication_error",
+                "billing_error",
+                "insufficient_quota",
+                "invalid_request_error",
+            }:
+                return error_code == "rate_limit_exceeded"
+            return True
+        return response.status_code in {408, 500, 502, 503, 504}
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response) -> float | None:
+        value = response.headers.get("Retry-After")
+        if value is None:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            seconds = (retry_at - datetime.now(UTC)).total_seconds()
+        if seconds < 0:
+            return 0.0
+        return seconds
+
+    async def _post_with_retry(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, object],
+    ) -> httpx.Response:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        attempts = self.settings.ai_transient_retry_attempts
+        max_elapsed = self.settings.ai_transient_retry_max_seconds
+        request_id = str(uuid4())
+        request_headers = {**headers, "X-Client-Request-Id": request_id}
+        for attempt_index in range(attempts):
+            response: httpx.Response | None = None
+            cause: httpx.TransportError | None = None
+            fallback_delay = min(60.0, 2.0**attempt_index)
+            jitter = random.uniform(0.0, self.settings.ai_transient_retry_jitter_seconds)
+            transport_delay = fallback_delay + jitter
+            response_delay: float | None = None
+
+            def cooldown_for_response(
+                candidate: httpx.Response,
+                fallback: float = fallback_delay,
+                jitter_seconds: float = jitter,
+            ) -> float | None:
+                nonlocal response_delay
+                error_type, error_code, _ = self._error_metadata(candidate)
+                if not self._is_retryable_response(candidate, error_type, error_code):
+                    return None
+                retry_after = self._retry_after_seconds(candidate)
+                response_delay = (
+                    retry_after if retry_after is not None else fallback
+                ) + jitter_seconds
+                return response_delay
+
+            try:
+                response = await self._request_gate.request(
+                    lambda: self.client.post(
+                        url,
+                        headers=request_headers,
+                        json=payload,
+                    ),
+                    cooldown_for_response=cooldown_for_response,
+                    transport_cooldown_seconds=transport_delay,
+                )
+            except httpx.TransportError as error:
+                cause = error
+                error_type = None
+                error_code = None
+                detail = str(error)
+                delay = transport_delay
+            else:
+                if response.status_code < 400:
+                    return response
+                error_type, error_code, detail = self._error_metadata(response)
+                if not self._is_retryable_response(response, error_type, error_code):
+                    raise AIProviderRequestError(
+                        "OpenAI request failed with a non-retryable response: "
+                        f"HTTP {response.status_code}, code={error_code or 'unknown'}; {detail}",
+                        status_code=response.status_code,
+                        error_code=error_code,
+                    )
+                assert response_delay is not None
+                delay = response_delay
+
+            attempts_exhausted = attempt_index + 1 >= attempts
+            elapsed = loop.time() - started
+            deadline_exhausted = elapsed + delay > max_elapsed
+            status_code = response.status_code if response is not None else None
+            if attempts_exhausted or deadline_exhausted:
+                reason = (
+                    "attempt limit reached" if attempts_exhausted else "retry window exhausted"
+                )
+                raise AIProviderRequestError(
+                    "OpenAI request remained temporarily unavailable: "
+                    f"{reason}; HTTP {status_code or 'transport'}, "
+                    f"code={error_code or 'unknown'}; {detail}",
+                    status_code=status_code,
+                    error_code=error_code,
+                    retryable=True,
+                ) from cause
+
+            logger.warning(
+                "OpenAI request temporarily unavailable; retrying in %.3fs "
+                "(attempt %d/%d, status=%s, code=%s)",
+                delay,
+                attempt_index + 1,
+                attempts,
+                status_code or "transport",
+                error_code or "unknown",
+                extra={
+                    "attempt": attempt_index + 1,
+                    "delay_seconds": round(delay, 3),
+                    "status_code": status_code,
+                    "error_type": error_type,
+                    "error_code": error_code,
+                    "openai_request_id": response.headers.get("x-request-id")
+                    if response is not None
+                    else None,
+                    "client_request_id": request_id,
+                },
+            )
+
+        raise AssertionError("OpenAI retry loop ended unexpectedly")
+
+    async def _generate(
+        self,
+        prompt: str,
+        *,
+        json_output: bool = False,
+        response_schema: type[BaseModel] | None = None,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        if self.settings.openai_api_key is None:
+            raise ValueError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
+
+        payload: dict[str, object] = {
+            "model": self.model,
+            "input": prompt,
+            "reasoning": {"effort": self.settings.openai_reasoning_effort},
+            "store": False,
+        }
+        if max_output_tokens is not None:
+            payload["max_output_tokens"] = max_output_tokens
+        if response_schema is not None:
+            payload["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": response_schema.__name__.lower()[:64],
+                    "schema": _openai_json_schema(response_schema.model_json_schema()),
+                    "strict": True,
+                }
+            }
+        elif json_output:
+            payload["text"] = {"format": {"type": "json_object"}}
+
+        response = await self._post_with_retry(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": (f"Bearer {self.settings.openai_api_key.get_secret_value()}"),
+                "Content-Type": "application/json",
+            },
+            payload=payload,
+        )
+
+        body = response.json()
+        usage = body.get("usage", {})
+        if isinstance(usage, dict):
+            await self._record_token_usage(
+                usage.get("input_tokens"),
+                usage.get("output_tokens"),
+                usage.get("total_tokens"),
+            )
+        status = body.get("status")
+        if status != "completed":
+            detail = body.get("incomplete_details") or body.get("error") or status
+            if isinstance(detail, dict) and detail.get("reason") == "content_filter":
+                raise AIProviderSafetyRefusalError("OpenAI", detail["reason"])
+            raise RuntimeError(f"OpenAI generation did not complete: {detail}")
+
+        generated_parts: list[str] = []
+        for output in body.get("output", []):
+            if output.get("type") != "message":
+                continue
+            for content in output.get("content", []):
+                if content.get("type") == "refusal":
+                    raise AIProviderSafetyRefusalError(
+                        "OpenAI", content.get("refusal", "reason was not provided")
+                    )
+                if content.get("type") == "output_text":
+                    generated_parts.append(content.get("text", ""))
+        generated_text = "".join(generated_parts).strip()
+        if not generated_text:
+            raise RuntimeError("OpenAI returned an empty response")
+        return generated_text
 
 
 def _validate_generated_file_payload(files: list[SourceFile]) -> None:

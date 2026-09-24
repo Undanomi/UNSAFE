@@ -13,6 +13,12 @@ SCENARIO_DEFINITION_MAX_CHARS = 12_000
 ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
 
 
+def rockyou_password_placeholder(step_id: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", step_id):
+        raise ValueError(f"invalid attack step ID for rockyou placeholder: {step_id}")
+    return f"__SLSG_ROCKYOU_PASSWORD_{step_id}__"
+
+
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -332,6 +338,7 @@ class ScenarioReviewFinding(BaseModel):
         "acceptance_test_gap",
         "unsupported_assumption",
         "description_spoiler",
+        "input_contradiction",
     ]
     repair_target: Literal[
         "scenario_text",
@@ -356,6 +363,13 @@ class ScenarioReviewFinding(BaseModel):
             "cve_id",
             "password_cracking",
         }
+        allowed_input_fields = {
+            "theme",
+            "user_flag_details",
+            "system_flag_details",
+            "skill_names",
+            "cve_ids",
+        }
         fields = set(self.repair_fields)
         if self.repair_target == "attack_graph":
             if not fields or not fields <= allowed_graph_fields:
@@ -364,14 +378,28 @@ class ScenarioReviewFinding(BaseModel):
                     "or implementation_steps"
                 )
         elif self.repair_target == "attack_graph_regeneration":
-            if not fields <= allowed_regeneration_fields:
+            if not fields or not fields <= allowed_regeneration_fields:
                 raise ValueError(
-                    "attack_graph_regeneration repair_fields contain non-structural fields"
+                    "attack_graph_regeneration repair_fields must contain structural fields"
+                )
+        elif self.repair_target == "user_input":
+            if not fields or not fields <= allowed_input_fields:
+                raise ValueError(
+                    "user_input repair_fields must identify contradictory machine input fields"
                 )
         elif fields:
             raise ValueError(
                 f"repair_fields must be empty for repair_target={self.repair_target}"
             )
+        if self.repair_target == "user_input" and (
+            self.category != "input_contradiction" or self.step_id is not None
+        ):
+            raise ValueError(
+                "user_input is only valid for an explicit input_contradiction without "
+                "a generated attack-graph step_id"
+            )
+        if self.category == "input_contradiction" and self.repair_target != "user_input":
+            raise ValueError("input_contradiction findings must target user_input")
         return self
 
 
@@ -392,6 +420,12 @@ class ScenarioRevision(BaseModel):
     scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     attack_graph: AttackGraph
+    summary: str = Field(min_length=1, max_length=4000)
+
+
+class ScenarioTextRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     summary: str = Field(min_length=1, max_length=4000)
 
 
@@ -431,6 +465,7 @@ class SourceReviewFinding(BaseModel):
         "acceptance_test_gap",
         "implementation_mismatch",
     ]
+    affected_files: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 
@@ -482,8 +517,54 @@ class GuidanceRequest(BaseModel):
 
 
 class SourcePatch(BaseModel):
-    files: list[SourceFile] = Field(min_length=1, max_length=50)
+    files: list[SourceFile] = Field(default_factory=list, max_length=50)
     delete_paths: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> SourcePatch:
+        if not self.files and not self.delete_paths:
+            raise ValueError("source patch must change or delete at least one file")
+        return self
+
+
+class SourceWorkbenchCommand(BaseModel):
+    argv: list[str] = Field(min_length=1, max_length=32)
+    cwd: str = Field(default="contents", min_length=1, max_length=500)
+    purpose: str = Field(min_length=1, max_length=1000)
+    intent: Literal["inspect", "verify"] = "inspect"
+    network_access: bool = False
+    run_as_root: bool = False
+    allowed_exit_codes: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=8)
+
+    @field_validator("argv")
+    @classmethod
+    def command_arguments_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 1000 or "\x00" in value for value in values):
+            raise ValueError("workbench command arguments must be non-empty bounded strings")
+        return values
+
+    @field_validator("allowed_exit_codes")
+    @classmethod
+    def exit_codes_are_unique_bytes(cls, values: list[int]) -> list[int]:
+        if len(values) != len(set(values)) or any(value < 0 or value > 255 for value in values):
+            raise ValueError("allowed exit codes must be unique values from 0 through 255")
+        return sorted(values)
+
+
+class SourceWorkbenchDecision(BaseModel):
+    action: Literal["run", "patch", "finish"]
+    command: SourceWorkbenchCommand | None = None
+    patch: SourcePatch | None = None
+    finish_status: Literal["verified", "blocked"] = "verified"
+    summary: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def payload_matches_action(self) -> SourceWorkbenchDecision:
+        if (self.action == "run") != (self.command is not None):
+            raise ValueError("command is required exactly when action is run")
+        if (self.action == "patch") != (self.patch is not None):
+            raise ValueError("patch is required exactly when action is patch")
+        return self
 
 
 class Artifact(BaseModel):
@@ -534,11 +615,18 @@ class CreateMachineRequest(BaseModel):
     scenario_id: str | None = None
 
 
+class SessionFailureFeedback(BaseModel):
+    kind: Literal["ai_safety_refusal"]
+    summary: str = Field(min_length=1, max_length=2000)
+    retry_allowed: bool = False
+
+
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
     user_flag: str | None = None
     system_flag: str | None = None
+    failure: SessionFailureFeedback | None = None
 
 
 class DownloadURLResponse(BaseModel):
