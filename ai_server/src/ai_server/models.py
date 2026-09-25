@@ -555,7 +555,7 @@ class SourceWorkbenchDecision(BaseModel):
     action: Literal["run", "patch", "finish"]
     command: SourceWorkbenchCommand | None = None
     patch: SourcePatch | None = None
-    finish_status: Literal["verified", "blocked"] = "verified"
+    finish_status: Literal["verified", "blocked", "deferred_to_vm"] = "verified"
     summary: str = Field(min_length=1, max_length=2000)
 
     @model_validator(mode="after")
