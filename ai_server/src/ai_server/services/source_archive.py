@@ -146,23 +146,30 @@ class SourceArchive:
 
     @staticmethod
     def _write_verification_script(candidate_root: Path) -> int:
+        commands: list[tuple[str, str]] = []
         manifest_path = candidate_root / "contents/scenario_manifest.json"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return 0
-        if not isinstance(manifest, dict):
-            return 0
-        commands: list[tuple[str, str]] = []
-        for field in ("health_checks", "acceptance_tests"):
-            checks = manifest.get(field)
-            if not isinstance(checks, list):
-                return 0
-            for index, check in enumerate(checks):
-                command = check.get("command") if isinstance(check, dict) else None
-                if not isinstance(command, str) or not command.strip():
-                    return 0
-                commands.append((f"{field}[{index}]", command))
+            manifest = None
+        if isinstance(manifest, dict):
+            parsed_commands: list[tuple[str, str]] = []
+            for field in ("health_checks", "acceptance_tests"):
+                checks = manifest.get(field)
+                if not isinstance(checks, list):
+                    parsed_commands = []
+                    break
+                for index, check in enumerate(checks):
+                    command = check.get("command") if isinstance(check, dict) else None
+                    if not isinstance(command, str) or not command.strip():
+                        parsed_commands = []
+                        break
+                    parsed_commands.append((f"{field}[{index}]", command))
+                else:
+                    continue
+                break
+            else:
+                commands = parsed_commands
         script = """#!/bin/bash
 set -euo pipefail
 

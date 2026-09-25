@@ -1062,7 +1062,7 @@ JSONのみを返してください。
 - intent=verifyのコマンドが成功し、十分に検証できた場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"verified",
   "summary":"成功した検証証拠と完了理由"}}
-- アプリの可搬な検証は成功したが、残りが起動済みVMでしか確認できない場合:
+- アプリの可搬な検証は成功したが、残りが対象VMのプロビジョニングまたは起動済みVMでしか確認できない場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"deferred_to_vm",
   "summary":"Dockerでは確認できない事項と、Packerまたは起動済みVMへ委ねる理由"}}
 - 検証を実行できない、またはモデル自身が検証を拒否する場合:
@@ -1078,6 +1078,13 @@ JSONのみを返してください。
   init/systemdの起動、boot順序、unitのenable/start、mount namespace、kernel・device・login session、
   host network、再起動後の状態など、起動済みVMが必要な挙動をDocker上で再現・代用しようとしない。
   これらは設定ファイルを静的に照合し、実際の作動確認は後段のPacker、health check、acceptance testへ委ねる
+- provision.shが対象VM用のruntimeやbuild artifactを固定versionの公式archive等としてcurl/wgetで取得する場合、
+  build.shまたはprovision.shに明記された同じhostの成果物を、非rootかつnetwork_access=trueで取得して検証してよい。
+  argvにはquery・fragment・credentialのない直接のHTTPS URLを渡し、redirect、upload、任意method、proxy、config用optionを
+  使わない。接続先は実行直前のDNS検査でもpublic addressに限定され、取得量にも上限がある。一時的なruntimeや依存物は
+  node_modulesや.venv等の除外済み依存物ディレクトリに置き、公開checksumを照合してから展開・実行する。第三者PoC、
+  exploit script、候補にないinstallerは取得しない。取得、checksum照合、依存導入、テストが失敗した場合は原因を調査し、
+  修正可能な候補不備をPackerへ先送りしない
 - `systemd-analyze`、`systemd-run`、`systemctl`、`journalctl`、`loginctl`、`udevadm`等のVM統合ツールを
   ワークベンチで実行せず、それらを使えないことを候補ソースの失敗にしない。unitは`sed`や`cat`で静的に
   読み、既知のdirectiveとシナリオ契約を照合する。補助検査ツールを使う目的だけで候補に未宣言のpackageを
@@ -1096,8 +1103,9 @@ JSONのみを返してください。
   依存解決、コンパイル、テスト、失敗再現はintent=verifyにする。inspectの失敗は修正後の必須再実行に
   ならない。verifyは失敗後にpatchした場合、システムが同じ条件で自動再実行する
 - finish_status=verifiedとdeferred_to_vmは、少なくとも1件のDockerで実行可能なintent=verifyが成功した
-  後だけ使用する。deferred_to_vmは、残る確認が本質的に起動済みVMを必要とする場合だけ使い、可搬な依存物の
-  未導入、通常のテスト失敗、修正可能な候補不備をVMへ先送りしない。inspect、説明、推測、または検証拒否を
+  後だけ使用する。deferred_to_vmは、残る確認が本質的に対象VMのプロビジョニングまたは起動済みVMを必要とする
+  場合だけ使う。許可されたcurl/wgetで取得可能なruntimeや可搬な依存物の単なる未導入、通常のテスト失敗、
+  修正可能な候補不備をVMへ先送りしない。inspect、説明、推測、または検証拒否を
   成功証拠として扱わない。Dockerで実行可能な必須検証を実行できない場合やモデル自身による拒否は
   finish_status=blockedを使用する。この自己申告はプロバイダーの明示的なセーフガード拒否とは区別される
 - incoming_failureがある場合は後段のVM/Packerで既に起きた一次情報である。同じ原因を再現できる最小の
@@ -1108,9 +1116,11 @@ JSONのみを返してください。
   失敗したverifyコマンドは同じargv、cwd、権限、ネットワーク条件で成功するまでfinishできない。
   依存マニフェストや
   lockfileを変えた場合は依存導入をやり直してから検証する
-- OS/runtime導入のapt-getと、依存取得に必要なpackage managerコマンドだけnetwork_access=trueにできる。
+- OS/runtime導入のapt-get、依存取得に必要なpackage managerコマンド、候補に明記されたruntime/build artifactを
+  HTTPSで取得するcurl/wgetだけnetwork_access=trueにできる。
   npm/yarn/pnpmでは必ずscriptsを無効化し、lockfile生成ではpackage-lock-only等を使う。
-  curl/wgetや任意スクリプトへnetwork_access=trueを付けない
+  curl/wgetは非rootの取得専用とし、localhost・private/link-local宛通信、HTTP、redirect、任意スクリプトの取得、
+  upload、任意method、proxy、config、credential用optionに使わない。localhostへのアプリ疎通確認はnetwork_access=falseで行う
 - GitHub、Exploit-DB、ブログ、gist等から取得した第三者PoC、exploit script、Metasploit moduleを
   ワークベンチ内で取得・コピー・実行しない。READMEで攻略者にその入手・利用を案内する記述は残してよい。
   生成物だけで安全な自己完結テストを作れなければ、その攻撃固有の検証は行わず他の検査を続ける
