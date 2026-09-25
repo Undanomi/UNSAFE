@@ -466,6 +466,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function handleCancel() {
+    if (creationStatus === "completed") return
     if (!sessionId || creationStatus === "input") {
       router.push("/machines")
       return
@@ -477,7 +478,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function cancelActiveCreation() {
-    if (!sessionId) return false
+    if (!sessionId || creationStatus === "completed") return false
     const previousCreationStatus = creationStatus
     const previousCreationMessage = creationMessage
     cancellationRequestedRef.current = true
@@ -574,7 +575,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                 <ChatProgress progress={progress} />
                 <button
                   className="slsg-chat-cancel"
-                  disabled={isCancelling}
+                  disabled={isCancelling || creationStatus === "completed"}
                   onClick={() => void handleCancel()}
                   type="button"
                 >
@@ -767,11 +768,16 @@ function CreationStatusPanel({
 
   if (status === "failed") {
     const revisionFailure = failure?.kind === "settings" ? failure : null
+    const safetyRefused = failure?.kind === "ai_safety_refusal"
     return (
       <div className="slsg-chat-creation-status is-failed">
         <p className="flex items-start gap-2 text-[0.88rem] font-bold">
           <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
-          {revisionFailure ? "問題設定の見直しが必要です。" : "マシンを作成できませんでした。"}
+          {revisionFailure
+            ? "問題設定の見直しが必要です。"
+            : safetyRefused
+              ? "安全上の理由でAIが処理を拒否しました"
+              : "マシンを作成できませんでした。"}
         </p>
         {revisionFailure ? (
           <div className="slsg-chat-failure-details">
@@ -788,9 +794,17 @@ function CreationStatusPanel({
             </p>
           </div>
         ) : null}
-        <button className="slsg-chat-status-action" onClick={onRetry} type="button">
-          {revisionFailure ? "修正した設定で再生成する" : "もう一度試す"}
-        </button>
+        {safetyRefused ? (
+          <div className="slsg-chat-failure-details">
+            <p>{failure.summary}</p>
+            <p>このマシンの処理は停止しました。同じ設定のまま再生成することはできません。</p>
+          </div>
+        ) : null}
+        {!safetyRefused ? (
+          <button className="slsg-chat-status-action" onClick={onRetry} type="button">
+            {revisionFailure ? "修正した設定で再生成する" : "もう一度試す"}
+          </button>
+        ) : null}
       </div>
     )
   }

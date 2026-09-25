@@ -19,6 +19,7 @@ from ai_server.prompts import (
     scenario_review_prompt,
     scenario_sync_prompt,
     source_review_prompt,
+    source_workbench_prompt,
 )
 
 
@@ -323,6 +324,22 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
         assert "保護対象そのものを攻略前に直接開示" in prompt
         assert "オンライン認証試行" in prompt
         assert "経路の一意性や最短性を要求しない" in prompt
+        assert "ProtectSystem" in prompt
+        assert "ReadWritePaths" in prompt
+        assert "unit外の`runuser ... test -w`" in prompt
+        assert "各攻撃ステップの実行コンテキスト" in prompt
+        assert "元unitの制約を誤適用しない" in prompt
+
+    workbench_prompt = source_workbench_prompt(
+        machine,
+        scenario,
+        source,
+        [],
+        commands_remaining=5,
+    )
+    assert "unit内でread-only" in workbench_prompt
+    assert "unit外の`runuser ... test -w`成功" in workbench_prompt
+    assert "元processの制約を引き継がせない" in workbench_prompt
 
     review_prompt = source_review_prompt(machine, scenario, source)
     assert "独立した敵対的レビュー担当" in review_prompt
@@ -344,6 +361,11 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "contents/scripts/verify.shはmanifestからのサーバー生成" in review_prompt
     assert "細粒度のブロッカーを後出しせず" in review_prompt
     assert "ビルドを止めるfindingを一度に全件列挙" in review_prompt
+    assert "mount namespaceを権限判定" in review_prompt
+    assert "permission_blockerのerror" in review_prompt
+    assert "host側で同じUIDへ`runuser`して書けるだけでは合格にしない" in review_prompt
+    assert "コンテキスト遷移が明示" in review_prompt
+    assert "元serviceの制約を誤適用しない" in review_prompt
 
     scoped_review_prompt = source_review_prompt(
         machine,
@@ -370,11 +392,23 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "固定スコープを破棄して現在の候補を最初からフル監査" in full_review_prompt
 
     scenario_review = scenario_review_prompt(machine, scenario)
+    focused_scenario_review = scenario_review_prompt(
+        machine,
+        scenario,
+        "repair_verification",
+        {
+            "kind": "scenario_repair_verification",
+            "blocking_review": {"summary": "Fix the current issue", "findings": []},
+        },
+    )
     assert "独立した敵対的レビュー担当" in scenario_review
     assert "permission_blocker" in scenario_review
     assert "permission_shortcut" in scenario_review
     assert "全親ディレクトリ" in scenario_review
     assert "実効UID" in scenario_review
+    assert "ProtectSystem" in scenario_review
+    assert "mount namespace" in scenario_review
+    assert "遷移先のnamespaceと実効権限" in scenario_review
     assert "benign control" in scenario_review
     assert "時系列の権限表" in scenario_review
     assert "相反する記述" in scenario_review
@@ -412,7 +446,11 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "標準的な構文・設定検査と実行時検査" in scenario_review
     assert "findingsは" in scenario_review
     assert "最大20件" in scenario_review
-    assert len(scenario_review) < 5500
+    assert len(scenario_review) < 5700
+    assert "重大な不整合をまとめ" in scenario_review
+    assert "特定フレームワーク内部のimport先" in scenario_review
+    assert "新しいフル監査ではなく" in focused_scenario_review
+    assert "より細かい実装要件を後出し" in focused_scenario_review
 
     assert "`php -l`" in review_prompt
     assert "`bash -n`" in review_prompt
@@ -424,7 +462,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "存在しないフィールドの" in review_prompt
 
 
-def test_source_prompts_include_persisted_flag_values() -> None:
+def test_source_prompts_use_typed_flag_placeholders() -> None:
     machine = MachineInformation(
         name="Flag Test",
         visibility="private",
@@ -455,16 +493,32 @@ def test_source_prompts_include_persisted_flag_values() -> None:
         ),
     )
     source = GeneratedSource(
-        files=[SourceFile(path="contents/scripts/provision.sh", content="#!/bin/bash\n")]
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=(
+                    "#!/bin/bash\n"
+                    "printf '%s' 'flag{user_exact_value}'\n"
+                    "printf '%s' 'flag{system_exact_value}'\n"
+                ),
+            )
+        ]
     )
 
     for prompt in (
         code_prompt(machine, scenario),
-        repair_prompt(machine, scenario, source, {"error": "test"}),
+        repair_prompt(
+            machine,
+            scenario,
+            source,
+            {"error": "flag{user_exact_value} and flag{system_exact_value}"},
+        ),
         source_review_prompt(machine, scenario, source),
     ):
-        assert "flag{user_exact_value}" in prompt
-        assert "flag{system_exact_value}" in prompt
+        assert "flag{user_exact_value}" not in prompt
+        assert "flag{system_exact_value}" not in prompt
+        assert "__SLSG_USER_FLAG__" in prompt
+        assert "__SLSG_SYSTEM_FLAG__" in prompt
 
     assert "user_flag" not in scenario.model_dump()
     assert "system_flag" not in scenario.model_dump()

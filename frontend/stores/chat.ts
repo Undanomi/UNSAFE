@@ -44,7 +44,7 @@ export type ChatSession = {
 }
 
 export type ChatCreationFailure = {
-  kind: "settings" | "system"
+  kind: "ai_safety_refusal" | "settings" | "system"
   summary: string
   suggestions: string[]
 }

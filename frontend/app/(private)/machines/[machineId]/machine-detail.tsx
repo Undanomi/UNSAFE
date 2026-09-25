@@ -351,6 +351,7 @@ export function MachineDetailView({
   const [buildState, setBuildState] = useState<MachineBuildState>({
     status: machine.status ?? "ready",
     progress: machine.buildProgress ?? 0,
+    failure: machine.buildFailure ?? null,
   })
   const [description, setDescription] = useState(machine.description)
   const [isRetrying, setIsRetrying] = useState(false)
@@ -620,13 +621,27 @@ function BuildStatusPanel({
   }
 
   if (state.status === "failed") {
+    const safetyRefused = state.failure?.kind === "ai_safety_refusal"
+    const retryAllowed = canRetry && state.failure?.retryAllowed !== false
     return (
       <section className="slsg-detail-build-status is-failed">
         <div className="slsg-detail-build-message">
           <AlertCircle aria-hidden="true" size={20} />
-          <h2>マシンのビルドに失敗しました</h2>
+          <div className="slsg-detail-build-copy">
+            <h2>
+              {safetyRefused
+                ? "安全上の理由でAIが処理を拒否しました"
+                : "マシンのビルドに失敗しました"}
+            </h2>
+            {state.failure ? <p>{state.failure.summary}</p> : null}
+            {safetyRefused ? (
+              <p className="is-note">
+                このマシンの処理は停止しました。同じマシンをそのまま再ビルドすることはできません。
+              </p>
+            ) : null}
+          </div>
         </div>
-        {canRetry ? (
+        {retryAllowed ? (
           <button disabled={isRetrying} onClick={onRetry} type="button">
             {isRetrying ? (
               <LoaderCircle aria-hidden="true" className="animate-spin" size={17} />

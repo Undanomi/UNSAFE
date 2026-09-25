@@ -1102,7 +1102,25 @@
   }
   .slsg-detail-build-status.is-cancelled .slsg-detail-build-message,
   .slsg-detail-build-status.is-failed .slsg-detail-build-message {
+    align-items: flex-start;
     justify-content: flex-start;
+  }
+  .slsg-detail-build-copy {
+    display: grid;
+    gap: 6px;
+  }
+  .slsg-detail-build-copy h2,
+  .slsg-detail-build-copy p {
+    margin: 0;
+  }
+  .slsg-detail-build-copy p {
+    font-size: 0.84rem;
+    line-height: 1.55;
+  }
+  .slsg-detail-build-copy .is-note {
+    color: #bdccdc;
+    font-size: 0.8rem;
+    font-weight: 500;
   }
   .slsg-detail-build-status button {
     display: inline-flex;
@@ -2301,7 +2319,7 @@
       color 160ms ease,
       transform 160ms ease;
   }
-  .slsg-chat-cancel:hover {
+  .slsg-chat-cancel:hover:not(:disabled) {
     border-color: #8ab7ff;
     background:
       radial-gradient(circle at 50% 0%, rgba(86, 137, 213, 0.58), transparent 70%),
@@ -2312,6 +2330,10 @@
       0 0 6px rgba(105, 162, 235, 0.88),
       0 0 22px rgba(70, 135, 231, 0.58);
     transform: translateY(-1px);
+  }
+  .slsg-chat-cancel:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
   }
   .slsg-chat-progress {
     position: relative;
