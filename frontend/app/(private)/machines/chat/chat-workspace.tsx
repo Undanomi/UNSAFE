@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react"
 import {
   cancelMachineCreationAction,
   markMachineCreationFailedAction,
@@ -289,6 +289,7 @@ function formatFlagSetting(value: boolean | null) {
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const router = useRouter()
   const [answers, setAnswers] = useState<ChatAnswers>(() => buildInitialAnswers(session))
+  const [confirmedMachineName, setConfirmedMachineName] = useState(session.name)
   const [step, setStep] = useState(session.initialStep)
   const [basicReady, setBasicReady] = useState(() => session.status === "基本設定完了")
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -306,6 +307,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const [isCancelling, setIsCancelling] = useState(false)
   const [showRebuildButton, setShowRebuildButton] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
+  const editingAnswersSnapshotRef = useRef<ChatAnswers | null>(null)
   const creationStartedRef = useRef(false)
   const creationAbortRef = useRef<AbortController | null>(null)
   const cancellationRequestedRef = useRef(false)
@@ -322,11 +324,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     const conversation = conversationRef.current
     if (conversation) {
       conversation.scrollTo({
-        behavior: editingStep === null ? "smooth" : "auto",
+        behavior: "smooth",
         top: conversation.scrollHeight,
       })
     }
-  }, [chatProgress, editingStep])
+  }, [chatProgress])
 
   function updateAnswers(values: Partial<ChatAnswers>) {
     setAnswers((current) => ({ ...current, ...values }))
@@ -367,6 +369,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     }
     const nextStep = getNextChatStep(step, answers)
     if (!(await persistProgress(nextStep, false))) return
+    if (step === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     setStep(nextStep)
   }
 
@@ -503,7 +506,16 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     ) {
       return
     }
+    editingAnswersSnapshotRef.current = answers
     setEditingStep(targetStep)
+    setEditingError("")
+  }
+
+  function cancelEditing() {
+    const previousAnswers = editingAnswersSnapshotRef.current
+    if (previousAnswers) setAnswers(previousAnswers)
+    editingAnswersSnapshotRef.current = null
+    setEditingStep(null)
     setEditingError("")
   }
 
@@ -534,6 +546,8 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setShowRebuildButton(true)
+    if (editingStep === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
+    editingAnswersSnapshotRef.current = null
     setEditingStep(null)
   }
 
@@ -541,9 +555,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     <div className="slsg-chat-workspace">
       <header className="slsg-chat-header">
         <div className="slsg-chat-heading">
-          <p>マシン作成アシスタント</p>
-          <h1>{session.name}</h1>
-          <p>対話形式で設定を進めて、学習用のマシンを作成します。</p>
+          <p className="slsg-page-eyebrow">MACHINE CREATION</p>
+          <h1 className="slsg-heading-offset-up">{confirmedMachineName}</h1>
+          <p className="slsg-heading-offset-up">
+            対話形式で設定を進めて、学習用のマシンを作成します。
+          </p>
         </div>
       </header>
 
@@ -584,6 +600,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                         }
                         answers={answers}
                         error={editingError}
+                        onCancel={cancelEditing}
                         onChange={updateAnswers}
                         onComplete={completeEditing}
                         step={message.step}
@@ -599,7 +616,12 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               <div className="slsg-chat-composer">
                 {creationStatus === "input" && !basicReady && !isFinalStep ? (
                   <div className="slsg-chat-current-input">
-                    <StepInput answers={answers} onChange={updateAnswers} step={step} />
+                    <StepInput
+                      answers={answers}
+                      onChange={updateAnswers}
+                      onSubmit={isSaving ? undefined : () => void advance()}
+                      step={step}
+                    />
                   </div>
                 ) : null}
                 {error ? <p className="slsg-chat-error">{error}</p> : null}
@@ -840,6 +862,7 @@ function AnswerEditor({
   actionLabel,
   answers,
   error,
+  onCancel,
   onChange,
   onComplete,
   step,
@@ -847,6 +870,7 @@ function AnswerEditor({
   actionLabel: "更新" | "次へ"
   answers: ChatAnswers
   error: string
+  onCancel: () => void
   onChange: (values: Partial<ChatAnswers>) => void
   onComplete: () => void
   step: number
@@ -854,11 +878,16 @@ function AnswerEditor({
   return (
     <div className="slsg-chat-answer-editor">
       <p>回答を編集</p>
-      <StepInput answers={answers} onChange={onChange} step={step} />
+      <StepInput answers={answers} onChange={onChange} onSubmit={onComplete} step={step} />
       {error ? <p className="slsg-chat-error">{error}</p> : null}
-      <button className="slsg-chat-action-primary is-compact" onClick={onComplete} type="button">
-        {actionLabel}
-      </button>
+      <div className="slsg-chat-answer-editor-actions">
+        <button className="slsg-chat-action-secondary is-compact" onClick={onCancel} type="button">
+          取り消す
+        </button>
+        <button className="slsg-chat-action-primary is-compact" onClick={onComplete} type="button">
+          {actionLabel}
+        </button>
+      </div>
     </div>
   )
 }
@@ -866,10 +895,28 @@ function AnswerEditor({
 type StepInputProps = {
   answers: ChatAnswers
   onChange: (values: Partial<ChatAnswers>) => void
+  onSubmit?: () => void
   step: number
 }
 
-function StepInput({ answers, onChange, step }: StepInputProps) {
+function submitChatInputOnEnter(
+  event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  onSubmit?: () => void,
+) {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.nativeEvent.isComposing ||
+    onSubmit === undefined
+  ) {
+    return
+  }
+
+  event.preventDefault()
+  onSubmit()
+}
+
+function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   if (step === CHAT_STEPS.machineName) {
     return (
       <label className="slsg-chat-field">
@@ -878,6 +925,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
           className="slsg-input slsg-chat-input"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
           onChange={(event) => onChange({ name: event.target.value })}
+          onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
           placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
         />
@@ -916,6 +964,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
           <textarea
             className="slsg-input slsg-chat-textarea"
             onChange={(event) => onChange({ theme: event.target.value })}
+            onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
             placeholder={CHAT_COPY.fields.themePlaceholder}
             rows={3}
             value={answers.theme}
@@ -946,6 +995,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
       <DetailInput
         label={CHAT_COPY.fields.userFlagDetails}
         onChange={(userFlagDetails) => onChange({ userFlagDetails })}
+        onSubmit={onSubmit}
         placeholder={CHAT_COPY.fields.userFlagDetailsPlaceholder}
         value={answers.userFlagDetails}
       />
@@ -963,6 +1013,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
     <DetailInput
       label={CHAT_COPY.fields.systemFlagDetails}
       onChange={(systemFlagDetails) => onChange({ systemFlagDetails })}
+      onSubmit={onSubmit}
       placeholder={CHAT_COPY.fields.systemFlagDetailsPlaceholder}
       value={answers.systemFlagDetails}
     />
@@ -972,11 +1023,13 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
 function DetailInput({
   label,
   onChange,
+  onSubmit,
   placeholder,
   value,
 }: {
   label: string
   onChange: (value: string) => void
+  onSubmit?: () => void
   placeholder: string
   value: string
 }) {
@@ -986,6 +1039,7 @@ function DetailInput({
       <textarea
         className="slsg-input slsg-chat-textarea"
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
         placeholder={placeholder}
         value={value}
       />
@@ -1047,17 +1101,18 @@ function YesNoButtons({
 
 export function MissingChatSession() {
   return (
-    <section className="slsg-panel grid gap-4 rounded-[14px] p-8">
-      <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-        {CHAT_COPY.missingSession.title}
-      </h1>
-      <p className="leading-[1.65] text-[#a9b5ca]">{CHAT_COPY.missingSession.message}</p>
-      <Link
-        className="slsg-button-primary w-fit px-5 text-[0.88rem]"
-        href={CHAT_CONFIG.newChatPath}
-      >
-        {CHAT_COPY.missingSession.action}
-      </Link>
+    <section className="slsg-panel slsg-state-card">
+      <div className="slsg-state-card-content">
+        <span aria-hidden="true" className="slsg-state-card-icon">
+          <AlertCircle size={25} strokeWidth={1.7} />
+        </span>
+        <h1>{CHAT_COPY.missingSession.title}</h1>
+        <p>{CHAT_COPY.missingSession.message}</p>
+        <Link className="slsg-state-card-action" href={CHAT_CONFIG.newChatPath}>
+          {CHAT_COPY.missingSession.action}
+          <ArrowRight aria-hidden="true" size={17} />
+        </Link>
+      </div>
     </section>
   )
 }

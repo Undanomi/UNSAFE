@@ -5,10 +5,12 @@ import {
   ChevronRight,
   CirclePlus,
   List,
+  SearchX,
 } from "lucide-react"
 import Form from "next/form"
 import Link from "next/link"
 import type { ReactNode } from "react"
+import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filter-reset-button"
 import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import {
   MACHINE_PAGE_SIZE,
@@ -54,9 +56,11 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
   return (
     <section className="slsg-machine-list relative z-[2] mx-auto grid max-w-[1600px] gap-5">
       <header className="slsg-machine-list-hero relative pt-3">
-        <p className="slsg-kicker">学習環境</p>
-        <h1 className="slsg-machine-page-title mt-4 font-bold">マシン一覧</h1>
-        <p className="slsg-machine-page-description slsg-muted mt-4 max-w-[44rem]">
+        <p className="slsg-page-eyebrow">MACHINE DIRECTORY</p>
+        <h1 className="slsg-machine-page-title slsg-heading-offset-up mt-[13px] font-bold">
+          マシン一覧
+        </h1>
+        <p className="slsg-machine-page-description slsg-heading-offset-up slsg-muted mt-4 max-w-[44rem]">
           作成したマシンと、公開済みの学習環境を確認できます。
         </p>
       </header>
@@ -176,12 +180,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
             自分が作成したマシンのみ
           </label>
           <div className="flex items-center gap-3">
-            <Link
-              className="p-2 text-sm text-[#a8b5cc] underline underline-offset-4"
-              href="/machines"
-            >
-              条件をリセット
-            </Link>
+            <MachineFilterResetButton />
             <button
               className="slsg-machine-filter-submit min-h-11 rounded-lg border px-6 text-sm font-bold"
               type="submit"
@@ -331,7 +330,11 @@ export function MachineListResults({
             </table>
           </div>
         ) : (
-          <p className="px-6 py-14 text-center text-sm text-[#a8b5cc]">マシンがありません。</p>
+          <div className="slsg-machine-empty">
+            <SearchX aria-hidden="true" size={30} strokeWidth={1.6} />
+            <p>条件に一致するマシンがありません。</p>
+            <span>検索条件を変更して、もう一度お試しください。</span>
+          </div>
         )}
         <div className="slsg-machine-table-footer flex min-h-[87px] items-center justify-between gap-4 border-t px-9 max-sm:px-5">
           <span className="text-[0.8rem] text-[#a4b0cc]">

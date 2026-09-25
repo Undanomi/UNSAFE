@@ -334,7 +334,7 @@ function PrivacySectionIndex({ index }: { index: number }) {
   return (
     <span aria-hidden="true" className="slsg-privacy-section-index">
       <svg fill="none" viewBox="0 0 92 100">
-        <title>セクション{index}</title>
+        <title>{`セクション${index}`}</title>
         <path className="slsg-privacy-section-index-halo" d="M46 2 85 25v50L46 98 7 75V25Z" />
         <path className="slsg-privacy-section-index-frame" d="M46 4 83 26v48L46 96 9 74V26Z" />
       </svg>
@@ -343,91 +343,48 @@ function PrivacySectionIndex({ index }: { index: number }) {
   )
 }
 
-function PrivacyNetworkArtwork() {
-  return (
-    <svg aria-hidden="true" className="slsg-privacy-network-art" fill="none" viewBox="0 0 460 300">
-      <defs>
-        <linearGradient id="privacy-network-steel" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0" stopColor="#a4b2c7" stopOpacity="0.7" />
-          <stop offset="0.5" stopColor="#667692" stopOpacity="0.62" />
-          <stop offset="1" stopColor="#28364f" stopOpacity="0.7" />
-        </linearGradient>
-        <linearGradient id="privacy-network-panel" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0" stopColor="#486078" />
-          <stop offset="1" stopColor="#1b2a42" />
-        </linearGradient>
-      </defs>
-      <g stroke="#667d9b" strokeOpacity="0.38" strokeWidth="1.4">
-        <path d="m96 205 134-75 137 77M96 205l134 74 137-72M230 130v149" />
-        <path d="m96 205 62 34m209-32-62 34" />
-      </g>
-      <g transform="translate(178 25)">
-        <path d="m0 35 52-30 58 32-54 32Z" fill="url(#privacy-network-steel)" />
-        <path d="m0 35 56 34v104L0 139Z" fill="url(#privacy-network-panel)" />
-        <path d="m56 69 54-32v101l-54 35Z" fill="#263750" />
-        <g stroke="#6c87a1" strokeOpacity="0.7">
-          <path d="m12 57 32 19v12L12 69Zm0 29 32 19v12l-32-19Zm0 29 32 19v12l-32-19Z" />
-          <path d="m68 78 31-18m-31 40 31-18m-31 40 31-18" />
-        </g>
-      </g>
-      {[
-        { x: 38, y: 158 },
-        { x: 316, y: 158 },
-      ].map(({ x, y }) => (
-        <g key={`${x}-${y}`} transform={`translate(${x} ${y})`}>
-          <path d="m0 28 39-23 47 25-42 25Z" fill="url(#privacy-network-steel)" />
-          <path d="m0 28 44 27v57L0 85Z" fill="url(#privacy-network-panel)" />
-          <path d="m44 55 42-25v55l-42 27Z" fill="#263750" />
-          <path d="m10 53 24 14m-24 9 24 14m21-20 22-13m-22 36 22-13" stroke="#6d87a1" />
-          <g fill="#697a94">
-            <circle cx="10" cy="4" r="6" />
-            <circle cx="31" cy="-5" r="6" />
-            <circle cx="52" cy="4" r="6" />
-          </g>
-          <path d="M10 10v15M31 1v26M52 10v15" stroke="#697a94" />
-        </g>
-      ))}
-      <g transform="translate(207 223)">
-        <path d="M17 28V16c0-21 31-21 31 0v12" stroke="#71839c" strokeWidth="7" />
-        <path d="M3 27h59v52L33 96 3 79Z" fill="#26344d" fillOpacity="0.9" />
-        <rect fill="#8190a5" height="27" rx="5" width="21" x="22" y="42" />
-        <circle cx="32.5" cy="51" fill="#26344d" r="4" />
-        <path d="m32.5 54-3 10h6Z" fill="#26344d" />
-      </g>
-    </svg>
-  )
-}
-
 export function PrivacyPolicy() {
   const [activeSection, setActiveSection] = useState(1)
 
   useEffect(() => {
-    const hashIndex = PRIVACY_SECTIONS.findIndex(
-      (_, index) => `#${sectionId(index)}` === location.hash,
-    )
-    if (hashIndex >= 0) setActiveSection(hashIndex + 1)
+    const sections = PRIVACY_SECTIONS.map((_, index) =>
+      document.getElementById(sectionId(index)),
+    ).filter((section): section is HTMLElement => section instanceof HTMLElement)
+    let frameId: number | null = null
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visibleEntry = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort(
-            (a, b) => Math.abs(a.boundingClientRect.top) - Math.abs(b.boundingClientRect.top),
-          )[0]
+    const updateActiveSection = () => {
+      frameId = null
 
-        if (!visibleEntry) return
-        const visibleIndex = Number(visibleEntry.target.getAttribute("data-section-index"))
-        if (visibleIndex) setActiveSection(visibleIndex)
-      },
-      { rootMargin: "-16% 0px -70% 0px", threshold: 0 },
-    )
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) {
+        setActiveSection(sections.length)
+        return
+      }
 
-    for (let index = 0; index < PRIVACY_SECTIONS.length; index += 1) {
-      const element = document.getElementById(sectionId(index))
-      if (element) observer.observe(element)
+      const readingLine = Math.min(window.innerHeight * 0.28, 240)
+      let nextActiveSection = 1
+
+      for (const [index, section] of sections.entries()) {
+        if (section.getBoundingClientRect().top > readingLine) break
+        nextActiveSection = index + 1
+      }
+
+      setActiveSection((current) => (current === nextActiveSection ? current : nextActiveSection))
     }
 
-    return () => observer.disconnect()
+    const scheduleActiveSectionUpdate = () => {
+      if (frameId !== null) return
+      frameId = window.requestAnimationFrame(updateActiveSection)
+    }
+
+    updateActiveSection()
+    window.addEventListener("scroll", scheduleActiveSectionUpdate, { passive: true })
+    window.addEventListener("resize", scheduleActiveSectionUpdate)
+
+    return () => {
+      window.removeEventListener("scroll", scheduleActiveSectionUpdate)
+      window.removeEventListener("resize", scheduleActiveSectionUpdate)
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+    }
   }, [])
 
   return (
@@ -435,6 +392,10 @@ export function PrivacyPolicy() {
       <aside className="slsg-sidebar slsg-privacy-sidebar">
         <SlsgBrand className="slsg-privacy-brand" href="/login" />
         <div className="slsg-privacy-sidebar-divider" />
+        <Link className="slsg-privacy-login-back" href="/login">
+          <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.8} />
+          ログイン画面に戻る
+        </Link>
         <p className="slsg-privacy-toc-heading">このページの内容</p>
         <nav aria-label="プライバシーポリシーの目次" className="slsg-privacy-toc">
           {PRIVACY_TOC_LABELS.map((label, index) => {
@@ -458,7 +419,6 @@ export function PrivacyPolicy() {
 
       <MachineListHud />
       <DesignArtwork variant="machines" />
-      <PrivacyNetworkArtwork />
 
       <main className="slsg-main slsg-privacy-main">
         <header className="slsg-privacy-header">

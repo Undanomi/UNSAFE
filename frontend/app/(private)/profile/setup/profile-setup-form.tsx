@@ -35,7 +35,7 @@ type AvatarPreviewProps = {
 function AvatarPreview({ iconMode, initial, initialIconUrl, name }: AvatarPreviewProps) {
   return (
     <div aria-label="アイコンのプレビュー" className="slsg-setup-avatar" role="img">
-      <svg aria-hidden="true" viewBox="0 0 260 286">
+      <svg aria-hidden="true" viewBox="0 0 286 286">
         <defs>
           <linearGradient id="setup-avatar-fill" x1="0" x2="1" y1="0" y2="1">
             <stop stopColor="#4f8af0" />
@@ -53,9 +53,12 @@ function AvatarPreview({ iconMode, initial, initialIconUrl, name }: AvatarPrevie
               <feMergeNode in="SourceGraphic" />
             </feMerge>
           </filter>
+          <clipPath id="setup-avatar-content-clip" clipPathUnits="objectBoundingBox">
+            <path d="M.526.015.907.235Q.933.25.933.28V.72Q.933.75.907.765L.526.985Q.5 1 .474.985L.093.765Q.067.75.067.72V.28Q.067.25.093.235L.474.015Q.5 0 .526.015Z" />
+          </clipPath>
         </defs>
         <path
-          d="M130 8q7 0 14 4l88 51q10 6 10 18v124q0 11-10 17l-88 52q-14 8-28 0l-88-52q-10-6-10-17V81q0-11 10-17l88-52q7-4 14-4Z"
+          d="M150.02 12.05 252.9 71.45Q259.91 75.5 259.91 83.6v118.8q0 8.1-7.01 12.15l-102.88 59.4Q143 278 135.98 273.95L33.1 214.55q-7.01-4.05-7.01-12.15V83.6q0-8.1 7.01-12.15l102.88-59.4Q143 8 150.02 12.05Z"
           fill="none"
           filter="url(#setup-avatar-glow)"
           stroke="url(#setup-avatar-line)"
@@ -63,7 +66,7 @@ function AvatarPreview({ iconMode, initial, initialIconUrl, name }: AvatarPrevie
           strokeWidth="6"
         />
         <path
-          d="M130 18q7 0 13 4l81 47q9 5 9 16v116q0 10-9 15l-81 48q-13 7-26 0l-81-48q-9-5-9-15V85q0-10 9-15l81-48q6-4 13-4Z"
+          d="M149.5 21.75 244.76 76.75Q251.25 80.5 251.25 88v110q0 7.5-6.49 11.25l-95.26 55Q143 268 136.5 264.25l-95.26-55q-6.49-3.75-6.49-11.25V88q0-7.5 6.49-11.25l95.26-55Q143 18 149.5 21.75Z"
           fill="url(#setup-avatar-fill)"
         />
       </svg>

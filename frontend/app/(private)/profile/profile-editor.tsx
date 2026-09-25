@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowLeft, ChevronDown, ChevronRight, Pencil } from "lucide-react"
+import { ArrowLeft, ChevronRight, Pencil } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -98,9 +98,11 @@ export function ProfileEditor({
             マシン一覧へ戻る
           </Link>
         ) : null}
-        {canEdit ? <p className="slsg-profile-kicker">アカウント</p> : null}
-        <h1>プロフィール</h1>
-        <p className="slsg-profile-description">アカウント情報の確認と管理を行います。</p>
+        {canEdit ? <p className="slsg-page-eyebrow">USER PROFILE</p> : null}
+        <h1 className={canEdit ? "slsg-heading-offset-up" : undefined}>プロフィール</h1>
+        <p className={`slsg-profile-description ${canEdit ? "slsg-heading-offset-up" : ""}`}>
+          アカウント情報の確認と管理を行います。
+        </p>
       </header>
 
       <section
@@ -111,7 +113,7 @@ export function ProfileEditor({
           <svg
             aria-hidden="true"
             className="slsg-profile-avatar-border"
-            preserveAspectRatio="none"
+            preserveAspectRatio="xMidYMid meet"
             viewBox="0 0 100 100"
           >
             <defs>
@@ -218,7 +220,7 @@ export function ProfileEditor({
                       onChange={() => setIconMode("google")}
                       type="radio"
                     />
-                    <span className="text-[0.82rem] font-bold">Googleアイコン</span>
+                    <span className="text-sm font-bold">Googleアイコン</span>
                   </label>
                   <label>
                     <input
@@ -227,7 +229,7 @@ export function ProfileEditor({
                       onChange={() => setIconMode("initial")}
                       type="radio"
                     />
-                    <span className="text-[0.82rem] font-bold">イニシャル</span>
+                    <span className="text-sm font-bold">イニシャル</span>
                   </label>
                 </div>
               </fieldset>
@@ -286,12 +288,26 @@ export function ProfileEditor({
         ) : null}
       </section>
 
-      <div className="slsg-profile-history-grid">
-        <MachineRecordList items={profile.createdMachines} kind="created" title="作成したマシン" />
-        <MachineRecordList items={profile.solvedMachines} kind="solved" title="解いたマシン" />
-      </div>
+      {!isEditing ? (
+        <>
+          <div className="slsg-profile-history-grid">
+            <MachineRecordList
+              items={profile.createdMachines}
+              kind="created"
+              profileId={profile.id}
+              title="作成したマシン"
+            />
+            <MachineRecordList
+              items={profile.solvedMachines}
+              kind="solved"
+              profileId={profile.id}
+              title="解いたマシン"
+            />
+          </div>
 
-      <TerminalTelemetry />
+          <TerminalTelemetry />
+        </>
+      ) : null}
     </section>
   )
 }
@@ -299,66 +315,78 @@ export function ProfileEditor({
 type MachineRecordListProps = {
   items: ProfileMachine[]
   kind: "created" | "solved"
+  profileId: string
   title: string
 }
+
+const profileDifficultyLabels = {
+  easy: "Easy",
+  medium: "Medium",
+  hard: "High",
+} as const
+
+const profileDifficultyClasses = {
+  easy: "slsg-difficulty-easy",
+  medium: "slsg-difficulty-medium",
+  hard: "slsg-difficulty-high",
+} as const
 
 function formatProfileDate(value: string) {
   return value.replaceAll("/", ".").replaceAll("-", ".")
 }
 
-function MachineRecordList({ items, kind, title }: MachineRecordListProps) {
-  const description =
-    kind === "created" ? "あなたが作成したマシンの一覧です。" : "あなたが解いたマシンの一覧です。"
-
+function MachineRecordList({ items, kind, profileId, title }: MachineRecordListProps) {
   return (
     <section className={`slsg-profile-history-card is-${kind}`}>
       <ProfileCardGlow />
       <header className="slsg-profile-history-header">
         <h2>{title}</h2>
-        <p>{description}</p>
       </header>
       <div className="slsg-profile-history-columns" aria-hidden="true">
         <span>マシン名</span>
+        <span>難易度</span>
+        {kind === "solved" ? <span>作成者</span> : null}
         <span>{kind === "created" ? "作成日" : "解いた日"}</span>
       </div>
       <ul className="slsg-profile-history-list">
         {items.length > 0 ? (
           items.map((machine) => (
             <li key={machine.id}>
-              <Link className="slsg-profile-machine-row" href={`/machines/${machine.id}`}>
+              <div className="slsg-profile-machine-row">
+                <Link
+                  aria-label={`${machine.name}の詳細を見る`}
+                  className="slsg-profile-machine-row-hit-area"
+                  href={`/machines/${encodeURIComponent(machine.id)}?from=profile&profileId=${encodeURIComponent(profileId)}`}
+                />
                 <span className="slsg-profile-machine-copy">
                   <strong>{machine.name}</strong>
-                  <small>セキュリティ学習マシン</small>
                 </span>
-                <span aria-hidden="true" className="slsg-profile-status-hex is-green" />
+                <span
+                  className={`slsg-difficulty slsg-profile-difficulty ${profileDifficultyClasses[machine.level]}`}
+                >
+                  {profileDifficultyLabels[machine.level]}
+                </span>
+                {kind === "solved" ? (
+                  <Link
+                    className="slsg-profile-machine-author"
+                    href={`/users/${encodeURIComponent(machine.authorId)}`}
+                  >
+                    {machine.authorName}
+                  </Link>
+                ) : null}
                 <time>
                   {formatProfileDate(
                     kind === "solved" && machine.solvedAt ? machine.solvedAt : machine.createdAt,
                   )}
                 </time>
                 <ChevronRight aria-hidden="true" size={21} strokeWidth={1.6} />
-              </Link>
+              </div>
             </li>
           ))
         ) : (
           <li className="slsg-profile-history-empty">まだ記録はありません。</li>
         )}
       </ul>
-      {kind === "solved" ? (
-        <details className="slsg-profile-exercise-log">
-          <summary>
-            <span>演習ログ</span>
-            <ChevronDown aria-hidden="true" size={22} strokeWidth={1.6} />
-          </summary>
-          <div>
-            {items.slice(0, 4).map((machine) => (
-              <p key={machine.id}>
-                {formatProfileDate(machine.solvedAt || machine.createdAt)} — {machine.name} を完了
-              </p>
-            ))}
-          </div>
-        </details>
-      ) : null}
     </section>
   )
 }

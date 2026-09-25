@@ -173,7 +173,7 @@ export const CHAT_PROMPTS: Record<number, { help: string; question: string }> = 
 
 export const NEW_CHAT_SESSION: ChatSession = {
   id: "session-new",
-  name: "新しいマシン",
+  name: "マシン作成",
   status: "入力中",
   initialStep: CHAT_STEPS.machineName,
   creationStatus: "input",

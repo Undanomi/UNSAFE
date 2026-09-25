@@ -8,7 +8,7 @@ import {
   signInWithPopup,
   signOut,
 } from "firebase/auth"
-import { Box, ExternalLink, List, Terminal } from "lucide-react"
+import { Box, List, Terminal } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
@@ -56,10 +56,6 @@ export function LoginForm() {
     <main className="slsg-login-page">
       <header className="slsg-login-header">
         <SlsgBrand href="/login" variant="orbit" />
-        <Link className="slsg-login-privacy" href="/privacy">
-          プライバシーポリシー
-          <ExternalLink aria-hidden="true" size={15} strokeWidth={1.7} />
-        </Link>
       </header>
 
       <div className="slsg-login-layout">
@@ -93,7 +89,7 @@ export function LoginForm() {
               <div className="slsg-login-flow-item" key={label}>
                 <span className="slsg-login-flow-icon">
                   <svg aria-hidden="true" className="slsg-login-flow-hex" viewBox="0 0 90 90">
-                    <title>{label}のアイコン枠</title>
+                    <title>{`${label}のアイコン枠`}</title>
                     <defs>
                       <linearGradient
                         id={`slsg-login-flow-${id}-border`}

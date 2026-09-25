@@ -26,18 +26,19 @@ type SiteSidebarProps = {
 
 export function SiteSidebar({ user }: SiteSidebarProps) {
   const pathname = usePathname()
-  const [isChatListOpen, setIsChatListOpen] = useState(true)
+  const isSavedChatActive = /^\/machines\/chat\/[^/]+$/.test(pathname)
+  const [isChatListOpen, setIsChatListOpen] = useState(isSavedChatActive)
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([])
   const [isLoadingChats, setIsLoadingChats] = useState(false)
   const userInitial = user.name.trim().charAt(0).toUpperCase() || "U"
-  const isCreateActive = pathname.startsWith("/machines/chat")
+  const isCreateActive = pathname === "/machines/chat"
   const isMachineListActive =
     pathname === "/machines" ||
     (!pathname.startsWith("/machines/chat") && /^\/machines\/[^/]+$/.test(pathname))
 
   useEffect(() => {
-    if (pathname) setIsChatListOpen(false)
+    setIsChatListOpen(/^\/machines\/chat\/[^/]+$/.test(pathname))
   }, [pathname])
 
   useEffect(() => {
@@ -69,16 +70,19 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
 
   return (
     <aside className="slsg-sidebar fixed inset-y-0 left-0 z-20 flex w-[240px] flex-col text-[#eef5ff] max-lg:static max-lg:w-full">
-      <SlsgBrand className="mx-6 mt-6 mb-9" />
+      <SlsgBrand className="mx-6 mt-6 mb-9 shrink-0" />
 
-      <nav aria-label="主要ナビゲーション" className="grid w-full gap-1">
+      <nav
+        aria-label="主要ナビゲーション"
+        className="slsg-sidebar-primary-nav grid w-full shrink-0 gap-1"
+      >
         <Link
           aria-current={isCreateActive ? "page" : undefined}
           className={`slsg-sidebar-link ${isCreateActive ? "is-active" : ""}`}
           href="/machines/chat"
         >
           <CirclePlus aria-hidden="true" size={18} strokeWidth={2} />
-          マシンを作る
+          マシン作成
         </Link>
         <Link
           aria-current={isMachineListActive ? "page" : undefined}
@@ -90,11 +94,11 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
         </Link>
       </nav>
 
-      <div className="mt-1 grid w-full gap-1">
+      <div className="slsg-sidebar-chat-section mt-1 w-full gap-1">
         <button
           aria-controls="sidebar-chat-list"
           aria-expanded={isChatListOpen}
-          className="slsg-sidebar-link w-full justify-between"
+          className="slsg-sidebar-link w-full shrink-0 justify-between"
           onClick={() => setIsChatListOpen((open) => !open)}
           type="button"
         >
@@ -111,7 +115,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
         {isChatListOpen ? (
           <nav
             aria-label="作成チャット一覧"
-            className="mx-7 grid max-h-[190px] gap-1 overflow-y-auto border-l border-[#253654] py-1 pl-4"
+            className="slsg-sidebar-chat-list mx-7 grid gap-1 overflow-y-auto border-l border-[#253654] py-1 pl-4"
             id="sidebar-chat-list"
           >
             {isLoadingChats ? (
@@ -141,10 +145,10 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
         ) : null}
       </div>
 
-      <div className="relative mt-auto flex w-full items-center gap-1 border-t border-[#20304d] px-6 py-5">
+      <div className="slsg-sidebar-account relative mt-auto flex w-full shrink-0 items-center gap-1 border-t border-[#20304d] px-6 py-5">
         <Link
           aria-label="プロフィールを開く"
-          className="inline-flex min-w-0 flex-1 items-center gap-3 text-[0.86rem] font-bold text-[#eef5ff]"
+          className="inline-flex min-w-0 flex-1 items-center gap-3 text-sm font-bold text-[#eef5ff]"
           href="/profile"
         >
           <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-full border border-[#50617e] bg-[#273651] text-sm text-white">
@@ -183,7 +187,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
           >
             <form action={logoutAction}>
               <button
-                className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-[0.82rem] font-bold text-[#eef5ff] transition-colors hover:bg-[#1b2c49]"
+                className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-sm font-bold text-[#eef5ff] transition-colors hover:bg-[#1b2c49]"
                 role="menuitem"
                 type="submit"
               >

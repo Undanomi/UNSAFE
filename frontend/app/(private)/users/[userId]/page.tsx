@@ -1,3 +1,4 @@
+import { UserRoundX } from "lucide-react"
 import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 import { ProfileEditor } from "@/app/(private)/profile/profile-editor"
@@ -17,6 +18,7 @@ export default async function UserPage({ params }: UserPageProps) {
   const authenticatedUser = await verifySessionCookieService(sessionCookie)
 
   if (!authenticatedUser) redirect("/login")
+  if (userId === authenticatedUser.uid) redirect("/profile")
 
   const profile = await getUserProfileService(authenticatedUser.uid, userId)
   return (
@@ -24,13 +26,14 @@ export default async function UserPage({ params }: UserPageProps) {
       {profile ? (
         <ProfileEditor canEdit={false} key={profile.id} profile={profile} />
       ) : (
-        <section className="grid gap-3 rounded-3xl border border-[#e5e5e2] bg-white p-8 shadow-sm">
-          <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-            このユーザーは見つかりませんでした。
-          </h1>
-          <p className="leading-[1.65] text-[#61605b]">
-            マシン一覧から別の作成者を選択してください。
-          </p>
+        <section className="slsg-panel slsg-state-card">
+          <div className="slsg-state-card-content">
+            <span aria-hidden="true" className="slsg-state-card-icon">
+              <UserRoundX size={25} strokeWidth={1.7} />
+            </span>
+            <h1>このユーザーは見つかりませんでした。</h1>
+            <p>マシン一覧から別の作成者を選択してください。</p>
+          </div>
         </section>
       )}
     </AppShell>
