@@ -27,6 +27,7 @@ from ..models import (
 from ..repository import SessionRepository
 from ..skills.models import SkillPhase
 from ..skills.service import NoopSkillService, SkillResolver
+from ..source_workbench_policy import is_target_vm_executable
 from .ai import (
     AIGenerator,
     AIProviderSafetyRefusalError,
@@ -493,6 +494,7 @@ class MachineWorkflow:
         unverified_patch = False
         successful_verifications = 0
         blocked_summary: str | None = None
+        deferred_to_vm_summary: str | None = None
 
         def command_signature(command) -> str:
             return json.dumps(
@@ -632,6 +634,15 @@ class MachineWorkflow:
                             }
                         )
                         continue
+                    if decision.finish_status == "deferred_to_vm":
+                        deferred_to_vm_summary = decision.summary
+                        observations.append(
+                            {
+                                "index": len(observations) + 1,
+                                "kind": "finish_deferred_to_vm",
+                                "reason": decision.summary,
+                            }
+                        )
                     break
                 if decision.action == "patch":
                     assert decision.patch is not None
@@ -673,6 +684,27 @@ class MachineWorkflow:
                     )
                     continue
                 assert decision.command is not None
+                if is_target_vm_executable(decision.command.argv[0]):
+                    action_index += 1
+                    deferred_to_vm_summary = (
+                        "Target VM integration checks were deferred to Packer and the booted VM."
+                    )
+                    observations.append(
+                        {
+                            "index": len(observations) + 1,
+                            "kind": "command_deferred_to_vm",
+                            "purpose": decision.command.purpose,
+                            "command": decision.command.model_dump(mode="json"),
+                            "intent": decision.command.intent,
+                            "accepted": False,
+                            "blocking": False,
+                            "reason": (
+                                "the command requires target VM integration that the Docker "
+                                "workbench must not emulate"
+                            ),
+                        }
+                    )
+                    continue
                 try:
                     result = await self.source_sandbox.execute(sandbox_id, decision.command)
                 except SourceSandboxError as error:
@@ -776,6 +808,7 @@ class MachineWorkflow:
                 "changed_files": changed_files,
                 "deleted_files": deleted_files,
                 "successful_verifications": successful_verifications,
+                "deferred_to_vm": deferred_to_vm_summary,
             }
         finally:
             await self.source_sandbox.destroy(sandbox_id)

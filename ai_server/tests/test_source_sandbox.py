@@ -170,6 +170,21 @@ def test_workbench_command_rejects_inline_shell_and_unrestricted_network() -> No
         )
 
 
+@pytest.mark.parametrize(
+    "executable",
+    ["systemd-analyze", "systemd-run", "journalctl", "loginctl", "udevadm"],
+)
+def test_workbench_command_rejects_target_vm_integration_tools(executable: str) -> None:
+    with pytest.raises(HTTPException, match="target VM integration command"):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=[executable, "--help"],
+                purpose="Do not emulate target VM integration in Docker.",
+                intent="verify",
+            )
+        )
+
+
 def test_workbench_command_allows_fresh_container_package_installation() -> None:
     _validate_command(
         SourceWorkbenchCommand(
@@ -924,4 +939,161 @@ async def test_workbench_technical_blocker_is_reported_as_retryable_failure() ->
     assert report["blocked_summary"] == "Candidate verification cannot be performed."
     assert report["successful_verifications"] == 0
     assert report["observations"][-1]["kind"] == "finish_blocked"
+    assert sandbox.destroyed == ["sandbox-1"]
+
+
+class VmDeferredGenerator:
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["bash", "-n", "build.sh"],
+                    cwd="contents",
+                    purpose="Verify the portable build script syntax.",
+                    intent="verify",
+                ),
+                summary="Run the portable verification first.",
+            )
+        return SourceWorkbenchDecision(
+            action="finish",
+            finish_status="deferred_to_vm",
+            summary="Service activation and boot ordering require the target VM.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_workbench_can_defer_vm_only_checks_after_portable_verification() -> None:
+    sandbox = DiagnosticFailureSandbox()
+    workflow = object.__new__(MachineWorkflow)
+    workflow.source_sandbox = sandbox
+    workflow.source_workbench_action_limit = 3
+    workflow.generator = VmDeferredGenerator()
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n", mode="0755")]
+    )
+
+    _, report = await workflow._run_source_workbench(
+        MachineInformation(
+            name="VM deferred verification",
+            visibility="private",
+            theme="VM integration",
+            difficulty="Easy",
+        ),
+        ScenarioDraft(
+            scenario_id="scenario-vm-deferred",
+            title="VM deferred verification",
+            definition="# VM deferred verification",
+            attack_graph=AttackGraph(
+                steps=[
+                    AttackStep(
+                        step_id="verify-service",
+                        title="Verify service",
+                        kind="reconnaissance",
+                        phase="reconnaissance",
+                        description="Verify the generated service.",
+                        implementation_steps=["Start the service in the target VM."],
+                    )
+                ]
+            ),
+        ),
+        source,
+    )
+
+    assert report["status"] == "pass"
+    assert report["successful_verifications"] == 1
+    assert report["deferred_to_vm"] == (
+        "Service activation and boot ordering require the target VM."
+    )
+    assert report["observations"][-1]["kind"] == "finish_deferred_to_vm"
+    assert sandbox.destroyed == ["sandbox-1"]
+
+
+class RepeatedVmCommandGenerator:
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["bash", "-n", "build.sh"],
+                    cwd="contents",
+                    purpose="Verify portable shell syntax.",
+                    intent="verify",
+                ),
+                summary="Run a portable verification.",
+            )
+        return SourceWorkbenchDecision(
+            action="run",
+            command=SourceWorkbenchCommand(
+                argv=["systemd-analyze", "verify", "config/example.service"],
+                cwd="contents",
+                purpose="Verify a service in the target VM.",
+                intent="verify",
+            ),
+            summary="Try a target VM integration command.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_repeated_vm_only_commands_do_not_exhaust_policy_rejection_limit() -> None:
+    sandbox = DiagnosticFailureSandbox()
+    workflow = object.__new__(MachineWorkflow)
+    workflow.source_sandbox = sandbox
+    workflow.source_workbench_action_limit = 6
+    workflow.generator = RepeatedVmCommandGenerator()
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n", mode="0755")]
+    )
+
+    _, report = await workflow._run_source_workbench(
+        MachineInformation(
+            name="Repeated VM command",
+            visibility="private",
+            theme="VM integration",
+            difficulty="Easy",
+        ),
+        ScenarioDraft(
+            scenario_id="scenario-repeated-vm-command",
+            title="Repeated VM command",
+            definition="# Repeated VM command",
+            attack_graph=AttackGraph(
+                steps=[
+                    AttackStep(
+                        step_id="verify-service",
+                        title="Verify service",
+                        kind="reconnaissance",
+                        phase="reconnaissance",
+                        description="Verify the generated service.",
+                        implementation_steps=["Start the service in the target VM."],
+                    )
+                ]
+            ),
+        ),
+        source,
+    )
+
+    deferred = [
+        item for item in report["observations"] if item["kind"] == "command_deferred_to_vm"
+    ]
+    assert report["status"] == "pass"
+    assert report["successful_verifications"] == 1
+    assert report["deferred_to_vm"] is not None
+    assert len(deferred) == 5
+    assert all(item["blocking"] is False for item in deferred)
     assert sandbox.destroyed == ["sandbox-1"]

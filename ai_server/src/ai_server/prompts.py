@@ -1062,6 +1062,9 @@ JSONのみを返してください。
 - intent=verifyのコマンドが成功し、十分に検証できた場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"verified",
   "summary":"成功した検証証拠と完了理由"}}
+- アプリの可搬な検証は成功したが、残りが起動済みVMでしか確認できない場合:
+  {{"action":"finish","command":null,"patch":null,"finish_status":"deferred_to_vm",
+  "summary":"Dockerでは確認できない事項と、Packerまたは起動済みVMへ委ねる理由"}}
 - 検証を実行できない、またはモデル自身が検証を拒否する場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"blocked",
   "summary":"実行できない検証と具体的な阻害理由"}}
@@ -1071,6 +1074,15 @@ JSONのみを返してください。
   provision.shが導入するapt packageを確認し、必要なら最初に`apt-get update`、次に
   `apt-get install -y --no-install-recommends ...`をrun_as_root=true、network_access=trueで実行して、
   パッケージ名と導入過程を検証する。候補に書かれていないランタイムを便宜的に追加しない
+- 本番成果物はPackerで構築する本物のVMだが、このワークベンチは最小Dockerコンテナである。
+  init/systemdの起動、boot順序、unitのenable/start、mount namespace、kernel・device・login session、
+  host network、再起動後の状態など、起動済みVMが必要な挙動をDocker上で再現・代用しようとしない。
+  これらは設定ファイルを静的に照合し、実際の作動確認は後段のPacker、health check、acceptance testへ委ねる
+- `systemd-analyze`、`systemd-run`、`systemctl`、`journalctl`、`loginctl`、`udevadm`等のVM統合ツールを
+  ワークベンチで実行せず、それらを使えないことを候補ソースの失敗にしない。unitは`sed`や`cat`で静的に
+  読み、既知のdirectiveとシナリオ契約を照合する。補助検査ツールを使う目的だけで候補に未宣言のpackageを
+  インストールしない。誤って提案したVM統合コマンドは実行も通常のポリシー違反回数への加算もされず、
+  command_deferred_to_vmとして返されるため、同じ提案を繰り返さず静的確認またはdeferred_to_vmで完了する
 - shell文字列ではなくargvを返す。`sh -c`、`bash -c`、eval、sudo、su、systemctl、service、reboot、
   mount、docker、podman、qemu、packer、SSHおよび絶対パスを使わない。生成物内の実行ファイルは
   `./node_modules/.bin/...`などcwd基準の安全な相対パスなら使用できる。`..`は使わない
@@ -1083,9 +1095,11 @@ JSONのみを返してください。
 - ファイル内容や環境を調べるだけのコマンドはintent=inspect、候補の正しさを合否判定する構文検査、
   依存解決、コンパイル、テスト、失敗再現はintent=verifyにする。inspectの失敗は修正後の必須再実行に
   ならない。verifyは失敗後にpatchした場合、システムが同じ条件で自動再実行する
-- finish_status=verifiedは少なくとも1件のintent=verifyが成功した後だけ使用する。inspect、説明、推測、
-  または検証拒否を成功証拠として扱わない。検証不能やモデル自身による拒否はfinish_status=blockedを
-  使用する。この自己申告はプロバイダーが返す明示的なセーフガード拒否とは区別される
+- finish_status=verifiedとdeferred_to_vmは、少なくとも1件のDockerで実行可能なintent=verifyが成功した
+  後だけ使用する。deferred_to_vmは、残る確認が本質的に起動済みVMを必要とする場合だけ使い、可搬な依存物の
+  未導入、通常のテスト失敗、修正可能な候補不備をVMへ先送りしない。inspect、説明、推測、または検証拒否を
+  成功証拠として扱わない。Dockerで実行可能な必須検証を実行できない場合やモデル自身による拒否は
+  finish_status=blockedを使用する。この自己申告はプロバイダーの明示的なセーフガード拒否とは区別される
 - incoming_failureがある場合は後段のVM/Packerで既に起きた一次情報である。同じ原因を再現できる最小の
   コマンドを優先し、ログ内の絶対パスはワークベンチの`contents/`以下へ読み替えて実物を確認する
 - patchは生成ソースだけに適用し、node_modules、.venv、ビルド出力など取得・生成した依存物を
@@ -1104,7 +1118,8 @@ JSONのみを返してください。
   runtime/package導入、依存導入、アプリbuildだけでなく、独自のソース変換、導入後ファイル検査、
   fail-closed assertionも個別コマンドで同じ順序・条件に近づけて検証する。今回たまたま使われた技術を
   汎用必須検査だと決めつけず、候補に実在する処理だけを検査する
-- systemd unitが攻撃主体を起動する場合は、owner/group/modeだけでなく`ProtectSystem`、`ProtectHome`、
+- systemd unitが攻撃主体を起動する場合は、unitファイルを静的に読み、owner/group/modeだけでなく
+  `ProtectSystem`、`ProtectHome`、
   `ReadOnlyPaths`、`ReadWritePaths`等を静的に照合する。攻撃経路に必要なパスがunit内でread-onlyなら、
   unit外の`runuser ... test -w`成功を根拠にせず、意図したパスだけを書込み可能に修正する
 - 前段成果物を使う再login、`su`・`sudo`、別service、cron・timer・setuid、container等への遷移が

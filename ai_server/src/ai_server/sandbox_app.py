@@ -19,6 +19,7 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 
 from .models import GeneratedSource, SourceFile, SourcePatch, SourceWorkbenchCommand
+from .source_workbench_policy import TARGET_VM_EXECUTABLES
 
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
@@ -770,6 +771,11 @@ def _validate_command(command: SourceWorkbenchCommand) -> None:
             detail="command executable must be a safe relative path",
         )
     executable = executable_path.name
+    if executable in TARGET_VM_EXECUTABLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target VM integration command cannot run in the container workbench: {executable}",
+        )
     if executable in BANNED_EXECUTABLES:
         raise HTTPException(
             status_code=400,
