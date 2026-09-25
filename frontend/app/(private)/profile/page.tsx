@@ -19,7 +19,7 @@ export default async function ProfilePage() {
   }
 
   return (
-    <AppShell>
+    <AppShell artworkVariant="machines" layoutVariant="profile">
       <ProfileEditor profile={profile} showBackLink={false} />
     </AppShell>
   )

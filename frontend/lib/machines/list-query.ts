@@ -63,7 +63,7 @@ export function selectMachinePage(
   const needle = query.q.toLocaleLowerCase("ja-JP")
   const matches = items.filter(
     (item) =>
-      item.status !== "deleted" &&
+      item.status === "ready" &&
       (item.published === true || item.isOwned) &&
       (!query.owned || item.isOwned) &&
       (query.level.length === 0 || query.level.includes(item.level)) &&

@@ -32,7 +32,7 @@ export default async function MachinesPage({
   if (!user) redirect("/login")
   const query = parseMachineListQuery(await searchParams)
   return (
-    <AppShell>
+    <AppShell artworkVariant="machines">
       <MachineList query={query}>
         <Suspense key={`results:${machineListHref(query)}`} fallback={<MachineListLoading />}>
           <MachineResults uid={user.uid} query={query} />

@@ -75,12 +75,13 @@ export async function getChatSessionPageService(
   sessionId: string,
 ): Promise<ChatSession | null> {
   const session = await getChatSessionService(ownerUserId, sessionId)
-  if (
-    !session ||
-    (session.creationStatus !== "generating_scenario" && session.creationStatus !== "building")
-  ) {
-    return session
-  }
+  if (!session) return null
+
+  const isCreationRunning =
+    session.creationStatus === "generating_scenario" || session.creationStatus === "building"
+  const needsFailureDetails =
+    session.creationStatus === "failed" && session.creationFailure === null
+  if (!isCreationRunning && !needsFailureDetails) return session
 
   const aiSession = await getAiSessionService(ownerUserId, sessionId)
   const runtimeMatches =
@@ -93,6 +94,21 @@ export async function getChatSessionPageService(
   if (aiSession.status === "completed") {
     await setChatCreationStatusService(ownerUserId, sessionId, "completed")
     return { ...session, creationStatus: "completed", creationFailure: null }
+  }
+  if (aiSession.status === "failed") {
+    const failure: ChatCreationFailure = aiSession.failure
+      ? {
+          kind: aiSession.failure.kind,
+          summary: aiSession.failure.summary,
+          suggestions: [],
+        }
+      : {
+          kind: "system",
+          summary: "マシンを作成できませんでした。",
+          suggestions: [],
+        }
+    await setChatCreationFailureService(ownerUserId, sessionId, failure)
+    return { ...session, creationStatus: "failed", creationFailure: failure }
   }
   if (aiSession.status !== "cancelled") {
     await cancelAiSessionService(ownerUserId, sessionId)
