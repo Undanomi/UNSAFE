@@ -31,57 +31,9 @@ function toDifficulty(level: MachineRecord["level"]): MachineDetail["difficulty"
   return "Easy"
 }
 
-function formatWorkbenchCommand(command: { argv?: string[]; cwd?: string } | undefined) {
-  if (!command?.argv?.length) return null
-  const cwd = command.cwd ? ` (${command.cwd})` : ""
-  return `$ ${command.argv.join(" ")}${cwd}`
-}
-
-function toWorkbenchLog(session: AiSessionResponse): MachineBuildState["workbench"] {
-  const progress = session.source_workbench
-  const report = progress?.report
-  if (!report) return undefined
-  const lines: string[] = []
-  for (const observation of report.observations ?? []) {
-    const command = formatWorkbenchCommand(observation.command)
-    if (command) lines.push(command)
-    if (observation.summary) lines.push(`[patch] ${observation.summary}`)
-    if (observation.reason) lines.push(`[${observation.kind ?? "info"}] ${observation.reason}`)
-    if (observation.error) lines.push(`[error] ${observation.error}`)
-    if (observation.stdout) lines.push(...observation.stdout.trimEnd().split("\n"))
-    if (observation.stderr) {
-      lines.push(
-        ...observation.stderr
-          .trimEnd()
-          .split("\n")
-          .map((line) => `[stderr] ${line}`),
-      )
-    }
-    if (typeof observation.exit_code === "number") {
-      lines.push(`[exit ${observation.exit_code}]`)
-    }
-  }
-  const activeCommand = formatWorkbenchCommand(report.active_command)
-  if (activeCommand) lines.push(`${activeCommand} [実行中]`)
-  if (lines.length === 0) {
-    const summary = report.summary ?? report.error_message
-    if (summary) lines.push(`[sandbox] ${summary}`)
-  }
-  return {
-    status: report.status ?? "unknown",
-    updatedAt: progress?.updated_at ?? null,
-    lines: lines.slice(-100).map((line) => line.slice(0, 2_000)),
-  }
-}
-
-function toMachineBuildState(
-  session: AiSessionResponse,
-  includeWorkbench = false,
-): MachineBuildState {
-  const workbench = includeWorkbench ? toWorkbenchLog(session) : undefined
+function toMachineBuildState(session: AiSessionResponse): MachineBuildState {
   const shared = {
     progress: Math.max(0, Math.min(100, session.build_progress)),
-    ...(workbench ? { workbench } : {}),
   }
   if (session.status === "completed") {
     return { ...shared, status: "ready", progress: 100 }
@@ -323,7 +275,7 @@ export async function getMachineBuildStateService(
   if (!machine.published && !isOwner) return null
 
   const aiSession = await getAiSessionService(ownerUserId, machine.ai_session_id)
-  const buildState = toMachineBuildState(aiSession, isOwner)
+  const buildState = toMachineBuildState(aiSession)
   const description =
     buildState.status === "ready"
       ? completedMachineDescription(machine.name, aiSession.scenario?.scenario_description)
@@ -342,10 +294,10 @@ export async function retryMachineBuildService(
 
   const current = await getAiSessionService(ownerUserId, machine.ai_session_id)
   if (current.failure?.retry_allowed === false) {
-    return toMachineBuildState(current, true)
+    return toMachineBuildState(current)
   }
   if (current.status !== "failed" && current.status !== "cancelled") {
-    const buildState = toMachineBuildState(current, true)
+    const buildState = toMachineBuildState(current)
     const description =
       buildState.status === "ready"
         ? completedMachineDescription(machine.name, current.scenario?.scenario_description)
@@ -356,7 +308,7 @@ export async function retryMachineBuildService(
   }
 
   const restarted = await startMachineBuildService(ownerUserId, machine.ai_session_id)
-  const buildState = toMachineBuildState(restarted, true)
+  const buildState = toMachineBuildState(restarted)
   const description =
     buildState.status === "ready"
       ? completedMachineDescription(machine.name, restarted.scenario?.scenario_description)

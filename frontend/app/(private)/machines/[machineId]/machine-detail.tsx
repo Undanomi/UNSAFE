@@ -383,8 +383,7 @@ export function MachineDetailView({
         setBuildState(state)
         if (state.description) setDescription(state.description)
         if (state.status === "building" || state.status === "preparing") {
-          const delay = state.workbench?.status === "running" ? 1000 : 5000
-          timeoutId = setTimeout(poll, delay)
+          timeoutId = setTimeout(poll, 5000)
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -691,21 +690,6 @@ function BuildStatusPanel({
       <div className="slsg-detail-build-progress">
         <span style={{ width: `${state.progress}%` }} />
       </div>
-      {state.workbench ? (
-        <section className="slsg-detail-workbench-log" aria-live="polite">
-          <header>
-            <span>サンドボックス実行ログ</span>
-            <span className="slsg-detail-workbench-status">
-              {state.workbench.status === "running" ? "LIVE" : state.workbench.status}
-            </span>
-          </header>
-          <pre>
-            {state.workbench.lines.length > 0
-              ? state.workbench.lines.join("\n")
-              : "サンドボックスを準備しています…"}
-          </pre>
-        </section>
-      ) : null}
     </section>
   )
 }
