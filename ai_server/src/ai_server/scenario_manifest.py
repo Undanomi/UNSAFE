@@ -65,7 +65,7 @@ class ManifestFlagPlacement(StrictManifestModel):
     path: NonEmptyString
     owner: LinuxAccount
     group: LinuxAccount
-    mode: Literal["0400"] = "0400"
+    mode: Literal["0400", "0440", "0600", "0640"] = "0400"
 
     @field_validator("path")
     @classmethod
