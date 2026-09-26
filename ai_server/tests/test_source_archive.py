@@ -530,21 +530,40 @@ def test_generates_server_owned_flag_install_script_at_archive_boundary(tmp_path
     assert "test -f /home/user/user.txt" in verifier
 
 
-def test_supports_scenario_requested_writable_owner_only_flag_mode(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["0400", "0440", "0600", "0640"])
+def test_supports_scenario_requested_secure_flag_modes(tmp_path: Path, mode: str) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     flag_scenario = scenario().model_copy(update={"user_flag": expected})
     generated = web_generated_source()
-    configure_user_flag_placement(generated, mode="0600")
+    configure_user_flag_placement(generated, mode=mode)
 
     archive_path, _ = SourceArchive(tmp_path).create(
-        "session-flags-mode-0600", flag_scenario, generated
+        f"session-flags-mode-{mode}", flag_scenario, generated
     )
 
     with zipfile.ZipFile(archive_path) as archive:
         installer = archive.read("contents/scripts/install-flags.sh").decode()
         verifier = archive.read("contents/scripts/verify.sh").decode()
-    assert "-m 0600 /dev/stdin /home/user/user.txt" in installer
-    assert "= 600:user:user:1" in verifier
+    assert f"-m {mode} /dev/stdin /home/user/user.txt" in installer
+    assert f"= {mode.lstrip('0')}:user:user:1" in verifier
+
+
+@pytest.mark.parametrize("mode", ["0200", "0404", "0660", "0700"])
+def test_rejects_flag_modes_that_break_flag_confidentiality_or_readability(
+    tmp_path: Path, mode: str
+) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    configure_user_flag_placement(generated, mode=mode)
+
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create(f"session-invalid-flag-mode-{mode}", flag_scenario, generated)
+    assert any(
+        check["name"] == "manifest:schema:flag_placements.0.mode"
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    )
 
 
 def test_repair_report_does_not_persist_materialized_flag(tmp_path: Path) -> None:
