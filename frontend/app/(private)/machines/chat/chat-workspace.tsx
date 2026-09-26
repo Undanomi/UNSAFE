@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react"
+import { type KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from "react"
 import {
   cancelMachineCreationAction,
   markMachineCreationFailedAction,
@@ -689,25 +689,19 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                     <StepInput
                       answers={answers}
                       choicesDisabled={isSaving}
+                      inlineSubmit={isTextInputStep(step) && step !== CHAT_STEPS.machineName}
                       onChange={updateAnswers}
                       onChoiceSelect={(values) => void selectChoice(values)}
-                      onSubmit={isSaving ? undefined : () => void advance()}
+                      onSubmit={() => void advance()}
                       step={step}
+                      submitting={isSaving}
                     />
-                    {isTextInputStep(step) ? (
-                      <button
-                        aria-label={CHAT_COPY.buttons.next}
-                        className="slsg-chat-send-button"
+                    {step === CHAT_STEPS.machineName ? (
+                      <ChatSendButton
                         disabled={isSaving}
-                        onClick={advance}
-                        type="button"
-                      >
-                        {isSaving ? (
-                          <LoaderCircle aria-hidden="true" className="animate-spin" size={19} />
-                        ) : (
-                          <ArrowRight aria-hidden="true" size={20} strokeWidth={2} />
-                        )}
-                      </button>
+                        onSubmit={advance}
+                        submitting={isSaving}
+                      />
                     ) : null}
                   </div>
                 ) : null}
@@ -979,10 +973,38 @@ function AnswerEditor({
 type StepInputProps = {
   answers: ChatAnswers
   choicesDisabled?: boolean
+  inlineSubmit?: boolean
   onChange: (values: Partial<ChatAnswers>) => void
   onChoiceSelect?: (values: Partial<ChatAnswers>) => void
   onSubmit?: () => void
   step: number
+  submitting?: boolean
+}
+
+function ChatSendButton({
+  disabled = false,
+  onSubmit,
+  submitting = false,
+}: {
+  disabled?: boolean
+  onSubmit: () => void
+  submitting?: boolean
+}) {
+  return (
+    <button
+      aria-label={CHAT_COPY.buttons.next}
+      className="slsg-chat-send-button"
+      disabled={disabled}
+      onClick={onSubmit}
+      type="button"
+    >
+      {submitting ? (
+        <LoaderCircle aria-hidden="true" className="animate-spin" size={19} />
+      ) : (
+        <ArrowRight aria-hidden="true" size={20} strokeWidth={2} />
+      )}
+    </button>
+  )
 }
 
 function submitChatInputOnEnter(
@@ -1005,10 +1027,12 @@ function submitChatInputOnEnter(
 function StepInput({
   answers,
   choicesDisabled = false,
+  inlineSubmit = false,
   onChange,
   onChoiceSelect,
   onSubmit,
   step,
+  submitting = false,
 }: StepInputProps) {
   const selectChoice = onChoiceSelect ?? onChange
   if (step === CHAT_STEPS.machineName) {
@@ -1019,7 +1043,7 @@ function StepInput({
           className="slsg-input slsg-chat-input"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
           onChange={(event) => onChange({ name: event.target.value })}
-          onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
+          onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
           placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
         />
@@ -1054,19 +1078,17 @@ function StepInput({
             </button>
           ))}
         </div>
-        <label className="slsg-chat-field slsg-chat-theme-field">
-          <span>{CHAT_COPY.fields.scenarioPrompt}</span>
-          <textarea
-            className="slsg-input slsg-chat-textarea"
-            maxLength={500}
-            onChange={(event) => onChange({ theme: event.target.value })}
-            onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
-            placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
-            rows={5}
-            value={answers.theme}
-          />
-          <small className="slsg-chat-character-count">{answers.theme.length} / 500</small>
-        </label>
+        <ChatTextareaField
+          inlineSubmit={inlineSubmit}
+          label={CHAT_COPY.fields.scenarioPrompt}
+          maxLength={500}
+          onChange={(theme) => onChange({ theme })}
+          onSubmit={onSubmit}
+          placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
+          rows={5}
+          submitting={submitting}
+          value={answers.theme}
+        />
       </div>
     )
   }
@@ -1093,9 +1115,11 @@ function StepInput({
     return (
       <DetailInput
         label={CHAT_COPY.fields.userFlagDetails}
+        inlineSubmit={inlineSubmit}
         onChange={(userFlagDetails) => onChange({ userFlagDetails })}
         onSubmit={onSubmit}
         placeholder={CHAT_COPY.fields.userFlagDetailsPlaceholder}
+        submitting={submitting}
         value={answers.userFlagDetails}
       />
     )
@@ -1112,38 +1136,97 @@ function StepInput({
   return (
     <DetailInput
       label={CHAT_COPY.fields.systemFlagDetails}
+      inlineSubmit={inlineSubmit}
       onChange={(systemFlagDetails) => onChange({ systemFlagDetails })}
       onSubmit={onSubmit}
       placeholder={CHAT_COPY.fields.systemFlagDetailsPlaceholder}
+      submitting={submitting}
       value={answers.systemFlagDetails}
     />
   )
 }
 
 function DetailInput({
+  inlineSubmit,
   label,
   onChange,
   onSubmit,
   placeholder,
+  submitting,
   value,
 }: {
+  inlineSubmit: boolean
   label: string
   onChange: (value: string) => void
   onSubmit?: () => void
   placeholder: string
+  submitting: boolean
   value: string
 }) {
   return (
-    <label className="slsg-chat-field">
-      <span>{label}</span>
-      <textarea
-        className="slsg-input slsg-chat-textarea"
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
-        placeholder={placeholder}
-        value={value}
-      />
-    </label>
+    <ChatTextareaField
+      inlineSubmit={inlineSubmit}
+      label={label}
+      onChange={onChange}
+      onSubmit={onSubmit}
+      placeholder={placeholder}
+      submitting={submitting}
+      value={value}
+    />
+  )
+}
+
+function ChatTextareaField({
+  inlineSubmit,
+  label,
+  maxLength,
+  onChange,
+  onSubmit,
+  placeholder,
+  rows,
+  submitting,
+  value,
+}: {
+  inlineSubmit: boolean
+  label: string
+  maxLength?: number
+  onChange: (value: string) => void
+  onSubmit?: () => void
+  placeholder: string
+  rows?: number
+  submitting: boolean
+  value: string
+}) {
+  const textareaId = useId()
+
+  return (
+    <div className="slsg-chat-field">
+      <label htmlFor={textareaId}>{label}</label>
+      <div className="slsg-input slsg-chat-textarea-shell">
+        <textarea
+          className="slsg-chat-textarea"
+          id={textareaId}
+          maxLength={maxLength}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
+          placeholder={placeholder}
+          rows={rows}
+          value={value}
+        />
+        {maxLength !== undefined || inlineSubmit ? (
+          <div className="slsg-chat-textarea-footer">
+            {maxLength !== undefined ? (
+              <small className="slsg-chat-textarea-count">
+                {value.length} / {maxLength}
+              </small>
+            ) : null}
+            {inlineSubmit && onSubmit ? (
+              <ChatSendButton disabled={submitting} onSubmit={onSubmit} submitting={submitting} />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

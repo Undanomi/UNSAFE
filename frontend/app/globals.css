@@ -2757,6 +2757,7 @@
     box-shadow: 0 -14px 32px rgba(6, 10, 18, 0.18);
   }
   .slsg-chat-current-input {
+    --slsg-chat-textarea-min-height: 136px;
     position: relative;
     grid-column: 1;
     grid-row: 1;
@@ -2785,7 +2786,7 @@
     font-weight: 600;
   }
   .slsg-chat-input,
-  .slsg-chat-textarea {
+  .slsg-chat-textarea-shell {
     padding: 0 20px;
     border-color: #566985;
     border-radius: 8px;
@@ -2805,16 +2806,48 @@
   .slsg-chat-current-input .slsg-chat-input {
     padding-right: 150px;
   }
-  .slsg-chat-current-input .slsg-chat-textarea {
-    min-height: 136px;
-    padding-right: 68px;
-    padding-bottom: 68px;
+  .slsg-chat-textarea-shell {
+    display: grid;
+    min-width: 0;
+    padding: 0;
+  }
+  .slsg-chat-textarea-shell:focus-within {
+    border-color: #5b8fff;
+    box-shadow:
+      0 0 0 3px rgba(75, 130, 255, 0.15),
+      0 0 18px rgba(75, 130, 255, 0.12);
   }
   .slsg-chat-textarea {
-    min-height: 99px;
-    padding-top: 18px;
-    padding-bottom: 18px;
+    display: block;
+    width: 100%;
+    min-height: var(--slsg-chat-textarea-min-height, 99px);
+    min-width: 0;
+    padding: 18px 20px;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    background: transparent;
+    color: #e1e9f4;
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1.5;
     resize: vertical;
+    scrollbar-gutter: stable;
+  }
+  .slsg-chat-textarea-footer {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 8px 12px;
+    border-top: 1px solid rgba(86, 105, 133, 0.45);
+  }
+  .slsg-chat-textarea-count {
+    color: #7f8fa7;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1;
   }
   .slsg-chat-input::placeholder,
   .slsg-chat-textarea::placeholder {
@@ -2833,12 +2866,6 @@
   }
   .slsg-chat-current-input .slsg-chat-input + .slsg-chat-character-count {
     right: 72px;
-  }
-  .slsg-chat-current-input .slsg-chat-theme-field .slsg-chat-character-count {
-    top: auto;
-    right: 72px;
-    bottom: 28px;
-    transform: none;
   }
   .slsg-chat-theme-input {
     display: grid;
@@ -2943,6 +2970,11 @@
     z-index: 1;
     width: 44px;
     height: 44px;
+  }
+  .slsg-chat-textarea-footer .slsg-chat-send-button {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
   }
   .slsg-chat-send-button:hover:not(:disabled) {
     border-color: #8ab7ff;
