@@ -328,12 +328,16 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const [editingError, setEditingError] = useState("")
   const [isSaving, setIsSaving] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
+  const [isConfirmingCancel, setIsConfirmingCancel] = useState(false)
+  const [cancelDialogError, setCancelDialogError] = useState("")
   const [showRebuildButton, setShowRebuildButton] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
   const editingAnswersSnapshotRef = useRef<ChatAnswers | null>(null)
   const creationStartedRef = useRef(false)
   const creationAbortRef = useRef<AbortController | null>(null)
   const cancellationRequestedRef = useRef(false)
+  const cancelDialogRef = useRef<HTMLDialogElement>(null)
+  const cancelConfirmingRef = useRef(false)
   const choiceSubmissionRef = useRef(false)
   const progressSavingRef = useRef(false)
 
@@ -535,15 +539,32 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function handleCancel() {
-    if (creationStatus === "completed") return
+    if (creationStatus === "completed") return false
     if (!sessionId || creationStatus === "input") {
       router.push("/machines")
-      return
+      return true
     }
 
-    if (!(await cancelActiveCreation())) return
+    if (!(await cancelActiveCreation())) return false
     router.push("/machines")
     router.refresh()
+    return true
+  }
+
+  async function confirmCancel() {
+    if (cancelConfirmingRef.current) return
+    cancelConfirmingRef.current = true
+    setIsConfirmingCancel(true)
+    setCancelDialogError("")
+    try {
+      if (await handleCancel()) cancelDialogRef.current?.close()
+      else setCancelDialogError("中止できませんでした。もう一度お試しください。")
+    } catch {
+      setCancelDialogError("中止できませんでした。もう一度お試しください。")
+    } finally {
+      cancelConfirmingRef.current = false
+      setIsConfirmingCancel(false)
+    }
   }
 
   async function cancelActiveCreation() {
@@ -557,14 +578,21 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setError("")
-    const result = await cancelMachineCreationAction(sessionId)
-    setIsCancelling(false)
-    if (result.success) return true
+    let cancelError = "中止できませんでした。もう一度お試しください。"
+    try {
+      const result = await cancelMachineCreationAction(sessionId)
+      if (result.success) return true
+      cancelError = result.message
+    } catch {
+      // Restore the chat state so the user can retry the cancellation.
+    } finally {
+      setIsCancelling(false)
+    }
 
     cancellationRequestedRef.current = false
     setCreationStatus(previousCreationStatus)
     setCreationMessage(previousCreationMessage)
-    setError(result.message)
+    setError(cancelError)
     return false
   }
 
@@ -644,11 +672,14 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                 <ChatProgress progress={progress} />
                 <button
                   className="slsg-chat-cancel"
-                  disabled={isCancelling || creationStatus === "completed"}
-                  onClick={() => void handleCancel()}
+                  disabled={isCancelling || isConfirmingCancel || creationStatus === "completed"}
+                  onClick={() => {
+                    setCancelDialogError("")
+                    cancelDialogRef.current?.showModal()
+                  }}
                   type="button"
                 >
-                  {isCancelling ? "中止しています…" : "中止する"}
+                  {isCancelling || isConfirmingCancel ? "中止しています…" : "中止する"}
                 </button>
               </div>
             </header>
@@ -757,6 +788,44 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           </div>
         </section>
       </div>
+      <dialog
+        aria-describedby="slsg-chat-cancel-description"
+        aria-labelledby="slsg-chat-cancel-title"
+        className="slsg-chat-cancel-dialog"
+        onCancel={(event) => {
+          if (cancelConfirmingRef.current) event.preventDefault()
+        }}
+        onClose={() => setCancelDialogError("")}
+        ref={cancelDialogRef}
+      >
+        <h2 id="slsg-chat-cancel-title">作成を中止しますか？</h2>
+        <p id="slsg-chat-cancel-description">
+          マシン一覧に戻ります。生成中の処理がある場合は停止します。
+        </p>
+        {cancelDialogError ? (
+          <p className="slsg-chat-cancel-dialog-error" role="alert">
+            {cancelDialogError}
+          </p>
+        ) : null}
+        <div className="slsg-chat-cancel-dialog-actions">
+          <button
+            className="slsg-chat-action-secondary"
+            disabled={isConfirmingCancel}
+            onClick={() => cancelDialogRef.current?.close()}
+            type="button"
+          >
+            続ける
+          </button>
+          <button
+            className="slsg-chat-action-primary"
+            disabled={isConfirmingCancel}
+            onClick={() => void confirmCancel()}
+            type="button"
+          >
+            {isConfirmingCancel ? "中止しています…" : "中止する"}
+          </button>
+        </div>
+      </dialog>
       <TerminalTelemetry />
     </div>
   )

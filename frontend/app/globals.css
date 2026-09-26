@@ -2441,6 +2441,43 @@
     cursor: not-allowed;
     opacity: 0.48;
   }
+  .slsg-chat-cancel-dialog {
+    width: min(440px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 28px;
+    overflow-y: auto;
+    border: 1px solid #657b9b;
+    border-radius: 12px;
+    background: linear-gradient(145deg, #29354c, #1c2538);
+    color: #e8f0fb;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  }
+  .slsg-chat-cancel-dialog::backdrop {
+    background: rgba(4, 9, 20, 0.76);
+  }
+  .slsg-chat-cancel-dialog h2 {
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .slsg-chat-cancel-dialog > p {
+    margin-top: 14px;
+    color: #c1cee0;
+    line-height: 1.6;
+  }
+  .slsg-chat-cancel-dialog .slsg-chat-cancel-dialog-error {
+    color: #ffadb3;
+  }
+  .slsg-chat-cancel-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .slsg-chat-cancel-dialog-actions > button {
+    min-height: 44px;
+    padding: 0 16px;
+  }
   .slsg-chat-progress {
     position: relative;
     z-index: 3;
@@ -3679,6 +3716,15 @@
   .slsg-chat-action-primary,
   .slsg-chat-action-secondary {
     width: 100%;
+  }
+  .slsg-chat-cancel-dialog {
+    padding: 20px;
+  }
+  .slsg-chat-cancel-dialog-actions {
+    flex-direction: column;
+  }
+  .slsg-chat-cancel-dialog-actions > button {
+    min-width: 0;
   }
   .slsg-chat-summary-header,
   .slsg-chat-summary-body {
