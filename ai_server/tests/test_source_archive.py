@@ -703,6 +703,38 @@ def test_generates_runtime_verification_entrypoint_from_manifest(tmp_path: Path)
     assert mode == 0o755
 
 
+def test_materializes_empty_verification_entrypoint_before_manifest_validation(
+    tmp_path: Path,
+) -> None:
+    candidate_root = tmp_path / "candidate"
+
+    size = SourceArchive._write_verification_script(candidate_root)
+
+    script_path = candidate_root / "contents/scripts/verify.sh"
+    assert size > 0
+    assert script_path.is_file()
+    assert script_path.read_text() == """#!/bin/bash
+set -euo pipefail
+
+run_check() {
+    local check_id="$1"
+    local check_command="$2"
+    local status
+
+    printf 'SLSG_CHECK_START %s\n' "$check_id"
+    if bash -o pipefail -c "$check_command"; then
+        printf 'SLSG_CHECK_PASS %s\n' "$check_id"
+    else
+        status=$?
+        printf 'SLSG_CHECK_FAIL %s exit=%s\n' "$check_id" "$status" >&2
+        return "$status"
+    fi
+}
+
+"""
+    assert script_path.stat().st_mode & 0o777 == 0o755
+
+
 def test_runtime_verification_logs_check_ids_without_command_text(tmp_path: Path) -> None:
     candidate_root = tmp_path / "candidate"
     manifest_path = candidate_root / "contents/scenario_manifest.json"

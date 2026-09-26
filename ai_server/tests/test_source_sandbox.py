@@ -22,11 +22,14 @@ from ai_server.models import (
 )
 from ai_server.sandbox_app import (
     _container_configuration,
+    _declared_download_hosts,
     _demultiplex,
+    _execution_argv,
     _make_workspace_writable,
     _read_workspace_tar,
     _source_tar,
     _validate_command,
+    _validate_public_download_hosts,
     _validate_workbench_patch,
 )
 from ai_server.services.source_sandbox import SourceSandboxError, SourceSandboxExecution
@@ -202,6 +205,184 @@ def test_workbench_command_allows_fresh_container_package_installation() -> None
                 network_access=True,
             )
         )
+
+
+@pytest.mark.parametrize("executable", ["curl", "wget"])
+def test_workbench_command_allows_declared_https_artifact_download(executable: str) -> None:
+    source = GeneratedSource(
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=(
+                    "node_base_url='https://nodejs.org/dist/v22.14.0'\n"
+                    "curl --fail \"$node_base_url/node.tar.xz\"\n"
+                ),
+                mode="0755",
+            )
+        ]
+    )
+    command = SourceWorkbenchCommand(
+        argv=[executable, "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt"],
+        purpose="Download the checksummed runtime declared by provisioning.",
+        network_access=True,
+    )
+
+    declared_hosts = _declared_download_hosts(source)
+    _validate_command(command, declared_download_hosts=declared_hosts)
+
+    assert declared_hosts == frozenset({"nodejs.org"})
+    executed = _execution_argv(command)
+    if executable == "curl":
+        assert executed[:9] == [
+            "curl",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "0",
+            "--max-filesize",
+            "536870912",
+        ]
+    else:
+        assert executed[:4] == [
+            "wget",
+            "--https-only",
+            "--max-redirect=0",
+            "--max-filesize=536870912",
+        ]
+
+
+@pytest.mark.parametrize(
+    ("argv", "declared_hosts", "error"),
+    [
+        (
+            ["curl", "http://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "credential-free HTTPS",
+        ),
+        (
+            ["curl", "https://nodejs.org/runtime.tar.xz?token=value"],
+            frozenset({"nodejs.org"}),
+            "without query strings",
+        ),
+        (
+            ["curl", "https://nodejs.org:8443/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "credential-free HTTPS",
+        ),
+        (
+            ["curl", "https://[invalid/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "malformed",
+        ),
+        (
+            ["curl", "--location", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["curl", "-fsSL", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "option is not permitted",
+        ),
+        (
+            ["curl", "--json", "{}", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["curl", "-Asecret", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "option is not permitted",
+        ),
+        (
+            ["wget", "--post-data=value", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["wget", "https://example.com/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "must be declared",
+        ),
+        (
+            [
+                "wget",
+                "https://nodejs.org/runtime.tar.xz",
+                "127.0.0.1/internal",
+            ],
+            frozenset({"nodejs.org"}),
+            "exactly one explicit HTTPS URL",
+        ),
+    ],
+)
+def test_workbench_command_restricts_network_downloaders(
+    argv: list[str], declared_hosts: frozenset[str], error: str
+) -> None:
+    with pytest.raises(HTTPException, match=error):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=argv,
+                purpose="Reject unsafe downloader behavior.",
+                network_access=True,
+            ),
+            declared_download_hosts=declared_hosts,
+        )
+
+
+@pytest.mark.asyncio
+async def test_network_download_dns_rejects_local_and_private_addresses() -> None:
+    with pytest.raises(HTTPException, match="non-public address"):
+        await _validate_public_download_hosts(frozenset({"127.0.0.1"}))
+    with pytest.raises(HTTPException, match="non-public address"):
+        await _validate_public_download_hosts(frozenset({"169.254.169.254"}))
+
+    await _validate_public_download_hosts(frozenset({"93.184.216.34"}))
+
+
+def test_network_download_allows_retry_timeout_and_output_options() -> None:
+    declared_hosts = frozenset({"nodejs.org"})
+    for argv in (
+        [
+            "curl",
+            "--fail",
+            "--retry",
+            "3",
+            "--connect-timeout=10",
+            "--output",
+            "node_modules/node.tar.xz",
+            "https://nodejs.org/dist/v22.14.0/node.tar.xz",
+        ],
+        [
+            "wget",
+            "--tries=3",
+            "--timeout",
+            "10",
+            "--output-document",
+            "node_modules/node.tar.xz",
+            "https://nodejs.org/dist/v22.14.0/node.tar.xz",
+        ],
+    ):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=argv,
+                purpose="Download a declared runtime into an ignored dependency directory.",
+                network_access=True,
+            ),
+            declared_download_hosts=declared_hosts,
+        )
+
+
+def test_localhost_curl_does_not_require_external_network_access() -> None:
+    command = SourceWorkbenchCommand(
+        argv=["curl", "http://127.0.0.1/health"],
+        purpose="Check the candidate service inside the offline sandbox.",
+        network_access=False,
+    )
+
+    _validate_command(command)
+    assert _execution_argv(command) == command.argv
 
 
 def test_workbench_command_allows_safe_candidate_relative_executable() -> None:

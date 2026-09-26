@@ -347,6 +347,12 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "後段のPacker、health check、acceptance testへ委ねる" in workbench_prompt
     assert "通常のポリシー違反回数への加算もされず" in workbench_prompt
     assert "command_deferred_to_vm" in workbench_prompt
+    assert "対象VM用のruntime" in workbench_prompt
+    assert "非rootかつnetwork_access=true" in workbench_prompt
+    assert "実行直前のDNS検査でもpublic address" in workbench_prompt
+    assert "curl/wgetだけnetwork_access=true" in workbench_prompt
+    assert "localhost・private/link-local宛通信" in workbench_prompt
+    assert "localhostへのアプリ疎通確認はnetwork_access=false" in workbench_prompt
 
     review_prompt = source_review_prompt(machine, scenario, source)
     assert "独立した敵対的レビュー担当" in review_prompt

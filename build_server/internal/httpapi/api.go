@@ -142,6 +142,10 @@ func (a *API) createBuild(w http.ResponseWriter, r *http.Request) {
 		problem(w, http.StatusBadRequest, "invalid source archive", err.Error())
 		return
 	}
+	if err := archive.ValidateScenarioSource(filepath.Join(temporaryDir, "source")); err != nil {
+		problem(w, http.StatusBadRequest, "invalid source archive", err.Error())
+		return
+	}
 	if err := os.Rename(temporaryDir, finalDir); err != nil {
 		a.internalError(w, r, fmt.Errorf("publish uploaded source: %w", err))
 		return
