@@ -1,12 +1,22 @@
+import { LoaderCircle } from "lucide-react"
+
 export function PageLoading() {
   return (
     <section
       aria-busy="true"
       aria-live="polite"
-      className="grid min-h-48 place-items-center rounded-3xl border border-[#e5e5e2] bg-white p-8 text-[#61605b] shadow-sm"
+      className="slsg-panel slsg-state-card is-loading"
       role="status"
     >
-      読み込んでいます…
+      <div className="slsg-state-card-content">
+        <span aria-hidden="true" className="slsg-state-card-icon">
+          <LoaderCircle className="animate-spin" size={27} strokeWidth={1.7} />
+        </span>
+        <p className="slsg-state-card-title">読み込んでいます…</p>
+        <span aria-hidden="true" className="slsg-state-loading-track">
+          <i />
+        </span>
+      </div>
     </section>
   )
 }

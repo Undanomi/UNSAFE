@@ -44,7 +44,7 @@ export type ChatSession = {
 }
 
 export type ChatCreationFailure = {
-  kind: "settings" | "system"
+  kind: "ai_safety_refusal" | "settings" | "system"
   summary: string
   suggestions: string[]
 }
@@ -83,7 +83,7 @@ export const EMPTY_CHAT_ANSWERS: ChatAnswers = {
 export const CHAT_COPY = {
   assistantLabel: "AI",
   basicReadyPrompt: {
-    help: "フラグの指示を行わない場合は、このまま作成できます。",
+    help: "フラグを指定しない場合は、AIがシナリオに合わせて自動設定します。",
     question: "基本設定がそろいました。マシンを作成しますか？",
   },
   buttons: {
@@ -173,7 +173,7 @@ export const CHAT_PROMPTS: Record<number, { help: string; question: string }> = 
 
 export const NEW_CHAT_SESSION: ChatSession = {
   id: "session-new",
-  name: "新しいマシン",
+  name: "マシン作成",
   status: "入力中",
   initialStep: CHAT_STEPS.machineName,
   creationStatus: "input",

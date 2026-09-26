@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -27,6 +28,7 @@ from ..models import (
 from ..repository import SessionRepository
 from ..skills.models import SkillPhase
 from ..skills.service import NoopSkillService, SkillResolver
+from ..source_workbench_policy import is_target_vm_executable
 from .ai import (
     AIGenerator,
     AIProviderSafetyRefusalError,
@@ -40,6 +42,7 @@ from .rockyou import (
     bind_rockyou_passwords,
     strip_rockyou_selections,
 )
+from .scenario_archive import ScenarioDraftArchive
 from .scenario_secrets import redact_scenario_secrets
 from .source_archive import InvalidSourceError, SourceArchive
 from .source_repair import apply_source_patch
@@ -52,6 +55,16 @@ DISTRIBUTION_ARTIFACT_TYPE = "zip"
 MAX_SOURCE_REVIEW_RECONSIDERATIONS = 2
 MAX_WORKBENCH_POLICY_REJECTIONS = 4
 SOURCE_SANDBOX_KEEPALIVE_SECONDS = 60
+
+
+class _LiveObservations(list[dict]):
+    def __init__(self, on_change: Callable[[], None]) -> None:
+        super().__init__()
+        self.on_change = on_change
+
+    def append(self, item: dict) -> None:
+        super().append(item)
+        self.on_change()
 
 
 class MachineWorkflowGraphState(TypedDict, total=False):
@@ -83,6 +96,7 @@ class MachineWorkflow:
         rockyou_max_line: int = 1,
         source_sandbox: SourceSandboxClient | None = None,
         source_workbench_action_limit: int = 20,
+        scenario_archive: ScenarioDraftArchive | None = None,
     ) -> None:
         self.repository = repository
         self.generator = generator
@@ -97,6 +111,7 @@ class MachineWorkflow:
         self.rockyou_max_line = rockyou_max_line
         self.source_sandbox = source_sandbox
         self.source_workbench_action_limit = source_workbench_action_limit
+        self.scenario_archive = scenario_archive
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.starting_sessions: set[str] = set()
         self.cancel_requests: set[str] = set()
@@ -462,6 +477,8 @@ class MachineWorkflow:
         scenario: ScenarioDraft,
         generated: GeneratedSource,
         failure_context: dict | None = None,
+        *,
+        archive_path: Path | None = None,
     ) -> tuple[GeneratedSource, dict]:
         if self.source_sandbox is None:
             return generated, {
@@ -473,7 +490,29 @@ class MachineWorkflow:
 
         initial_generated = generated
         sandbox_id = await self.source_sandbox.create(generated)
-        observations: list[dict] = []
+        final_summary = "workbench action limit reached after successful commands"
+        observations: list[dict]
+
+        def persist_report(report: dict) -> None:
+            if archive_path is not None:
+                self.source_archive.record_workbench_progress(archive_path, report)
+
+        def persist_running(
+            *,
+            active_command: SourceWorkbenchCommand | None = None,
+        ) -> None:
+            report = {
+                "kind": "source_workbench",
+                "status": "running",
+                "summary": final_summary,
+                "observations": list(observations),
+            }
+            if active_command is not None:
+                report["active_command"] = active_command.model_dump(mode="json")
+            persist_report(report)
+
+        observations = _LiveObservations(persist_running)
+        persist_running()
         if failure_context is not None:
             observations.append(
                 {
@@ -488,11 +527,11 @@ class MachineWorkflow:
                     ),
                 }
             )
-        final_summary = "workbench action limit reached after successful commands"
         pending_verifications: dict[str, dict] = {}
         unverified_patch = False
         successful_verifications = 0
         blocked_summary: str | None = None
+        deferred_to_vm_summary: str | None = None
 
         def command_signature(command) -> str:
             return json.dumps(
@@ -556,6 +595,7 @@ class MachineWorkflow:
                             break
                         command = SourceWorkbenchCommand.model_validate(failed["command"])
                         try:
+                            persist_running(active_command=command)
                             result = await self.source_sandbox.execute(sandbox_id, command)
                         except SourceSandboxError as error:
                             if error.status_code != 400:
@@ -606,6 +646,7 @@ class MachineWorkflow:
                             observation["resolved_failure_index"] = failed["index"]
                         else:
                             pending_verifications[signature] = observation
+                        persist_running()
                     if (
                         pending_verifications
                         or unverified_patch
@@ -632,6 +673,15 @@ class MachineWorkflow:
                             }
                         )
                         continue
+                    if decision.finish_status == "deferred_to_vm":
+                        deferred_to_vm_summary = decision.summary
+                        observations.append(
+                            {
+                                "index": len(observations) + 1,
+                                "kind": "finish_deferred_to_vm",
+                                "reason": decision.summary,
+                            }
+                        )
                     break
                 if decision.action == "patch":
                     assert decision.patch is not None
@@ -673,7 +723,29 @@ class MachineWorkflow:
                     )
                     continue
                 assert decision.command is not None
+                if is_target_vm_executable(decision.command.argv[0]):
+                    action_index += 1
+                    deferred_to_vm_summary = (
+                        "Target VM integration checks were deferred to Packer and the booted VM."
+                    )
+                    observations.append(
+                        {
+                            "index": len(observations) + 1,
+                            "kind": "command_deferred_to_vm",
+                            "purpose": decision.command.purpose,
+                            "command": decision.command.model_dump(mode="json"),
+                            "intent": decision.command.intent,
+                            "accepted": False,
+                            "blocking": False,
+                            "reason": (
+                                "the command requires target VM integration that the Docker "
+                                "workbench must not emulate"
+                            ),
+                        }
+                    )
+                    continue
                 try:
+                    persist_running(active_command=decision.command)
                     result = await self.source_sandbox.execute(sandbox_id, decision.command)
                 except SourceSandboxError as error:
                     if error.status_code != 400:
@@ -723,6 +795,7 @@ class MachineWorkflow:
                 if not command_succeeded:
                     if decision.command.intent == "verify":
                         pending_verifications[command_signature(decision.command)] = observation
+                    persist_running()
                     continue
                 if decision.command.intent == "verify":
                     unverified_patch = False
@@ -732,6 +805,7 @@ class MachineWorkflow:
                     )
                     if resolved is not None:
                         observation["resolved_failure_index"] = resolved["index"]
+                persist_running()
 
             if (
                 blocked_summary is not None
@@ -741,7 +815,7 @@ class MachineWorkflow:
             ):
                 unresolved = list(pending_verifications.values())
                 generated, changed_files, deleted_files = await collect_changes()
-                return generated, {
+                report = {
                     "kind": "source_workbench",
                     "status": "fail",
                     "error_message": (
@@ -766,9 +840,11 @@ class MachineWorkflow:
                     "candidate_changes_preserved": bool(changed_files or deleted_files),
                     "successful_verifications": successful_verifications,
                 }
+                persist_report(report)
+                return generated, report
 
             generated, changed_files, deleted_files = await collect_changes()
-            return generated, {
+            report = {
                 "kind": "source_workbench",
                 "status": "pass",
                 "summary": final_summary,
@@ -776,7 +852,20 @@ class MachineWorkflow:
                 "changed_files": changed_files,
                 "deleted_files": deleted_files,
                 "successful_verifications": successful_verifications,
+                "deferred_to_vm": deferred_to_vm_summary,
             }
+            persist_report(report)
+            return generated, report
+        except Exception as error:
+            persist_report(
+                {
+                    "kind": "source_workbench",
+                    "status": "error",
+                    "error_message": _bounded_context(str(error), 8_000),
+                    "observations": observations,
+                }
+            )
+            raise
         finally:
             await self.source_sandbox.destroy(sandbox_id)
 
@@ -1085,6 +1174,7 @@ class MachineWorkflow:
                             working_scenario,
                             generated,
                             workbench_failure_context,
+                            archive_path=archive_path,
                         )
                         if repair_history:
                             repair_history[-1]["source_workbench_after"] = workbench_report
@@ -1323,6 +1413,21 @@ class MachineWorkflow:
                                     "resolved_by_scenario_sync" if scenario_text_only else None
                                 ),
                             )
+                            if self.scenario_archive is not None:
+                                latest_attempt = max(
+                                    state.scenario_generation_attempts,
+                                    self.scenario_archive.latest_attempt_number(
+                                        session_id,
+                                        working_scenario.scenario_version_id,
+                                    ),
+                                )
+                                self.scenario_archive.promote_latest(
+                                    session_id,
+                                    latest_attempt,
+                                    working_scenario,
+                                    scenario_review,
+                                    state.machine_information,
+                                )
                             scenario_sync_required = False
                         logger.info(
                             "source candidate cleared for build",

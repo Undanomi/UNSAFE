@@ -4,7 +4,7 @@ import { NEW_CHAT_SESSION } from "@/stores/chat"
 
 export default function NewMachineChatPage() {
   return (
-    <AppShell contentClassName="py-9 pb-14 max-lg:py-8">
+    <AppShell artworkVariant="machines" layoutVariant="chat">
       <ChatWorkspace session={NEW_CHAT_SESSION} />
     </AppShell>
   )

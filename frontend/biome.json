@@ -4,11 +4,13 @@
     "includes": [
       "**",
       "!node_modules",
+      "!.pnpm-store",
       "!.next",
       "!build",
       "!dist",
       "!next-env.d.ts",
       "!app/types",
+      "!components/flag-correct-artwork.tsx",
       "!public"
     ],
     "ignoreUnknown": true

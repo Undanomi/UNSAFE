@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
 import json
 import os
+import re
 import secrets
+import socket
 import stat
 import struct
 import tarfile
@@ -12,16 +15,22 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from time import monotonic
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
 
 from .models import GeneratedSource, SourceFile, SourcePatch, SourceWorkbenchCommand
+from .source_workbench_policy import TARGET_VM_EXECUTABLES
 
 MAX_SOURCE_BYTES = 5 * 1024 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
+MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+DOWNLOAD_SOURCE_PATHS = frozenset(
+    {"contents/build.sh", "contents/scripts/provision.sh"}
+)
+HTTPS_URL_PATTERN = re.compile(r"https://[^\s'\"`<>]+", re.IGNORECASE)
 IGNORED_PARTS = frozenset(
     {
         ".git",
@@ -58,7 +67,64 @@ BANNED_EXECUTABLES = frozenset(
 NETWORK_PACKAGE_MANAGERS = frozenset(
     {"apt", "apt-get", "composer", "go", "mvn", "npm", "pip", "pip3", "pnpm", "uv", "yarn"}
 )
+NETWORK_DOWNLOADERS = frozenset({"curl", "wget"})
+NETWORK_EXECUTABLES = NETWORK_PACKAGE_MANAGERS | NETWORK_DOWNLOADERS
 ROOT_PACKAGE_MANAGERS = frozenset({"apt", "apt-get", "dpkg"})
+
+CURL_DOWNLOAD_FLAG_OPTIONS = frozenset(
+    {
+        "--compressed",
+        "--create-dirs",
+        "--fail",
+        "--fail-with-body",
+        "--head",
+        "--ipv4",
+        "--ipv6",
+        "--no-progress-meter",
+        "--remote-name",
+        "--remote-name-all",
+        "--remove-on-error",
+        "--retry-all-errors",
+        "--retry-connrefused",
+        "--show-error",
+        "--silent",
+    }
+)
+CURL_DOWNLOAD_VALUE_OPTIONS = frozenset(
+    {
+        "--connect-timeout",
+        "--max-time",
+        "--output",
+        "--retry",
+        "--retry-delay",
+        "--retry-max-time",
+    }
+)
+CURL_DOWNLOAD_SHORT_FLAGS = frozenset("46IfOsS")
+CURL_DOWNLOAD_SHORT_VALUES = frozenset("o")
+WGET_DOWNLOAD_FLAG_OPTIONS = frozenset(
+    {
+        "--continue",
+        "--no-verbose",
+        "--quiet",
+        "--server-response",
+        "--spider",
+    }
+)
+WGET_DOWNLOAD_VALUE_OPTIONS = frozenset(
+    {
+        "--connect-timeout",
+        "--directory-prefix",
+        "--dns-timeout",
+        "--output-document",
+        "--read-timeout",
+        "--timeout",
+        "--tries",
+        "--waitretry",
+    }
+)
+WGET_DOWNLOAD_SHORT_FLAGS = frozenset("cqS")
+WGET_DOWNLOAD_SHORT_VALUES = frozenset("OPTt")
 
 
 @dataclass
@@ -448,7 +514,12 @@ def create_sandbox_app() -> FastAPI:
         if session.status != "ready" or session.container_id is None:
             raise HTTPException(status_code=409, detail=f"sandbox is {session.status}")
         session.last_activity = monotonic()
-        _validate_command(command)
+        _validate_command(
+            command,
+            declared_download_hosts=_declared_download_hosts(session.source),
+        )
+        if _is_network_download(command):
+            await _validate_public_download_hosts(_download_hosts(command))
         network_connected = False
         if command.network_access:
             if session.network_id is None:
@@ -471,7 +542,7 @@ def create_sandbox_app() -> FastAPI:
                         "--signal=KILL",
                         "--kill-after=5s",
                         f"{command_timeout}s",
-                        *command.argv,
+                        *_execution_argv(command),
                     ],
                     "Env": [
                         "HOME=/tmp",
@@ -759,7 +830,11 @@ def _source_tar(source: GeneratedSource) -> bytes:
     return output.getvalue()
 
 
-def _validate_command(command: SourceWorkbenchCommand) -> None:
+def _validate_command(
+    command: SourceWorkbenchCommand,
+    *,
+    declared_download_hosts: frozenset[str] = frozenset(),
+) -> None:
     cwd = PurePosixPath(command.cwd)
     if cwd.is_absolute() or not cwd.parts or cwd.parts[0] != "contents" or ".." in cwd.parts:
         raise HTTPException(status_code=400, detail="command cwd must be contents or its child")
@@ -770,6 +845,11 @@ def _validate_command(command: SourceWorkbenchCommand) -> None:
             detail="command executable must be a safe relative path",
         )
     executable = executable_path.name
+    if executable in TARGET_VM_EXECUTABLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"target VM integration command cannot run in the container workbench: {executable}",
+        )
     if executable in BANNED_EXECUTABLES:
         raise HTTPException(
             status_code=400,
@@ -789,8 +869,16 @@ def _validate_command(command: SourceWorkbenchCommand) -> None:
     ):
         raise HTTPException(status_code=400, detail="inline code execution is not permitted")
     if command.network_access:
-        if executable not in NETWORK_PACKAGE_MANAGERS:
-            raise HTTPException(status_code=400, detail="network access is limited to package managers")
+        if command.argv[0] != executable:
+            raise HTTPException(
+                status_code=400,
+                detail="network tools must be invoked by executable name",
+            )
+        if executable not in NETWORK_EXECUTABLES:
+            raise HTTPException(
+                status_code=400,
+                detail="network access is limited to package managers and HTTPS download clients",
+            )
         if executable in {"npm", "pnpm", "yarn"} and not any(
             argument in {"--ignore-scripts", "--ignore_scripts"} for argument in command.argv
         ):
@@ -798,6 +886,237 @@ def _validate_command(command: SourceWorkbenchCommand) -> None:
                 status_code=400,
                 detail="JavaScript package-manager network commands must disable lifecycle scripts",
             )
+        if executable in NETWORK_DOWNLOADERS:
+            _validate_download_command(
+                executable,
+                command.argv[1:],
+                declared_download_hosts,
+            )
+
+
+def _validate_download_command(
+    executable: str,
+    arguments: list[str],
+    declared_download_hosts: frozenset[str],
+) -> None:
+    if executable == "curl":
+        flag_options = CURL_DOWNLOAD_FLAG_OPTIONS
+        value_options = CURL_DOWNLOAD_VALUE_OPTIONS
+        short_flags = CURL_DOWNLOAD_SHORT_FLAGS
+        short_values = CURL_DOWNLOAD_SHORT_VALUES
+    else:
+        flag_options = WGET_DOWNLOAD_FLAG_OPTIONS
+        value_options = WGET_DOWNLOAD_VALUE_OPTIONS
+        short_flags = WGET_DOWNLOAD_SHORT_FLAGS
+        short_values = WGET_DOWNLOAD_SHORT_VALUES
+
+    positional = _download_positionals(
+        executable,
+        arguments,
+        flag_options=flag_options,
+        value_options=value_options,
+        short_flags=short_flags,
+        short_values=short_values,
+    )
+    if len(positional) != 1 or "://" not in positional[0]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{executable} network access requires exactly one explicit HTTPS URL",
+        )
+    raw_url = positional[0]
+    try:
+        parsed = urlsplit(raw_url)
+        parsed_port = parsed.port
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{executable} URL is malformed",
+        ) from error
+    hostname = _normalized_url_hostname(raw_url)
+    if (
+        parsed.scheme.lower() != "https"
+        or hostname is None
+        or parsed_port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(character.isspace() for character in raw_url)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{executable} network access permits only credential-free HTTPS URLs "
+                "without query strings or fragments"
+            ),
+        )
+    if "{" in raw_url or "}" in raw_url:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{executable} URL globbing is not permitted",
+        )
+    if hostname not in declared_download_hosts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"download host must be declared in build.sh or provision.sh: {hostname}",
+        )
+
+
+def _download_positionals(
+    executable: str,
+    arguments: list[str],
+    *,
+    flag_options: frozenset[str],
+    value_options: frozenset[str],
+    short_flags: frozenset[str],
+    short_values: frozenset[str],
+) -> list[str]:
+    positional: list[str] = []
+    index = 0
+    options_ended = False
+    while index < len(arguments):
+        argument = arguments[index]
+        if options_ended or not argument.startswith("-") or argument == "-":
+            positional.append(argument)
+            index += 1
+            continue
+        if argument == "--":
+            options_ended = True
+            index += 1
+            continue
+        if argument.startswith("--"):
+            option, separator, attached = argument.partition("=")
+            if option in flag_options and not separator:
+                index += 1
+                continue
+            if option in value_options:
+                if separator:
+                    if not attached:
+                        _reject_download_option(executable, option)
+                    index += 1
+                    continue
+                if index + 1 >= len(arguments):
+                    _reject_download_option(executable, option)
+                index += 2
+                continue
+            _reject_download_option(executable, option)
+
+        short_argument = argument[1:]
+        if not short_argument:
+            positional.append(argument)
+            index += 1
+            continue
+        for offset, option in enumerate(short_argument):
+            if option in short_flags:
+                continue
+            if option in short_values:
+                if offset + 1 < len(short_argument):
+                    break
+                if index + 1 >= len(arguments):
+                    _reject_download_option(executable, f"-{option}")
+                index += 1
+                break
+            _reject_download_option(executable, f"-{option}")
+        index += 1
+    return positional
+
+
+def _reject_download_option(executable: str, option: str) -> None:
+    raise HTTPException(
+        status_code=400,
+        detail=f"{executable} option is not permitted for download-only access: {option}",
+    )
+
+
+def _declared_download_hosts(source: GeneratedSource) -> frozenset[str]:
+    hosts: set[str] = set()
+    for source_file in source.files:
+        if source_file.path not in DOWNLOAD_SOURCE_PATHS:
+            continue
+        for raw_url in HTTPS_URL_PATTERN.findall(source_file.content):
+            hostname = _normalized_url_hostname(raw_url)
+            if hostname:
+                hosts.add(hostname)
+    return frozenset(hosts)
+
+
+def _download_hosts(command: SourceWorkbenchCommand) -> frozenset[str]:
+    hosts = {
+        hostname
+        for argument in command.argv[1:]
+        if "://" in argument
+        for hostname in [_normalized_url_hostname(argument)]
+        if hostname is not None
+    }
+    return frozenset(hosts)
+
+
+def _normalized_url_hostname(raw_url: str) -> str | None:
+    try:
+        hostname = urlsplit(raw_url).hostname
+    except ValueError:
+        return None
+    return hostname.rstrip(".").lower() if hostname else None
+
+
+async def _validate_public_download_hosts(hosts: frozenset[str]) -> None:
+    loop = asyncio.get_running_loop()
+    for hostname in sorted(hosts):
+        try:
+            addresses = await loop.getaddrinfo(
+                hostname,
+                443,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
+        except socket.gaierror as error:
+            raise HTTPException(
+                status_code=400,
+                detail=f"download host DNS resolution failed: {hostname}",
+            ) from error
+        resolved = {
+            item[4][0].split("%", 1)[0]
+            for item in addresses
+            if item[4] and item[4][0]
+        }
+        if not resolved or any(
+            not ipaddress.ip_address(address).is_global for address in resolved
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=f"download host resolved to a non-public address: {hostname}",
+            )
+
+
+def _is_network_download(command: SourceWorkbenchCommand) -> bool:
+    return command.network_access and PurePosixPath(command.argv[0]).name in NETWORK_DOWNLOADERS
+
+
+def _execution_argv(command: SourceWorkbenchCommand) -> list[str]:
+    executable = PurePosixPath(command.argv[0]).name
+    if command.network_access and executable == "curl":
+        return [
+            "curl",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "0",
+            "--max-filesize",
+            str(MAX_DOWNLOAD_BYTES),
+            *command.argv[1:],
+        ]
+    if command.network_access and executable == "wget":
+        return [
+            "wget",
+            "--https-only",
+            "--max-redirect=0",
+            f"--max-filesize={MAX_DOWNLOAD_BYTES}",
+            *command.argv[1:],
+        ]
+    return command.argv
 
 
 def _demultiplex(payload: bytes) -> tuple[str, str]:

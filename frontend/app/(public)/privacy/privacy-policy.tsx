@@ -1,6 +1,11 @@
-import { ArrowLeft, ShieldCheck } from "lucide-react"
+"use client"
+
+import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import type { ReactNode } from "react"
+import { useEffect, useState } from "react"
+import { DesignArtwork, MachineListHud } from "@/components/design-artwork"
+import { SlsgBrand } from "@/components/slsg-brand"
 
 type PrivacySection = {
   title: string
@@ -304,51 +309,152 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
   },
 ]
 
-export function PrivacyPolicy() {
+const PRIVACY_TOC_LABELS = [
+  "取得する情報",
+  "利用目的",
+  "Googleユーザーデータ",
+  "第三者への提供",
+  "保存と安全管理",
+  "連携解除",
+  "確認・修正・削除",
+  "Cookie",
+  "ポリシーの変更",
+  "お問い合わせ",
+]
+
+function sectionId(index: number) {
+  return `privacy-section-${index + 1}`
+}
+
+function sectionTitle(title: string) {
+  return title.replace(/^\d+\.\s*/, "")
+}
+
+function PrivacySectionIndex({ index }: { index: number }) {
   return (
-    <main className="min-h-screen bg-[#151513] px-5 py-8 text-[#e7e5df] sm:px-8 sm:py-12">
-      <div className="mx-auto max-w-3xl">
-        <Link
-          className="inline-flex items-center gap-2 text-[0.86rem] font-bold text-[#bdbbb3] transition hover:text-white"
-          href="/login"
-        >
-          <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          ログインへ戻る
+    <span aria-hidden="true" className="slsg-privacy-section-index">
+      <svg fill="none" viewBox="0 0 92 100">
+        <title>{`セクション${index}`}</title>
+        <path className="slsg-privacy-section-index-halo" d="M46 2 85 25v50L46 98 7 75V25Z" />
+        <path className="slsg-privacy-section-index-frame" d="M46 4 83 26v48L46 96 9 74V26Z" />
+      </svg>
+      <strong>{index}</strong>
+    </span>
+  )
+}
+
+export function PrivacyPolicy() {
+  const [activeSection, setActiveSection] = useState(1)
+
+  useEffect(() => {
+    const sections = PRIVACY_SECTIONS.map((_, index) =>
+      document.getElementById(sectionId(index)),
+    ).filter((section): section is HTMLElement => section instanceof HTMLElement)
+    let frameId: number | null = null
+
+    const updateActiveSection = () => {
+      frameId = null
+
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) {
+        setActiveSection(sections.length)
+        return
+      }
+
+      const readingLine = Math.min(window.innerHeight * 0.28, 240)
+      let nextActiveSection = 1
+
+      for (const [index, section] of sections.entries()) {
+        if (section.getBoundingClientRect().top > readingLine) break
+        nextActiveSection = index + 1
+      }
+
+      setActiveSection((current) => (current === nextActiveSection ? current : nextActiveSection))
+    }
+
+    const scheduleActiveSectionUpdate = () => {
+      if (frameId !== null) return
+      frameId = window.requestAnimationFrame(updateActiveSection)
+    }
+
+    updateActiveSection()
+    window.addEventListener("scroll", scheduleActiveSectionUpdate, { passive: true })
+    window.addEventListener("resize", scheduleActiveSectionUpdate)
+
+    return () => {
+      window.removeEventListener("scroll", scheduleActiveSectionUpdate)
+      window.removeEventListener("resize", scheduleActiveSectionUpdate)
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+    }
+  }, [])
+
+  return (
+    <div className="slsg-shell slsg-shell-machines slsg-privacy-page">
+      <aside className="slsg-sidebar slsg-privacy-sidebar">
+        <SlsgBrand className="slsg-privacy-brand" href="/login" />
+        <div className="slsg-privacy-sidebar-divider" />
+        <Link className="slsg-privacy-login-back" href="/login">
+          <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.8} />
+          ログイン画面に戻る
         </Link>
+        <p className="slsg-privacy-toc-heading">このページの内容</p>
+        <nav aria-label="プライバシーポリシーの目次" className="slsg-privacy-toc">
+          {PRIVACY_TOC_LABELS.map((label, index) => {
+            const itemIndex = index + 1
+            const isActive = activeSection === itemIndex
+            return (
+              <a
+                aria-current={isActive ? "location" : undefined}
+                className={isActive ? "is-active" : ""}
+                href={`#${sectionId(index)}`}
+                key={label}
+                onClick={() => setActiveSection(itemIndex)}
+              >
+                <span>{String(itemIndex).padStart(2, "0")}</span>
+                <strong>{label}</strong>
+              </a>
+            )
+          })}
+        </nav>
+      </aside>
 
-        <article className="mt-14">
-          <div className="flex items-start gap-4 border-b border-[#3a3934] pb-9">
-            <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-[#4b4a43] bg-[#20201e] text-[#e7e5df]">
-              <ShieldCheck aria-hidden="true" size={23} strokeWidth={1.8} />
-            </span>
-            <div>
-              <p className="text-[0.78rem] font-bold tracking-[0.08em] text-[#aaa89f]">SLSG</p>
-              <h1 className="mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02] font-semibold tracking-[-0.05em]">
-                プライバシーポリシー
-              </h1>
-              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月23日</p>
-            </div>
-          </div>
+      <MachineListHud />
+      <DesignArtwork variant="machines" />
 
-          <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[#d3d1ca]">
-            <p>
-              Security Learning Scenario
-              Generator（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
-            </p>
+      <main className="slsg-main slsg-privacy-main">
+        <header className="slsg-privacy-header">
+          <Link className="slsg-detail-back-link slsg-privacy-header-back" href="/login">
+            <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
+            ログインへ戻る
+          </Link>
+          <h1 className="slsg-machine-page-title font-bold">プライバシーポリシー</h1>
+          <p className="slsg-privacy-updated">最終更新日：2026年9月10日</p>
+          <p className="slsg-machine-page-description slsg-muted slsg-privacy-lead">
+            UNSAFE（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
+          </p>
+        </header>
 
-            {PRIVACY_SECTIONS.map((section) => (
-              <section key={section.title}>
-                <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
-                  {section.title}
-                </h2>
-                <div className="mt-3 space-y-5 [&_a]:underline [&_a]:underline-offset-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
-                  {section.body}
-                </div>
-              </section>
-            ))}
-          </div>
+        <article className="slsg-privacy-sections">
+          {PRIVACY_SECTIONS.map((section, index) => (
+            <section
+              className="slsg-privacy-section"
+              data-section-index={index + 1}
+              id={sectionId(index)}
+              key={section.title}
+            >
+              <PrivacySectionIndex index={index + 1} />
+              <div className="slsg-privacy-section-content">
+                <h2>{sectionTitle(section.title)}</h2>
+                <div className="slsg-privacy-section-body">{section.body}</div>
+              </div>
+            </section>
+          ))}
+
+          <section className="slsg-privacy-history">
+            <h2>変更履歴</h2>
+            <p>2026年9月5日：［変更内容］</p>
+          </section>
         </article>
-      </div>
-    </main>
+      </main>
+    </div>
   )
 }

@@ -8,11 +8,14 @@ import {
   signInWithPopup,
   signOut,
 } from "firebase/auth"
+import { Box, List, Terminal } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { FcGoogle } from "react-icons/fc"
 import { createSessionAction } from "@/app/actions/auth"
+import { DesignArtwork } from "@/components/design-artwork"
+import { SlsgBrand } from "@/components/slsg-brand"
 import { getFirebaseAuth } from "@/lib/firebase/client"
 import { LOGIN_COPY } from "@/stores/login"
 
@@ -50,60 +53,150 @@ export function LoginForm() {
   }
 
   return (
-    <main className="min-h-screen bg-white md:grid md:h-screen md:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] md:overflow-hidden">
-      <section className="flex min-h-full flex-col justify-center overflow-hidden bg-[#20201e] p-[clamp(36px,8vw,120px)] text-[#faf9f4] md:h-screen">
-        <div className="inline-flex items-center gap-2.5 text-[1.45rem] font-extrabold tracking-[-0.06em]">
-          <span className="grid size-[34px] place-items-center rounded-xl bg-white text-[1rem] tracking-normal text-[#20201e]">
-            S
-          </span>
-          <span>{LOGIN_COPY.appName}</span>
-        </div>
-        <h1 className="mt-[78px] max-w-[9ch] text-[clamp(2.8rem,6vw,5.4rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-          {LOGIN_COPY.title}
-        </h1>
-        <p className="mt-[22px] max-w-[31rem] leading-[1.8] text-[#cbc9c2]">
-          {LOGIN_COPY.description}
-        </p>
-        <div aria-hidden="true" className="mt-[58px] flex gap-2.5">
-          <span className="h-2 w-[62px] rounded-full bg-white" />
-          <span className="h-2 w-[62px] rounded-full bg-[#46443e]" />
-          <span className="h-2 w-[62px] rounded-full bg-[#46443e]" />
-        </div>
-      </section>
-      <section
-        aria-labelledby="login-heading"
-        className="md:flex md:h-screen md:items-center md:overflow-y-auto"
-      >
-        <div className="my-[50px] mx-auto w-[min(440px,calc(100%-48px))] rounded-3xl border border-[#e5e5e2] bg-white p-[clamp(28px,4vw,48px)] shadow-sm">
-          <h2
-            className="mt-2.5 mb-1.5 text-[2rem] font-bold tracking-[-0.035em]"
-            id="login-heading"
-          >
-            {LOGIN_COPY.auth.title}
-          </h2>
-          <p className="leading-[1.65] text-[#61605b]">{LOGIN_COPY.auth.description}</p>
-          {error ? (
-            <p className="mt-6 text-[0.86rem] font-bold text-[#b14334]" role="alert">
-              {error}
+    <main className="slsg-login-page">
+      <header className="slsg-login-header">
+        <SlsgBrand href="/login" variant="orbit" />
+      </header>
+
+      <div className="slsg-login-layout">
+        <section className="slsg-login-hero">
+          <p className="slsg-login-kicker">SECURITY LEARNING</p>
+          <h1 className="slsg-login-title">{LOGIN_COPY.title}</h1>
+          <p className="slsg-login-description">{LOGIN_COPY.description}</p>
+
+          <div className="slsg-login-flow">
+            {["first", "second"].map((position) => (
+              <svg
+                aria-hidden="true"
+                className={`slsg-login-flow-connector is-${position}`}
+                key={position}
+                preserveAspectRatio="none"
+                viewBox="0 0 100 14"
+              >
+                <path
+                  className="slsg-login-flow-connector-glow"
+                  d="M0 0H35.5L41.5 14H58.5L64.5 0H100"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <path d="M0 0H35.5L41.5 14H58.5L64.5 0H100" vectorEffect="non-scaling-stroke" />
+              </svg>
+            ))}
+            {[
+              { id: "theme", icon: List, label: "テーマ", text: "学びたい内容を選ぶ" },
+              { id: "machine", icon: Box, label: "マシン", text: "最適な環境を作成" },
+              { id: "learning", icon: Terminal, label: "学習", text: "実際に手を動かして理解" },
+            ].map(({ id, icon: Icon, label, text }) => (
+              <div className="slsg-login-flow-item" key={label}>
+                <span className="slsg-login-flow-icon">
+                  <svg aria-hidden="true" className="slsg-login-flow-hex" viewBox="0 0 90 90">
+                    <title>{`${label}のアイコン枠`}</title>
+                    <defs>
+                      <linearGradient
+                        id={`slsg-login-flow-${id}-border`}
+                        gradientUnits="userSpaceOnUse"
+                        x1="0"
+                        x2="90"
+                        y1="0"
+                        y2="90"
+                      >
+                        <stop offset="0" stopColor="#c5f8ff" />
+                        <stop offset="0.3" stopColor="#78bfd5" />
+                        <stop offset="0.66" stopColor="#5698ff" />
+                        <stop offset="1" stopColor="#304e8e" stopOpacity="0.52" />
+                      </linearGradient>
+                      <linearGradient
+                        id={`slsg-login-flow-${id}-glow-upper`}
+                        gradientUnits="userSpaceOnUse"
+                        x1="45"
+                        x2="7"
+                        y1="2"
+                        y2="37"
+                      >
+                        <stop offset="0" stopColor="#78bfd5" stopOpacity="0" />
+                        <stop offset="0.34" stopColor="#78bfd5" stopOpacity="0.42" />
+                        <stop offset="0.68" stopColor="#c5f8ff" />
+                        <stop offset="0.84" stopColor="#78bfd5" stopOpacity="0.34" />
+                        <stop offset="1" stopColor="#78bfd5" stopOpacity="0" />
+                      </linearGradient>
+                      <linearGradient
+                        id={`slsg-login-flow-${id}-glow-lower`}
+                        gradientUnits="userSpaceOnUse"
+                        x1="83"
+                        x2="49"
+                        y1="53"
+                        y2="87"
+                      >
+                        <stop offset="0" stopColor="#78bfd5" stopOpacity="0" />
+                        <stop offset="0.16" stopColor="#78bfd5" stopOpacity="0.38" />
+                        <stop offset="0.32" stopColor="#c5f8ff" />
+                        <stop offset="0.62" stopColor="#78bfd5" stopOpacity="0.38" />
+                        <stop offset="1" stopColor="#78bfd5" stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      className="slsg-login-flow-hex-outer"
+                      d="M45 2q2 0 4 1l31 18q3 2 3 6v36q0 4-3 6L49 87q-4 2-8 0L10 69q-3-2-3-6V27q0-4 3-6L41 3q2-1 4-1Z"
+                      stroke={`url(#slsg-login-flow-${id}-border)`}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <path
+                      className="slsg-login-flow-hex-inner"
+                      d="M45 9q2 0 4 1l25 15q3 2 3 5v30q0 3-3 5L49 80q-4 2-8 0L16 65q-3-2-3-5V30q0-3 3-5l25-15q2-1 4-1Z"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <path
+                      className="slsg-login-flow-hex-glow"
+                      d="M45 2 10 21q-3 2-3 6v10"
+                      stroke={`url(#slsg-login-flow-${id}-glow-upper)`}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <path
+                      className="slsg-login-flow-hex-glow"
+                      d="M83 53v10q0 4-3 6L49 87"
+                      stroke={`url(#slsg-login-flow-${id}-glow-lower)`}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+                  <span className="slsg-login-flow-glyph">
+                    <Icon aria-hidden="true" size={27} strokeWidth={1.55} />
+                  </span>
+                </span>
+                <strong>{label}</strong>
+                <span>{text}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section aria-labelledby="login-heading" className="slsg-login-card-wrap">
+          <div className="slsg-login-card">
+            <DesignArtwork className="slsg-login-security-art" variant="security" />
+            <h2 className="slsg-login-card-title" id="login-heading">
+              {LOGIN_COPY.auth.title}
+            </h2>
+            <p className="slsg-login-card-description">{LOGIN_COPY.auth.description}</p>
+            {error ? (
+              <p className="slsg-login-error" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <button
+              className="slsg-google-login"
+              disabled={isGoogleSigningIn}
+              onClick={handleGoogleSignIn}
+              type="button"
+            >
+              <FcGoogle aria-hidden="true" size={18} />
+              {isGoogleSigningIn ? "Google に接続しています..." : LOGIN_COPY.auth.googleLogin}
+            </button>
+            <div className="slsg-login-divider" />
+            <p className="slsg-login-consent">
+              続行すると、サービスのデータ取り扱いに同意したものとみなされます。{" "}
+              <Link href="/privacy">プライバシーポリシー</Link>
             </p>
-          ) : null}
-          <button
-            className="mt-7 inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px disabled:cursor-not-allowed disabled:opacity-55"
-            disabled={isGoogleSigningIn}
-            onClick={handleGoogleSignIn}
-            type="button"
-          >
-            <FcGoogle aria-hidden="true" size={18} />
-            {isGoogleSigningIn ? "Google に接続しています..." : LOGIN_COPY.auth.googleLogin}
-          </button>
-          <p className="mt-6 text-center text-[0.78rem] leading-6 text-[#61605b]">
-            続行すると、サービスのデータ取り扱いに同意したものとみなされます。{" "}
-            <Link className="font-bold text-[#20201e] underline underline-offset-4" href="/privacy">
-              プライバシーポリシー
-            </Link>
-          </p>
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
     </main>
   )
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import struct
 import tarfile
@@ -22,11 +23,14 @@ from ai_server.models import (
 )
 from ai_server.sandbox_app import (
     _container_configuration,
+    _declared_download_hosts,
     _demultiplex,
+    _execution_argv,
     _make_workspace_writable,
     _read_workspace_tar,
     _source_tar,
     _validate_command,
+    _validate_public_download_hosts,
     _validate_workbench_patch,
 )
 from ai_server.services.source_sandbox import SourceSandboxError, SourceSandboxExecution
@@ -170,6 +174,21 @@ def test_workbench_command_rejects_inline_shell_and_unrestricted_network() -> No
         )
 
 
+@pytest.mark.parametrize(
+    "executable",
+    ["systemd-analyze", "systemd-run", "journalctl", "loginctl", "udevadm"],
+)
+def test_workbench_command_rejects_target_vm_integration_tools(executable: str) -> None:
+    with pytest.raises(HTTPException, match="target VM integration command"):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=[executable, "--help"],
+                purpose="Do not emulate target VM integration in Docker.",
+                intent="verify",
+            )
+        )
+
+
 def test_workbench_command_allows_fresh_container_package_installation() -> None:
     _validate_command(
         SourceWorkbenchCommand(
@@ -187,6 +206,184 @@ def test_workbench_command_allows_fresh_container_package_installation() -> None
                 network_access=True,
             )
         )
+
+
+@pytest.mark.parametrize("executable", ["curl", "wget"])
+def test_workbench_command_allows_declared_https_artifact_download(executable: str) -> None:
+    source = GeneratedSource(
+        files=[
+            SourceFile(
+                path="contents/scripts/provision.sh",
+                content=(
+                    "node_base_url='https://nodejs.org/dist/v22.14.0'\n"
+                    "curl --fail \"$node_base_url/node.tar.xz\"\n"
+                ),
+                mode="0755",
+            )
+        ]
+    )
+    command = SourceWorkbenchCommand(
+        argv=[executable, "https://nodejs.org/dist/v22.14.0/SHASUMS256.txt"],
+        purpose="Download the checksummed runtime declared by provisioning.",
+        network_access=True,
+    )
+
+    declared_hosts = _declared_download_hosts(source)
+    _validate_command(command, declared_download_hosts=declared_hosts)
+
+    assert declared_hosts == frozenset({"nodejs.org"})
+    executed = _execution_argv(command)
+    if executable == "curl":
+        assert executed[:9] == [
+            "curl",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--max-redirs",
+            "0",
+            "--max-filesize",
+            "536870912",
+        ]
+    else:
+        assert executed[:4] == [
+            "wget",
+            "--https-only",
+            "--max-redirect=0",
+            "--max-filesize=536870912",
+        ]
+
+
+@pytest.mark.parametrize(
+    ("argv", "declared_hosts", "error"),
+    [
+        (
+            ["curl", "http://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "credential-free HTTPS",
+        ),
+        (
+            ["curl", "https://nodejs.org/runtime.tar.xz?token=value"],
+            frozenset({"nodejs.org"}),
+            "without query strings",
+        ),
+        (
+            ["curl", "https://nodejs.org:8443/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "credential-free HTTPS",
+        ),
+        (
+            ["curl", "https://[invalid/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "malformed",
+        ),
+        (
+            ["curl", "--location", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["curl", "-fsSL", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "option is not permitted",
+        ),
+        (
+            ["curl", "--json", "{}", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["curl", "-Asecret", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "option is not permitted",
+        ),
+        (
+            ["wget", "--post-data=value", "https://nodejs.org/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "download-only access",
+        ),
+        (
+            ["wget", "https://example.com/runtime.tar.xz"],
+            frozenset({"nodejs.org"}),
+            "must be declared",
+        ),
+        (
+            [
+                "wget",
+                "https://nodejs.org/runtime.tar.xz",
+                "127.0.0.1/internal",
+            ],
+            frozenset({"nodejs.org"}),
+            "exactly one explicit HTTPS URL",
+        ),
+    ],
+)
+def test_workbench_command_restricts_network_downloaders(
+    argv: list[str], declared_hosts: frozenset[str], error: str
+) -> None:
+    with pytest.raises(HTTPException, match=error):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=argv,
+                purpose="Reject unsafe downloader behavior.",
+                network_access=True,
+            ),
+            declared_download_hosts=declared_hosts,
+        )
+
+
+@pytest.mark.asyncio
+async def test_network_download_dns_rejects_local_and_private_addresses() -> None:
+    with pytest.raises(HTTPException, match="non-public address"):
+        await _validate_public_download_hosts(frozenset({"127.0.0.1"}))
+    with pytest.raises(HTTPException, match="non-public address"):
+        await _validate_public_download_hosts(frozenset({"169.254.169.254"}))
+
+    await _validate_public_download_hosts(frozenset({"93.184.216.34"}))
+
+
+def test_network_download_allows_retry_timeout_and_output_options() -> None:
+    declared_hosts = frozenset({"nodejs.org"})
+    for argv in (
+        [
+            "curl",
+            "--fail",
+            "--retry",
+            "3",
+            "--connect-timeout=10",
+            "--output",
+            "node_modules/node.tar.xz",
+            "https://nodejs.org/dist/v22.14.0/node.tar.xz",
+        ],
+        [
+            "wget",
+            "--tries=3",
+            "--timeout",
+            "10",
+            "--output-document",
+            "node_modules/node.tar.xz",
+            "https://nodejs.org/dist/v22.14.0/node.tar.xz",
+        ],
+    ):
+        _validate_command(
+            SourceWorkbenchCommand(
+                argv=argv,
+                purpose="Download a declared runtime into an ignored dependency directory.",
+                network_access=True,
+            ),
+            declared_download_hosts=declared_hosts,
+        )
+
+
+def test_localhost_curl_does_not_require_external_network_access() -> None:
+    command = SourceWorkbenchCommand(
+        argv=["curl", "http://127.0.0.1/health"],
+        purpose="Check the candidate service inside the offline sandbox.",
+        network_access=False,
+    )
+
+    _validate_command(command)
+    assert _execution_argv(command) == command.argv
 
 
 def test_workbench_command_allows_safe_candidate_relative_executable() -> None:
@@ -306,13 +503,23 @@ class FakeWorkbenchGenerator:
         )
 
 
+class RecordingSourceArchive:
+    def __init__(self) -> None:
+        self.progress: list[dict] = []
+
+    def record_workbench_progress(self, _archive_path, report: dict) -> None:
+        self.progress.append(copy.deepcopy(report))
+
+
 @pytest.mark.asyncio
-async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() -> None:
+async def test_workbench_agent_imports_generated_files_and_destroys_sandbox(tmp_path) -> None:
     sandbox = FakeSourceSandbox()
+    archive = RecordingSourceArchive()
     workflow = object.__new__(MachineWorkflow)
     workflow.source_sandbox = sandbox
     workflow.source_workbench_action_limit = 3
     workflow.generator = FakeWorkbenchGenerator()
+    workflow.source_archive = archive
     source = GeneratedSource(
         files=[SourceFile(path="contents/package.json", content='{"scripts":{}}\n')]
     )
@@ -342,6 +549,7 @@ async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() ->
             ),
         ),
         source,
+        archive_path=tmp_path / "source.zip",
     )
 
     assert report["status"] == "pass"
@@ -350,6 +558,10 @@ async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() ->
         "contents/package.json",
         "contents/package-lock.json",
     }
+    assert any(item.get("active_command") for item in archive.progress)
+    assert any(item["status"] == "running" and item["observations"] for item in archive.progress)
+    assert archive.progress[-1]["status"] == "pass"
+    assert archive.progress[-1]["observations"][0]["stdout"] == "build passed\n"
     assert sandbox.destroyed == ["sandbox-1"]
 
 
@@ -924,4 +1136,161 @@ async def test_workbench_technical_blocker_is_reported_as_retryable_failure() ->
     assert report["blocked_summary"] == "Candidate verification cannot be performed."
     assert report["successful_verifications"] == 0
     assert report["observations"][-1]["kind"] == "finish_blocked"
+    assert sandbox.destroyed == ["sandbox-1"]
+
+
+class VmDeferredGenerator:
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["bash", "-n", "build.sh"],
+                    cwd="contents",
+                    purpose="Verify the portable build script syntax.",
+                    intent="verify",
+                ),
+                summary="Run the portable verification first.",
+            )
+        return SourceWorkbenchDecision(
+            action="finish",
+            finish_status="deferred_to_vm",
+            summary="Service activation and boot ordering require the target VM.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_workbench_can_defer_vm_only_checks_after_portable_verification() -> None:
+    sandbox = DiagnosticFailureSandbox()
+    workflow = object.__new__(MachineWorkflow)
+    workflow.source_sandbox = sandbox
+    workflow.source_workbench_action_limit = 3
+    workflow.generator = VmDeferredGenerator()
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n", mode="0755")]
+    )
+
+    _, report = await workflow._run_source_workbench(
+        MachineInformation(
+            name="VM deferred verification",
+            visibility="private",
+            theme="VM integration",
+            difficulty="Easy",
+        ),
+        ScenarioDraft(
+            scenario_id="scenario-vm-deferred",
+            title="VM deferred verification",
+            definition="# VM deferred verification",
+            attack_graph=AttackGraph(
+                steps=[
+                    AttackStep(
+                        step_id="verify-service",
+                        title="Verify service",
+                        kind="reconnaissance",
+                        phase="reconnaissance",
+                        description="Verify the generated service.",
+                        implementation_steps=["Start the service in the target VM."],
+                    )
+                ]
+            ),
+        ),
+        source,
+    )
+
+    assert report["status"] == "pass"
+    assert report["successful_verifications"] == 1
+    assert report["deferred_to_vm"] == (
+        "Service activation and boot ordering require the target VM."
+    )
+    assert report["observations"][-1]["kind"] == "finish_deferred_to_vm"
+    assert sandbox.destroyed == ["sandbox-1"]
+
+
+class RepeatedVmCommandGenerator:
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["bash", "-n", "build.sh"],
+                    cwd="contents",
+                    purpose="Verify portable shell syntax.",
+                    intent="verify",
+                ),
+                summary="Run a portable verification.",
+            )
+        return SourceWorkbenchDecision(
+            action="run",
+            command=SourceWorkbenchCommand(
+                argv=["systemd-analyze", "verify", "config/example.service"],
+                cwd="contents",
+                purpose="Verify a service in the target VM.",
+                intent="verify",
+            ),
+            summary="Try a target VM integration command.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_repeated_vm_only_commands_do_not_exhaust_policy_rejection_limit() -> None:
+    sandbox = DiagnosticFailureSandbox()
+    workflow = object.__new__(MachineWorkflow)
+    workflow.source_sandbox = sandbox
+    workflow.source_workbench_action_limit = 6
+    workflow.generator = RepeatedVmCommandGenerator()
+    source = GeneratedSource(
+        files=[SourceFile(path="contents/build.sh", content="#!/bin/bash\n", mode="0755")]
+    )
+
+    _, report = await workflow._run_source_workbench(
+        MachineInformation(
+            name="Repeated VM command",
+            visibility="private",
+            theme="VM integration",
+            difficulty="Easy",
+        ),
+        ScenarioDraft(
+            scenario_id="scenario-repeated-vm-command",
+            title="Repeated VM command",
+            definition="# Repeated VM command",
+            attack_graph=AttackGraph(
+                steps=[
+                    AttackStep(
+                        step_id="verify-service",
+                        title="Verify service",
+                        kind="reconnaissance",
+                        phase="reconnaissance",
+                        description="Verify the generated service.",
+                        implementation_steps=["Start the service in the target VM."],
+                    )
+                ]
+            ),
+        ),
+        source,
+    )
+
+    deferred = [
+        item for item in report["observations"] if item["kind"] == "command_deferred_to_vm"
+    ]
+    assert report["status"] == "pass"
+    assert report["successful_verifications"] == 1
+    assert report["deferred_to_vm"] is not None
+    assert len(deferred) == 5
+    assert all(item["blocking"] is False for item in deferred)
     assert sandbox.destroyed == ["sandbox-1"]

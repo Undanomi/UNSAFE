@@ -442,6 +442,37 @@ def _skill_section(skill_context: str) -> str:
     return f"{policy}\n追加の専門Skill資料:\n{skill_context}\n{policy}\n"
 
 
+def automatic_flag_plan_prompt(machine: MachineInformation) -> str:
+    return f"""あなたは隔離された教育用Linuxマシンの学習目標を設計するアーキテクトです。
+ユーザーがフラグ構成を指定しなかったため、次のマシン要件に最適な構成を1つ選んでください。
+
+マシン名: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {machine.operating_system}
+
+JSONだけを返してください。形式:
+{{
+  "selection": "user | system | both",
+  "user_flag_details": "...",
+  "system_flag_details": "..."
+}}
+
+規則:
+- selectionは必ずuser、system、bothのいずれかにし、フラグなしは選ばない
+- userは初期侵入や一般ユーザー権限の獲得を主な到達目標にする場合に選ぶ
+- systemは管理者権限のサービスやシステム領域への直接的な攻略を単独の到達目標にする場合に選ぶ
+- bothは初期侵入から一般ユーザー権限を経て権限昇格へ進む段階的な学習が適切な場合に選ぶ
+- 難易度、テーマ、現実的な攻略手順を考慮し、不要に目標を増やさない
+- 選択したフラグのdetailsには、到達時の実効ユーザー、配置場所、到達までに必要な操作や前提を、
+  後続の攻撃グラフを設計できる程度に具体的に記述する
+- 選択していないフラグのdetailsは空文字列にする
+- 実際のフラグ値やflag{{...}}形式の文字列は生成しない
+- userとsystemの両方を選ぶ場合、user取得後にsystem取得へ進む依存関係が分かるようにする
+- systemだけを選ぶ場合、userフラグを前提にせずsystemへ到達できる条件にする
+"""
+
+
 def attack_graph_prompt(
     machine: MachineInformation,
     rejected: list[str],
@@ -1062,6 +1093,9 @@ JSONのみを返してください。
 - intent=verifyのコマンドが成功し、十分に検証できた場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"verified",
   "summary":"成功した検証証拠と完了理由"}}
+- アプリの可搬な検証は成功したが、残りが対象VMのプロビジョニングまたは起動済みVMでしか確認できない場合:
+  {{"action":"finish","command":null,"patch":null,"finish_status":"deferred_to_vm",
+  "summary":"Dockerでは確認できない事項と、Packerまたは起動済みVMへ委ねる理由"}}
 - 検証を実行できない、またはモデル自身が検証を拒否する場合:
   {{"action":"finish","command":null,"patch":null,"finish_status":"blocked",
   "summary":"実行できない検証と具体的な阻害理由"}}
@@ -1071,6 +1105,22 @@ JSONのみを返してください。
   provision.shが導入するapt packageを確認し、必要なら最初に`apt-get update`、次に
   `apt-get install -y --no-install-recommends ...`をrun_as_root=true、network_access=trueで実行して、
   パッケージ名と導入過程を検証する。候補に書かれていないランタイムを便宜的に追加しない
+- 本番成果物はPackerで構築する本物のVMだが、このワークベンチは最小Dockerコンテナである。
+  init/systemdの起動、boot順序、unitのenable/start、mount namespace、kernel・device・login session、
+  host network、再起動後の状態など、起動済みVMが必要な挙動をDocker上で再現・代用しようとしない。
+  これらは設定ファイルを静的に照合し、実際の作動確認は後段のPacker、health check、acceptance testへ委ねる
+- provision.shが対象VM用のruntimeやbuild artifactを固定versionの公式archive等としてcurl/wgetで取得する場合、
+  build.shまたはprovision.shに明記された同じhostの成果物を、非rootかつnetwork_access=trueで取得して検証してよい。
+  argvにはquery・fragment・credentialのない直接のHTTPS URLを渡し、redirect、upload、任意method、proxy、config用optionを
+  使わない。接続先は実行直前のDNS検査でもpublic addressに限定され、取得量にも上限がある。一時的なruntimeや依存物は
+  node_modulesや.venv等の除外済み依存物ディレクトリに置き、公開checksumを照合してから展開・実行する。第三者PoC、
+  exploit script、候補にないinstallerは取得しない。取得、checksum照合、依存導入、テストが失敗した場合は原因を調査し、
+  修正可能な候補不備をPackerへ先送りしない
+- `systemd-analyze`、`systemd-run`、`systemctl`、`journalctl`、`loginctl`、`udevadm`等のVM統合ツールを
+  ワークベンチで実行せず、それらを使えないことを候補ソースの失敗にしない。unitは`sed`や`cat`で静的に
+  読み、既知のdirectiveとシナリオ契約を照合する。補助検査ツールを使う目的だけで候補に未宣言のpackageを
+  インストールしない。誤って提案したVM統合コマンドは実行も通常のポリシー違反回数への加算もされず、
+  command_deferred_to_vmとして返されるため、同じ提案を繰り返さず静的確認またはdeferred_to_vmで完了する
 - shell文字列ではなくargvを返す。`sh -c`、`bash -c`、eval、sudo、su、systemctl、service、reboot、
   mount、docker、podman、qemu、packer、SSHおよび絶対パスを使わない。生成物内の実行ファイルは
   `./node_modules/.bin/...`などcwd基準の安全な相対パスなら使用できる。`..`は使わない
@@ -1083,9 +1133,12 @@ JSONのみを返してください。
 - ファイル内容や環境を調べるだけのコマンドはintent=inspect、候補の正しさを合否判定する構文検査、
   依存解決、コンパイル、テスト、失敗再現はintent=verifyにする。inspectの失敗は修正後の必須再実行に
   ならない。verifyは失敗後にpatchした場合、システムが同じ条件で自動再実行する
-- finish_status=verifiedは少なくとも1件のintent=verifyが成功した後だけ使用する。inspect、説明、推測、
-  または検証拒否を成功証拠として扱わない。検証不能やモデル自身による拒否はfinish_status=blockedを
-  使用する。この自己申告はプロバイダーが返す明示的なセーフガード拒否とは区別される
+- finish_status=verifiedとdeferred_to_vmは、少なくとも1件のDockerで実行可能なintent=verifyが成功した
+  後だけ使用する。deferred_to_vmは、残る確認が本質的に対象VMのプロビジョニングまたは起動済みVMを必要とする
+  場合だけ使う。許可されたcurl/wgetで取得可能なruntimeや可搬な依存物の単なる未導入、通常のテスト失敗、
+  修正可能な候補不備をVMへ先送りしない。inspect、説明、推測、または検証拒否を
+  成功証拠として扱わない。Dockerで実行可能な必須検証を実行できない場合やモデル自身による拒否は
+  finish_status=blockedを使用する。この自己申告はプロバイダーの明示的なセーフガード拒否とは区別される
 - incoming_failureがある場合は後段のVM/Packerで既に起きた一次情報である。同じ原因を再現できる最小の
   コマンドを優先し、ログ内の絶対パスはワークベンチの`contents/`以下へ読み替えて実物を確認する
 - patchは生成ソースだけに適用し、node_modules、.venv、ビルド出力など取得・生成した依存物を
@@ -1094,9 +1147,11 @@ JSONのみを返してください。
   失敗したverifyコマンドは同じargv、cwd、権限、ネットワーク条件で成功するまでfinishできない。
   依存マニフェストや
   lockfileを変えた場合は依存導入をやり直してから検証する
-- OS/runtime導入のapt-getと、依存取得に必要なpackage managerコマンドだけnetwork_access=trueにできる。
+- OS/runtime導入のapt-get、依存取得に必要なpackage managerコマンド、候補に明記されたruntime/build artifactを
+  HTTPSで取得するcurl/wgetだけnetwork_access=trueにできる。
   npm/yarn/pnpmでは必ずscriptsを無効化し、lockfile生成ではpackage-lock-only等を使う。
-  curl/wgetや任意スクリプトへnetwork_access=trueを付けない
+  curl/wgetは非rootの取得専用とし、localhost・private/link-local宛通信、HTTP、redirect、任意スクリプトの取得、
+  upload、任意method、proxy、config、credential用optionに使わない。localhostへのアプリ疎通確認はnetwork_access=falseで行う
 - GitHub、Exploit-DB、ブログ、gist等から取得した第三者PoC、exploit script、Metasploit moduleを
   ワークベンチ内で取得・コピー・実行しない。READMEで攻略者にその入手・利用を案内する記述は残してよい。
   生成物だけで安全な自己完結テストを作れなければ、その攻撃固有の検証は行わず他の検査を続ける
@@ -1104,7 +1159,8 @@ JSONのみを返してください。
   runtime/package導入、依存導入、アプリbuildだけでなく、独自のソース変換、導入後ファイル検査、
   fail-closed assertionも個別コマンドで同じ順序・条件に近づけて検証する。今回たまたま使われた技術を
   汎用必須検査だと決めつけず、候補に実在する処理だけを検査する
-- systemd unitが攻撃主体を起動する場合は、owner/group/modeだけでなく`ProtectSystem`、`ProtectHome`、
+- systemd unitが攻撃主体を起動する場合は、unitファイルを静的に読み、owner/group/modeだけでなく
+  `ProtectSystem`、`ProtectHome`、
   `ReadOnlyPaths`、`ReadWritePaths`等を静的に照合する。攻撃経路に必要なパスがunit内でread-onlyなら、
   unit外の`runuser ... test -w`成功を根拠にせず、意図したパスだけを書込み可能に修正する
 - 前段成果物を使う再login、`su`・`sudo`、別service、cron・timer・setuid、container等への遷移が
