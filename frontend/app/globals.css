@@ -2266,6 +2266,92 @@
     flex-direction: column;
     margin: 0 auto;
   }
+  .slsg-chat-loading-content {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .slsg-chat-loading-heading {
+    display: grid;
+    justify-items: start;
+    gap: 17px;
+  }
+  .slsg-chat-loading-line,
+  .slsg-chat-loading-avatar,
+  .slsg-chat-loading-button {
+    display: block;
+    flex: 0 0 auto;
+    max-width: 100%;
+    border-radius: 7px;
+    background: linear-gradient(100deg, #344157 0%, #46556c 48%, #344157 100%);
+    background-size: 200% 100%;
+    animation: slsg-chat-loading-pulse 2s ease-in-out infinite;
+  }
+  .slsg-chat-loading-line.is-eyebrow {
+    width: 118px;
+    height: 10px;
+  }
+  .slsg-chat-loading-line.is-title {
+    width: min(300px, 65%);
+    height: 35px;
+  }
+  .slsg-chat-loading-line.is-description {
+    width: min(380px, 85%);
+    height: 16px;
+  }
+  .slsg-chat-loading-line.is-panel-title {
+    width: 185px;
+    height: 26px;
+  }
+  .slsg-chat-loading-line.is-panel-detail {
+    width: min(320px, 42%);
+    height: 13px;
+    margin-left: auto;
+  }
+  .slsg-chat-loading-messages {
+    align-content: start;
+  }
+  .slsg-chat-loading-message {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+  }
+  .slsg-chat-loading-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+  .slsg-chat-loading-message-lines {
+    display: grid;
+    width: min(480px, 75%);
+    gap: 13px;
+    padding-top: 3px;
+  }
+  .slsg-chat-loading-line.is-message-title {
+    width: 42%;
+    height: 15px;
+  }
+  .slsg-chat-loading-line.is-message-body {
+    width: 90%;
+    height: 22px;
+  }
+  .slsg-chat-loading-line.is-input {
+    width: 100%;
+    height: 46px;
+    border-radius: 8px;
+  }
+  .slsg-chat-loading-button {
+    width: 46px;
+    height: 46px;
+    border-radius: 8px;
+  }
+  @keyframes slsg-chat-loading-pulse {
+    to {
+      background-position: -200% 0;
+    }
+  }
   .slsg-chat-header {
     position: relative;
     flex: 0 0 150px;
@@ -3323,6 +3409,9 @@
   .slsg-chat-workspace {
     height: auto;
   }
+  .slsg-chat-loading .slsg-chat-conversation {
+    min-height: 420px;
+  }
   .slsg-chat-header {
     flex-basis: 170px;
     min-height: 170px;
@@ -3367,6 +3456,10 @@
     align-items: stretch;
     flex-direction: column;
     gap: 18px;
+  }
+  .slsg-chat-loading-line.is-panel-detail {
+    width: min(240px, 65%);
+    margin-left: 0;
   }
   .slsg-chat-panel-progress {
     width: 100%;
@@ -5976,6 +6069,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .slsg-chat-loading-line,
+  .slsg-chat-loading-avatar,
+  .slsg-chat-loading-button {
+    animation: none;
+  }
+
   .slsg-state-loading-track i {
     left: 29%;
     animation: none;

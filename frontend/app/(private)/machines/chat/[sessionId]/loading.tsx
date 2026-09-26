@@ -1,10 +1,10 @@
 import { AppShell } from "@/components/app-shell"
-import { PageLoading } from "@/components/page-loading"
+import { ChatLoadingSkeleton } from "@/components/chat-loading-skeleton"
 
 export default function ChatSessionLoading() {
   return (
-    <AppShell contentClassName="py-9 pb-14 max-lg:py-8">
-      <PageLoading />
+    <AppShell artworkVariant="machines" layoutVariant="chat">
+      <ChatLoadingSkeleton />
     </AppShell>
   )
 }
