@@ -315,6 +315,7 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert "event: scenario.delta" in events.text
     assert "event: scenario.completed" in events.text
     assert '"target_os": "Debian 13.7.0"' in events.text
+    assert '"tags": ["セキュリティ演習", "設定不備"]' in events.text
 
     scenario_state = await app.state.repository.get(session_id)
     scenario = scenario_state.scenario
@@ -324,6 +325,7 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert scenario.user_flag is not None
     assert re.fullmatch(r"flag\{user_[0-9a-f]{32}\}", scenario.user_flag)
     assert scenario.system_flag is None
+    assert scenario.tags == ["セキュリティ演習", "設定不備"]
     assert scenario.user_flag not in events.text
     version_root = app.state.workflow.source_archive.root / session_id / "v1"
     assert (version_root / "scenario.md").read_text() == scenario.definition.rstrip() + "\n"

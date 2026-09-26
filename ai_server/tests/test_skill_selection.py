@@ -181,6 +181,7 @@ async def test_gemini_gets_only_selected_cve_reference(tmp_path, monkeypatch):
             {
                 "scenario_description": "Investigate the generated training machine.",
                 "definition": "# Scenario",
+                "tags": ["SSTI"],
             }
         )
 

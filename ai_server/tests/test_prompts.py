@@ -190,9 +190,11 @@ def test_all_generation_prompts_include_shared_constraints() -> None:
     assert "表記や語彙は、文章全体として自然で意味が明確なら自由" in design_prompts[1]
     assert "正確なstep_idとtitle" in design_prompts[1]
     assert "複数stepへ分割・統合" in design_prompts[1]
+    assert "tags" in design_prompts[1]
+    assert "1〜5個" in design_prompts[1]
 
     assert len(design_prompts[0]) < 3200
-    assert len(design_prompts[1]) < 3800
+    assert len(design_prompts[1]) < 4100
 
     for prompt in implementation_prompts:
         assert "rockyou.txt" in prompt

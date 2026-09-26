@@ -2726,7 +2726,7 @@
   }
   .slsg-chat-theme-options {
     display: grid;
-    grid-template-columns: 1.25fr 0.9fr 1.03fr 0.94fr 1.03fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
   }
   .slsg-chat-option-grid {
@@ -2750,6 +2750,9 @@
       background 160ms ease,
       box-shadow 160ms ease,
       transform 160ms ease;
+  }
+  .slsg-chat-theme-options .slsg-chat-option {
+    padding-block: 14px;
   }
   .slsg-chat-option:hover {
     border-color: #6f88aa;
@@ -3247,7 +3250,7 @@
     width: 100%;
   }
   .slsg-chat-theme-options {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .slsg-chat-cancel {
     min-width: 112px;

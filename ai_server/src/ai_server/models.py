@@ -11,6 +11,7 @@ USER_FLAG_VALUE_PATTERN = re.compile(r"^flag\{user_[0-9a-f]{32}\}$")
 SYSTEM_FLAG_VALUE_PATTERN = re.compile(r"^flag\{system_[0-9a-f]{32}\}$")
 SCENARIO_DEFINITION_MAX_CHARS = 12_000
 ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
+ScenarioTag = Annotated[str, Field(min_length=1, max_length=30)]
 
 
 def rockyou_password_placeholder(step_id: str) -> str:
@@ -280,6 +281,7 @@ class ScenarioDraft(BaseModel):
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
+    tags: list[ScenarioTag] = Field(default_factory=list, max_length=5)
     user_flag: str | None = Field(
         default=None,
         min_length=22,
@@ -300,6 +302,16 @@ class ScenarioDraft(BaseModel):
         if self.user_flag and self.system_flag and self.user_flag == self.system_flag:
             raise ValueError("user_flag and system_flag must be different")
         return self
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("scenario tags must not be blank")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("scenario tags must not contain duplicates")
+        return normalized
 
 
 def scenario_is_valid_for_machine(machine: MachineInformation, scenario: ScenarioDraft) -> bool:
@@ -432,6 +444,17 @@ class ScenarioTextRevision(BaseModel):
 class ScenarioGeneration(BaseModel):
     scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
+    tags: list[ScenarioTag] = Field(min_length=1, max_length=5)
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("scenario tags must not be blank")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("scenario tags must not contain duplicates")
+        return normalized
 
 
 class ScenarioTextReplacement(BaseModel):

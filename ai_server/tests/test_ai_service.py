@@ -642,6 +642,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
                 {
                     "scenario_description": "Investigate the machine.",
                     "definition": compacted_definition,
+                    "tags": ["Web"],
                 }
             )
 
@@ -657,6 +658,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
                 {
                     "scenario_description": "Investigate the machine.",
                     "definition": overlong_definition,
+                    "tags": ["Web"],
                 }
             ),
         )
@@ -664,6 +666,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
     assert len(overlong_definition) > 12_000
     assert len(result.definition) <= 10_500
     assert result.definition == compacted_definition
+    assert result.tags == ["Web"]
     assert "新しい案へ作り直さず" in prompts[0]
     assert overlong_definition in prompts[0]
 
@@ -1593,6 +1596,7 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
                         f"# Generated scenario attempt {request_number}\n\n"
                         "Parent directory mode is unspecified."
                     ),
+                    "tags": ["権限設定"],
                 }
             )
         if request_number == 3:
@@ -2173,6 +2177,7 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
                         f"# Generated scenario attempt {request_number}\n\n"
                         "The credential is available without the prerequisite."
                     ),
+                    "tags": ["認証情報"],
                 }
             )
         if request_number == 3:
@@ -2250,6 +2255,7 @@ async def test_generated_graph_issue_cannot_be_routed_to_user_input() -> None:
         {
             "scenario_description": "Training scenario.",
             "definition": "# Training scenario",
+            "tags": ["CVE"],
         },
         {
             "approved": False,
@@ -2325,6 +2331,7 @@ async def test_explicit_input_contradiction_requests_input_revision() -> None:
         {
             "scenario_description": "Training scenario.",
             "definition": "# Training scenario",
+            "tags": ["権限昇格"],
         },
         {
             "approved": False,
@@ -2779,6 +2786,7 @@ async def test_generate_scenario_without_cve_does_not_request_cve_services() -> 
                 {
                     "scenario_description": "Investigate the training machine and capture the flag.",
                     "definition": "# Generated scenario",
+                    "tags": ["Web"],
                 }
             )
         return gemini_response(

@@ -32,7 +32,7 @@ import {
   type ChatSession,
   DIFFICULTY_OPTIONS,
   EMPTY_CHAT_ANSWERS,
-  THEME_SUGGESTIONS,
+  SCENARIO_PROMPT_SUGGESTIONS,
   VISIBILITY_OPTIONS,
 } from "@/stores/chat"
 
@@ -962,7 +962,7 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
     return (
       <div className="slsg-chat-theme-input">
         <div className="slsg-chat-theme-options">
-          {THEME_SUGGESTIONS.map((theme) => (
+          {SCENARIO_PROMPT_SUGGESTIONS.map((theme) => (
             <button
               className={`slsg-chat-option ${answers.theme === theme ? "is-selected" : ""}`}
               key={theme}
@@ -974,15 +974,17 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
           ))}
         </div>
         <label className="slsg-chat-field">
-          <span>{CHAT_COPY.fields.freeInput}</span>
+          <span>{CHAT_COPY.fields.scenarioPrompt}</span>
           <textarea
             className="slsg-input slsg-chat-textarea"
+            maxLength={500}
             onChange={(event) => onChange({ theme: event.target.value })}
             onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
-            placeholder={CHAT_COPY.fields.themePlaceholder}
-            rows={3}
+            placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
+            rows={5}
             value={answers.theme}
           />
+          <small className="slsg-chat-character-count">{answers.theme.length} / 500</small>
         </label>
       </div>
     )
