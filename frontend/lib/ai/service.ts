@@ -28,6 +28,28 @@ export type AiSessionResponse = {
     summary: string
     retry_allowed: false
   } | null
+  source_workbench: {
+    updated_at?: string
+    report?: {
+      status?: string
+      summary?: string
+      error_message?: string
+      active_command?: {
+        argv?: string[]
+        cwd?: string
+      }
+      observations?: Array<{
+        kind?: string
+        summary?: string
+        reason?: string
+        error?: string
+        exit_code?: number
+        stdout?: string
+        stderr?: string
+        command?: { argv?: string[]; cwd?: string }
+      }>
+    }
+  } | null
   scenario: {
     scenario_id: string
     title: string

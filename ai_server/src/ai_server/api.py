@@ -90,6 +90,14 @@ def _response(request: Request, state) -> SessionResponse:
             "retry_allowed": False,
         }
         payload["error_message"] = failure["summary"]
+    source_workbench = (
+        request.app.state.workflow.source_archive.load_workbench_progress(
+            state.session_id,
+            state.scenario.scenario_version_id,
+        )
+        if state.scenario is not None
+        else None
+    )
     return SessionResponse(
         **payload,
         scenario_events_url=events,
@@ -97,6 +105,7 @@ def _response(request: Request, state) -> SessionResponse:
         user_flag=state.scenario.user_flag if state.scenario else None,
         system_flag=state.scenario.system_flag if state.scenario else None,
         failure=failure,
+        source_workbench=source_workbench,
     )
 
 

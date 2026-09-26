@@ -463,6 +463,42 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
 
 
 @pytest.mark.asyncio
+async def test_unspecified_flags_are_planned_and_persisted_before_scenario(client) -> None:
+    http, app, _ = client
+    headers = {"X-Authenticated-User-ID": "user-123"}
+    session_id = (await http.post("/v1/sessions", headers=headers)).json()["session_id"]
+    saved = await http.put(
+        f"/v1/sessions/{session_id}/machine-information",
+        headers=headers,
+        json={
+            "name": "Automatic flags",
+            "visibility": "private",
+            "theme": "Web security",
+            "difficulty": "Easy",
+        },
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["machine_information"]["needs_user_flag"] is None
+    assert saved.json()["machine_information"]["needs_system_flag"] is None
+
+    events = await http.get(f"/v1/sessions/{session_id}/scenarios/events", headers=headers)
+
+    assert events.status_code == 200
+    assert "event: scenario.flags_planned" in events.text
+    assert '\"selection\": \"user\"' in events.text
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.machine_information is not None
+    assert persisted.machine_information.needs_user_flag is True
+    assert persisted.machine_information.needs_system_flag is False
+    assert persisted.machine_information.user_flag_details
+    assert persisted.machine_information.system_flag_details == ""
+    assert persisted.scenario is not None
+    assert persisted.scenario.user_flag is not None
+    assert persisted.scenario.system_flag is None
+
+
+@pytest.mark.asyncio
 async def test_session_owner_is_not_disclosed(client) -> None:
     http, _, _ = client
     created = await http.post("/v1/sessions", headers={"X-Authenticated-User-ID": "owner"})
@@ -2099,6 +2135,19 @@ async def test_scenario_text_source_review_finding_routes_to_scenario_sync(clien
     submitted = await app.state.repository.get(state.session_id)
     assert submitted.scenario is not None
     assert submitted.scenario.definition == "The target uses MariaDB."
+    version_root = (
+        app.state.workflow.scenario_archive.root
+        / state.session_id
+        / submitted.scenario.scenario_version_id
+    )
+    assert (version_root / "scenario.md").read_text() == "The target uses MariaDB.\n"
+    root_review = json.loads((version_root / "scenario_review.json").read_text())
+    assert root_review["approved"] is True
+    assert root_review["summary"] == (
+        "Deterministic stub scenario is accepted for local integration testing."
+    )
+    root_metadata = json.loads((version_root / "scenario_metadata.json").read_text())
+    assert root_metadata["promoted_after_source_sync"] is True
 
 
 @pytest.mark.asyncio

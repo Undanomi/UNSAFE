@@ -442,6 +442,37 @@ def _skill_section(skill_context: str) -> str:
     return f"{policy}\n追加の専門Skill資料:\n{skill_context}\n{policy}\n"
 
 
+def automatic_flag_plan_prompt(machine: MachineInformation) -> str:
+    return f"""あなたは隔離された教育用Linuxマシンの学習目標を設計するアーキテクトです。
+ユーザーがフラグ構成を指定しなかったため、次のマシン要件に最適な構成を1つ選んでください。
+
+マシン名: {machine.name}
+テーマ: {machine.theme}
+難易度: {machine.difficulty}
+対象OS: {machine.operating_system}
+
+JSONだけを返してください。形式:
+{{
+  "selection": "user | system | both",
+  "user_flag_details": "...",
+  "system_flag_details": "..."
+}}
+
+規則:
+- selectionは必ずuser、system、bothのいずれかにし、フラグなしは選ばない
+- userは初期侵入や一般ユーザー権限の獲得を主な到達目標にする場合に選ぶ
+- systemは管理者権限のサービスやシステム領域への直接的な攻略を単独の到達目標にする場合に選ぶ
+- bothは初期侵入から一般ユーザー権限を経て権限昇格へ進む段階的な学習が適切な場合に選ぶ
+- 難易度、テーマ、現実的な攻略手順を考慮し、不要に目標を増やさない
+- 選択したフラグのdetailsには、到達時の実効ユーザー、配置場所、到達までに必要な操作や前提を、
+  後続の攻撃グラフを設計できる程度に具体的に記述する
+- 選択していないフラグのdetailsは空文字列にする
+- 実際のフラグ値やflag{{...}}形式の文字列は生成しない
+- userとsystemの両方を選ぶ場合、user取得後にsystem取得へ進む依存関係が分かるようにする
+- systemだけを選ぶ場合、userフラグを前提にせずsystemへ到達できる条件にする
+"""
+
+
 def attack_graph_prompt(
     machine: MachineInformation,
     rejected: list[str],

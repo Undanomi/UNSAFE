@@ -16,6 +16,7 @@ export type MachineListItem = Pick<
   created_at: string
   authorId: string
   author: string
+  authorAvatarUrl: string
   isOwned: boolean
   isSolved: boolean
 }

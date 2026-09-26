@@ -70,6 +70,7 @@ X-Authenticated-User-ID: user-123
   "build_progress": 0,
   "build_repair_attempts": 0,
   "machine_access": null,
+  "source_workbench": null,
   "artifact": null,
   "error_message": null,
   "created_at": "2026-08-27T11:26:46.058333Z",
@@ -90,6 +91,10 @@ ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報と�
 含まれません。自動生成値は `flag{user_<32桁hex>}` または `flag{system_<32桁hex>}` 形式です。
 VMへの配置とacceptance testは、ソース内の文字列一致ではなくPacker中の実行結果と敵対的AIレビューで
 確認します。
+
+`source_workbench` はソース検証中のサンドボックス実行状況です。実行中は現在のコマンドを、各コマンドの
+完了後はstdout、stderr、終了コードを返します。内容は各観測のたびに `source/repair_report.json` へ
+atomicに更新され、最終状態は `source.zip` にも収録されます。
 
 ### セッション状態
 
@@ -148,10 +153,14 @@ build_serverへ依頼済みの場合は変更できません。
 | `theme` | 必須 | 学習テーマ。1〜500文字 |
 | `difficulty` | 必須 | `Very Easy`、`Easy`、`Medium`、`High` |
 | `operating_system` | 任意 | 対象OS。省略時は `Debian 13.7.0` |
-| `needs_user_flag` | 任意 | ユーザーフラグを用意するか |
+| `needs_user_flag` | 任意 | ユーザーフラグを用意するか。両フラグを未指定にするとAIが自動決定する |
 | `user_flag_details` | 条件付き | `needs_user_flag=true` の場合は空にできない。最大4000文字 |
-| `needs_system_flag` | 任意 | システムフラグを用意するか |
+| `needs_system_flag` | 任意 | システムフラグを用意するか。両フラグを未指定にするとAIが自動決定する |
 | `system_flag_details` | 条件付き | `needs_system_flag=true` の場合は空にできない。最大4000文字 |
+
+`needs_user_flag`と`needs_system_flag`が両方とも省略または`null`の場合、シナリオ生成前にAIが
+`user`、`system`、`both`から構成を選び、選択したフラグの取得条件とともにマシン情報へ保存します。
+明示した真偽値はAIによって上書きされません。
 
 成功時は `200 OK` と、状態が `ready` のセッションを返します。
 
@@ -198,6 +207,7 @@ curl -N http://localhost:8000/v1/sessions/{session_id}/scenarios/events \
 | SSEイベント | 意味 | `data` の主な内容 |
 | --- | --- | --- |
 | `scenario.started` | シナリオ生成を開始した | `session_id` |
+| `scenario.flags_planned` | 未指定だったフラグ構成をAIが確定した | `selection`、各フラグの取得条件 |
 | `scenario.delta` | Markdown本文の一部分を生成した | `content` |
 | `scenario.completed` | シナリオを保存し、生成が完了した | `scenario` |
 | `scenario.error` | AI呼び出しや検証に失敗した | `detail` |
@@ -252,6 +262,9 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 ソース修復によってパス、実行主体、owner、group、mode、ACL、sudoers、capability、脆弱性、
 前提関係、検証方法が変わった場合、修復前の説明を残さず、同期・再審査を通過したシナリオだけを
 同じセッションへ保存します。
+このときバージョン直下の `scenario.md`、`scenario_description.txt`、`attack_graph.json`、
+`scenario_review.json`、`scenario_metadata.json` も最終内容へ更新します。`attempts/` 以下は生成時点の
+監査履歴として変更しません。
 
 コード生成後にbuild_serverへの接続だけが失敗したセッションは、同じエンドポイントで再試行できます。
 保存済みの `source.zip` とチェックサムが有効な場合、AIによるコード生成は繰り返さず、そのZIPを

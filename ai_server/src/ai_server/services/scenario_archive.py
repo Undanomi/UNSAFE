@@ -84,6 +84,50 @@ class ScenarioDraftArchive:
         for name, content in latest_files.items():
             self._write_atomic(version_root / name, content.rstrip() + "\n")
 
+    def promote_latest(
+        self,
+        session_id: str,
+        attempt: int,
+        scenario: ScenarioDraft,
+        review: ScenarioReview,
+        machine: MachineInformation,
+    ) -> None:
+        """Replace root artifacts after a later workflow synchronizes the scenario."""
+
+        scenario = strip_rockyou_selections(scenario)
+        version_root = self.root / session_id / scenario.scenario_version_id
+        version_root.mkdir(parents=True, exist_ok=True, mode=0o750)
+        self._migrate_flat_attempts(version_root)
+        review_payload = review.model_dump(mode="json")
+        metadata = {
+            "session_id": session_id,
+            "attempt": attempt,
+            "status": "approved" if review.approved else "rejected",
+            "scenario_id": scenario.scenario_id,
+            "scenario_version_id": scenario.scenario_version_id,
+            "title": scenario.title,
+            "target_os": scenario.target_os,
+            "review_approved": review.approved,
+            "review_policy_version": SCENARIO_REVIEW_POLICY_VERSION,
+            "machine_information_checksum": self.machine_checksum(machine),
+            "promoted_after_source_sync": True,
+        }
+        latest_files = {
+            "scenario.md": scenario.definition,
+            "scenario_description.txt": scenario.scenario_description,
+            "attack_graph.json": json.dumps(
+                scenario.attack_graph.model_dump(mode="json"), ensure_ascii=False, indent=2
+            ),
+            "scenario_review.json": json.dumps(
+                review_payload, ensure_ascii=False, indent=2
+            ),
+            "scenario_metadata.json": json.dumps(
+                metadata, ensure_ascii=False, indent=2
+            ),
+        }
+        for name, content in latest_files.items():
+            self._write_atomic(version_root / name, content.rstrip() + "\n")
+
     def start_attempt(
         self,
         session_id: str,
