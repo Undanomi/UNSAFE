@@ -23,6 +23,7 @@ type MachineListRow = Pick<
 > & {
   author_id: string
   author: string
+  author_icon_url: string
   is_owned: boolean
   is_solved: boolean
 }
@@ -82,6 +83,7 @@ export async function getMachineListService(
     `SELECT
        m.id, m.name, m.summary, m.description, m.tags, m.level, m.created_at,
        m.published, m.status, m.created_by AS author_id, u.name AS author,
+       u.icon_url AS author_icon_url,
        (m.created_by = $1) AS is_owned,
        EXISTS (
          SELECT 1 FROM machine_solutions s
@@ -106,6 +108,7 @@ export async function getMachineListService(
     status: row.status,
     authorId: row.author_id,
     author: row.author || "ユーザー",
+    authorAvatarUrl: row.author_icon_url,
     isOwned: row.is_owned,
     isSolved: row.is_solved,
   }))

@@ -855,6 +855,9 @@
   .slsg-machine-name:hover,
   .slsg-machine-author:hover {
     color: #ffffff;
+  }
+  .slsg-machine-name:hover,
+  .slsg-machine-author:hover .slsg-machine-author-name {
     text-decoration: underline;
     text-underline-offset: 4px;
   }
