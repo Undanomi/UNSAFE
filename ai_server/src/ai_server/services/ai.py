@@ -591,15 +591,17 @@ class _BaseGenerator:
             return ScenarioGeneration.model_validate(value)
         scenario_description = value.get("scenario_description")
         definition = value.get("definition")
+        tags = value.get("tags")
         if not (
             isinstance(scenario_description, str)
             and isinstance(definition, str)
+            and isinstance(tags, list)
             and len(definition) > SCENARIO_DEFINITION_TARGET_CHARS
         ):
             return ScenarioGeneration.model_validate(value)
 
         last_error: Exception | None = None
-        prompt = scenario_compaction_prompt(machine, scenario_description, definition)
+        prompt = scenario_compaction_prompt(machine, scenario_description, definition, tags)
         for _ in range(self.settings.generation_retries):
             compacted_response: str | None = None
             try:
@@ -615,6 +617,8 @@ class _BaseGenerator:
                         "compacted scenario definition exceeds target length "
                         f"{SCENARIO_DEFINITION_TARGET_CHARS}"
                     )
+                if compacted.tags != tags:
+                    raise ValueError("scenario compaction must preserve generated tags")
                 return compacted
             except (
                 httpx.HTTPError,
@@ -1218,6 +1222,7 @@ JSONのみを返してください:
                         definition=generated.definition,
                         target_os=machine.operating_system,
                         attack_graph=graph,
+                        tags=generated.tags,
                     )
                 else:
                     active_review_feedback = (

@@ -51,7 +51,8 @@ Webサービスを含む生成物は、IPアドレスだけで`/`へアクセス
 生成・レビュー時に判断します。
 
 シナリオは、攻略のネタバレを避けたプレイヤー向けの `scenario_description`、実装者向けの
-`scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）を保存します。
+`scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）、完成内容からAIが生成した
+検索・分類用の `tags` を保存します。
 攻撃グラフは可変長のステップ、
 ステップ間の依存関係、user/system flagの到達目標を持ちます。CVEは攻撃ステップの任意の
 種類の1つであり、Web脆弱性、設定不備、認証情報、ロジック不備なども組み合わせられます。

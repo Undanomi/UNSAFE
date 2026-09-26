@@ -126,6 +126,7 @@ class SessionRepository:
                 ScenarioVersionRecord.scenario_definition,
                 ScenarioVersionRecord.target_os,
                 ScenarioVersionRecord.attack_graph,
+                ScenarioVersionRecord.tags,
                 ScenarioVersionRecord.user_flag,
                 ScenarioVersionRecord.system_flag,
             )
@@ -155,8 +156,9 @@ class SessionRepository:
                 definition=row[3],
                 target_os=row[4],
                 attack_graph=AttackGraph.model_validate(row[5]),
-                user_flag=row[6],
-                system_flag=row[7],
+                tags=row[6] or [],
+                user_flag=row[7],
+                system_flag=row[8],
             )
         return SessionState(
             session_id=str(record.session_id),
@@ -270,6 +272,7 @@ class SessionRepository:
             scenario_definition=scenario.definition,
             target_os=scenario.target_os,
             attack_graph=scenario.attack_graph.model_dump(mode="json"),
+            tags=scenario.tags,
             user_flag=scenario.user_flag,
             system_flag=scenario.system_flag,
             generated_code_path=state.source_path,
@@ -287,6 +290,7 @@ class SessionRepository:
                     "scenario_definition": version_insert.excluded.scenario_definition,
                     "target_os": version_insert.excluded.target_os,
                     "attack_graph": version_insert.excluded.attack_graph,
+                    "tags": version_insert.excluded.tags,
                     "user_flag": version_insert.excluded.user_flag,
                     "system_flag": version_insert.excluded.system_flag,
                     "generated_code_path": version_insert.excluded.generated_code_path,

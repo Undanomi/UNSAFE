@@ -250,14 +250,14 @@ async function lockOwnedChat(client: PoolClient, ownerUserId: string, sessionId:
 export async function createMachineDocumentService(
   ownerUserId: string,
   sessionId: string,
-  flags: { userFlag: string | null; systemFlag: string | null },
+  generated: { userFlag: string | null; systemFlag: string | null; tags: string[] },
 ): Promise<string | null> {
   return withDatabaseTransaction(async (client) => {
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
     if (!chat) return null
 
-    const userFlag = resolveMachineFlag(chat.answers.needsUserFlag, flags.userFlag)
-    const systemFlag = resolveMachineFlag(chat.answers.needsSystemFlag, flags.systemFlag)
+    const userFlag = resolveMachineFlag(chat.answers.needsUserFlag, generated.userFlag)
+    const systemFlag = resolveMachineFlag(chat.answers.needsSystemFlag, generated.systemFlag)
     if (chat.answers.needsUserFlag && !userFlag) {
       throw new Error("AI server did not return a user flag.")
     }
@@ -267,6 +267,15 @@ export async function createMachineDocumentService(
     if (userFlag.length > 200 || systemFlag.length > 200) {
       throw new Error("AI server returned an invalid flag.")
     }
+    const tags = [
+      ...new Set(
+        generated.tags
+          .filter((tag): tag is string => typeof tag === "string")
+          .map((tag) => tag.trim())
+          .filter((tag) => tag.length > 0 && tag.length <= 30),
+      ),
+    ].slice(0, 5)
+    if (tags.length === 0) throw new Error("AI server did not return scenario tags.")
 
     const machineId = chat.machine_id ?? sessionId
     const machineResult = await client.query(
@@ -294,13 +303,13 @@ export async function createMachineDocumentService(
         chat.ai_session_id,
         ownerUserId,
         chat.answers.name,
-        `${chat.answers.theme}を学ぶためのマシンです。`,
+        `${tags.join("・")}を学べるセキュリティ演習マシンです。`,
         BUILDING_MACHINE_DESCRIPTION,
         difficultyToLevel(chat.answers.difficulty),
         chat.answers.visibility === "公開",
         systemFlag,
         userFlag,
-        [chat.answers.theme],
+        tags,
       ],
     )
     if (machineResult.rowCount !== 1) {

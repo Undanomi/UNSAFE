@@ -52,6 +52,7 @@ class ScenarioDraftArchive:
             "scenario_version_id": scenario.scenario_version_id,
             "title": scenario.title,
             "target_os": scenario.target_os,
+            "tags": scenario.tags,
             "review_approved": review.approved if review is not None else None,
             "review_policy_version": (
                 SCENARIO_REVIEW_POLICY_VERSION if review is not None else None
@@ -219,6 +220,7 @@ class ScenarioDraftArchive:
                 attack_graph=AttackGraph.model_validate_json(
                     (version_root / "attack_graph.json").read_text()
                 ),
+                tags=metadata.get("tags", []),
             )
             review_value = json.loads((version_root / "scenario_review.json").read_text())
             review = (

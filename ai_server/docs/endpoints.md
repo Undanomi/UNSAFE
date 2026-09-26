@@ -192,7 +192,8 @@ remediationは次の設計書生成へ直接渡され、通常は同じ攻撃グ
 `broken_chain`の場合だけ攻撃グラフも再生成します。`SCENARIO_GENERATION_ATTEMPTS`の範囲で再試行し、
 レビューを通過したシナリオだけが保存されます。
 
-完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
+完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph`、完成内容から
+AIが生成した1〜5個の検索・分類用 `tags` が含まれます。
 VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
 必要なフラグの正解値はこの時点で生成してPostgreSQLへ保存しますが、SSEでは配信しません。
 

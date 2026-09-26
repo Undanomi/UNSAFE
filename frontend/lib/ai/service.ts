@@ -55,6 +55,7 @@ export type AiSessionResponse = {
     title: string
     scenario_description: string
     definition: string
+    tags: string[]
   } | null
 }
 

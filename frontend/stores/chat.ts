@@ -21,12 +21,11 @@ export const CHAT_CONFIG = {
 
 export const VISIBILITY_OPTIONS = ["非公開", "公開"] as const
 export const DIFFICULTY_OPTIONS = ["Very Easy", "Easy", "Medium", "High"] as const
-export const THEME_SUGGESTIONS = [
-  "Web セキュリティ",
-  "ログ調査",
-  "認証・認可",
-  "コンテナ",
-  "ネットワーク",
+export const SCENARIO_PROMPT_SUGGESTIONS = [
+  "公開Webサービスの設定不備を調査し、初期侵入から権限昇格までを学べるシナリオにしてください。",
+  "不審なアクセスログを手掛かりに侵害経路を特定し、証拠とフラグを回収するシナリオにしてください。",
+  "認証・認可の不備を悪用して一般ユーザー権限を得るシナリオにしてください。",
+  "ネットワークサービスを列挙し、複数の弱点を組み合わせて攻略するシナリオにしてください。",
 ] as const
 
 export type ChatVisibility = (typeof VISIBILITY_OPTIONS)[number]
@@ -102,12 +101,13 @@ export const CHAT_COPY = {
     machineName: `マシン名を${CHAT_CONFIG.machineNameMinLength}〜${CHAT_CONFIG.machineNameMaxLength}文字で入力してください。`,
   },
   fields: {
-    freeInput: "自由入力",
     machineName: `マシン名（${CHAT_CONFIG.machineNameMaxLength}文字まで）`,
     machineNamePlaceholder: "例: Nginx Engine",
     systemFlagDetails: "システムフラグの取得条件",
     systemFlagDetailsPlaceholder: "権限や必要な操作を詳しく入力してください。",
-    themePlaceholder: "学びたいテーマを入力",
+    scenarioPrompt: "作成したいシナリオの要望（500文字まで）",
+    scenarioPromptPlaceholder:
+      "例: 社内ポータルの設定不備を調査し、Webから初期侵入して権限昇格まで学べるシナリオにしてください。",
     userFlagDetails: "ユーザーフラグの取得条件",
     userFlagDetailsPlaceholder: "配置場所や入手までの条件を詳しく入力してください。",
   },
@@ -123,7 +123,7 @@ export const CHAT_COPY = {
       difficulty: "難易度",
       machineName: "マシン名",
       systemFlag: "システムフラグ",
-      theme: "学習テーマ",
+      theme: "シナリオの要望",
       userFlag: "ユーザーフラグ",
       visibility: "公開範囲",
     },
@@ -146,8 +146,8 @@ export const CHAT_PROMPTS: Record<number, { help: string; question: string }> = 
     question: "公開範囲を教えてください。",
   },
   [CHAT_STEPS.theme]: {
-    help: "選択肢から選ぶか、自由に入力できます。",
-    question: "このマシンで学べるテーマを入力してください。",
+    help: "例文を選ぶか、作りたい内容を文章で自由に入力してください。タグは完成したシナリオからAIが自動で生成します。",
+    question: "どのようなシナリオのマシンを作成しますか？",
   },
   [CHAT_STEPS.difficulty]: {
     help: "ここまでで基本設定が完了します。",

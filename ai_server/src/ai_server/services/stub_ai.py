@@ -203,6 +203,7 @@ class StubGenerator:
             definition=definition,
             target_os=machine.operating_system,
             attack_graph=attack_graph,
+            tags=["セキュリティ演習", "設定不備"],
         )
         await _record_scenario_draft(on_attempt, scenario)
         review = await self.review_scenario(machine, scenario)

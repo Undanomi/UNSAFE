@@ -53,6 +53,7 @@ class ScenarioVersionRecord(Base):
     scenario_definition: Mapped[str] = mapped_column(Text, nullable=False)
     target_os: Mapped[str] = mapped_column(Text, nullable=False, default="Debian 13.7.0")
     attack_graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     user_flag: Mapped[str | None] = mapped_column(Text)
     system_flag: Mapped[str | None] = mapped_column(Text)
     generated_code_path: Mapped[str | None] = mapped_column(Text)

@@ -399,6 +399,7 @@ async def test_generated_graph_narrows_references_for_all_later_stages(tmp_path,
             {
                 "scenario_description": "Investigate the generated training machine.",
                 "definition": "# Scenario\n\nOwner is unspecified.",
+                "tags": ["権限設定"],
             }
         )
 

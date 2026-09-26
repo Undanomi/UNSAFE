@@ -501,14 +501,14 @@ def attack_graph_prompt(
 次の条件を満たす、実装可能な攻撃グラフをJSONで設計してください。
 
 マシン名: {machine.name}
-テーマ: {machine.theme}
+シナリオ要望: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {machine.operating_system}
 到達目標（この配列を変更しない）:
 {json.dumps(objectives, ensure_ascii=False, indent=2)}
 
 攻撃はCVEに限定しません。Web脆弱性、設定不備、認証情報、ロジック不備、複数手法の連鎖を
-テーマと難易度に応じて選択してください。CVEが最適なステップだけkindをcveにしてください。
+シナリオ要望と難易度に応じて選択してください。CVEが最適なステップだけkindをcveにしてください。
 CVEを使う場合は{cve_min_year}年以降の実在するIDだけを候補にしてください。
 
 これまで棄却された案:
@@ -610,7 +610,7 @@ def scenario_prompt(
 シナリオ設計書を作成してください。
 
 マシン名: {machine.name}
-テーマ: {machine.theme}
+シナリオ要望: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {machine.operating_system}
 {flag_context}
@@ -627,7 +627,11 @@ def scenario_prompt(
 権限、設定、検証計画を具体化・修正して、同じ指摘を繰り返さないでください。
 
 JSONのみを返してください:
-{{"scenario_description":"プレイヤー向け紹介文","definition":"Markdown形式のシナリオ設計書"}}
+{{"scenario_description":"プレイヤー向け紹介文","definition":"Markdown形式のシナリオ設計書","tags":["Web","認証不備"]}}
+
+tagsは完成したscenario_description、definition、攻撃グラフの内容を要約する検索・分類用タグです。
+ユーザーの要望文をそのまま転記せず、実際に設計した技術・脆弱性・学習内容を表す日本語または一般的な
+技術用語を1〜5個生成してください。各タグは30文字以内、重複なしとし、難易度やマシン名は含めません。
 
 scenario_descriptionは、シナリオの背景や雰囲気、調査する動機、学習テーマなどから適切な要素を選び、
 プレイヤーが挑戦したくなる自然な日本語で自由に記述してください。特定の役割設定、文体、文章構成、
@@ -771,6 +775,7 @@ def scenario_compaction_prompt(
     machine: MachineInformation,
     scenario_description: str,
     definition: str,
+    tags: list[str],
 ) -> str:
     return f"""次のシナリオ設計書は12,000文字制限を超えています。
 新しい案へ作り直さず、内容を10,500文字以内へ圧縮した完全な文書をJSONで返してください。
@@ -788,14 +793,18 @@ def scenario_compaction_prompt(
 {definition}
 ```
 
+既存のタグ:
+{json.dumps(tags, ensure_ascii=False)}
+
 JSONのみを返してください:
-{{"scenario_description":"既存の紹介文","definition":"圧縮後の完全なMarkdown"}}
+{{"scenario_description":"既存の紹介文","definition":"圧縮後の完全なMarkdown","tags":["既存タグ"]}}
 
 規則:
 - 必須の章見出し、攻撃グラフの各step、requires、achieves、CVE公式情報、厳密バージョン、パス、
   権限、実行主体、検証条件、フラグ到達条件は削除・変更しない
 - 重複説明、同じフィールドの逐語的な反復、冗長な背景、完成コード、長いコマンド例を優先して短縮する
 - 新しい攻撃経路、設定、前提、URLを追加しない
+- tagsは変更せず、そのまま返す
 - definitionは余裕を持って10,500文字以内にする
 """
 
