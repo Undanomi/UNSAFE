@@ -879,8 +879,12 @@
     outline-offset: 3px;
   }
   .slsg-machine-table-footer {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     border-color: rgba(72, 83, 104, 0.34);
     background: rgba(26, 29, 44, 0.42);
+  }
+  .slsg-machine-table-footer::after {
+    content: "";
   }
   .slsg-pagination-button {
     border-color: #3a4c69;
@@ -3448,6 +3452,17 @@
 }
 
 @media (max-width: 767px) {
+  .slsg-machine-table-footer {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
+  .slsg-machine-table-footer::after {
+    display: none;
+  }
+  .slsg-machine-table-footer > nav {
+    justify-self: center;
+  }
   .slsg-chat-header {
     flex-basis: 215px;
     min-height: 215px;
