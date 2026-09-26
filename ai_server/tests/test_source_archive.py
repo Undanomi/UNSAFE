@@ -200,6 +200,7 @@ def configure_user_flag_placement(
     *,
     path: str = "/home/user/user.txt",
     owner: str = "user",
+    mode: str = "0400",
 ) -> None:
     manifest_file = next(
         file for file in generated.files if file.path == "contents/scenario_manifest.json"
@@ -211,7 +212,7 @@ def configure_user_flag_placement(
             "path": path,
             "owner": owner,
             "group": owner,
-            "mode": "0400",
+            "mode": mode,
         }
     ]
     manifest_file.content = json.dumps(manifest)
@@ -527,6 +528,23 @@ def test_generates_server_owned_flag_install_script_at_archive_boundary(tmp_path
     assert "/home/user/user.txt" in installer
     assert expected in verifier
     assert "test -f /home/user/user.txt" in verifier
+
+
+def test_supports_scenario_requested_writable_owner_only_flag_mode(tmp_path: Path) -> None:
+    expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
+    flag_scenario = scenario().model_copy(update={"user_flag": expected})
+    generated = web_generated_source()
+    configure_user_flag_placement(generated, mode="0600")
+
+    archive_path, _ = SourceArchive(tmp_path).create(
+        "session-flags-mode-0600", flag_scenario, generated
+    )
+
+    with zipfile.ZipFile(archive_path) as archive:
+        installer = archive.read("contents/scripts/install-flags.sh").decode()
+        verifier = archive.read("contents/scripts/verify.sh").decode()
+    assert "-m 0600 /dev/stdin /home/user/user.txt" in installer
+    assert "= 600:user:user:1" in verifier
 
 
 def test_repair_report_does_not_persist_materialized_flag(tmp_path: Path) -> None:

@@ -25,9 +25,10 @@ SCENARIO_MANIFEST_CONSTRAINTS = f"""scenario_manifest.jsonのJSON Schema:
 - `services`は外部またはローカルで待受するネットワークサービスだけを記載する。各要素の`name`は
   空でない文字列、`port`は1〜65535の整数、`protocol`は`http`、`https`、`tcp`、`udp`のいずれかにする
 - `required_files`の各要素は`contents/`から始まる生成ファイルのパス文字列にする
-- `flag_placements`は設定済みの各flagについてkind、最終VM内の絶対path、owner、group、mode=`0400`を
-  1件ずつ持たせる。未設定のkindは含めない。User flagは攻略後の非rootユーザー、System flagはrootを
-  owner/groupにする
+- `flag_placements`は設定済みの各flagについてkind、最終VM内の絶対path、owner、group、modeを
+  1件ずつ持たせる。modeはシナリオに`0400`または`0600`が明記されていればそれに合わせ、
+  指定がなければ`0400`にする。未設定のkindは含めない。User flagは攻略後の非rootユーザー、
+  System flagはrootをowner/groupにする
 - `acceptance_tests`と`health_checks`の各要素は、空でない`command`を持つobjectにする
 - `expected_vulnerabilities`には実装した脆弱性を最低1件記載する。CVEでない脆弱性は空でない
   `name`と`description`を持つobjectにする。`"training-only"`のような文字列だけの要素は禁止する
