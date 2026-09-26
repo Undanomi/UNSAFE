@@ -235,11 +235,11 @@ export function MachineListResults({
         </div>
         {machines.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] table-fixed text-left text-[0.9rem]">
+            <table className="w-full min-w-[1000px] table-fixed text-left text-[0.9rem]">
               <caption className="sr-only">利用できるマシン一覧</caption>
               <thead className="slsg-machine-table-columns border-b text-[0.78rem] font-medium tracking-[0.02em] text-[#b8c3d6]">
                 <tr>
-                  <th scope="col" className="w-[28%] px-9 py-5">
+                  <th scope="col" className="w-[30%] px-9 py-5">
                     マシン名
                   </th>
                   <th scope="col" className="w-[20%] px-4 py-5">
@@ -251,7 +251,7 @@ export function MachineListResults({
                   <th scope="col" className="w-[12%] px-4 py-5">
                     回答状態
                   </th>
-                  <th scope="col" className="w-[17%] px-4 py-5">
+                  <th scope="col" className="w-[15%] px-4 py-5">
                     作成者
                   </th>
                   <th scope="col" className="w-[13%] px-4 py-5">

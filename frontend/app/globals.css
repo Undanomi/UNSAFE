@@ -731,6 +731,7 @@
       0 0 18px rgba(70, 142, 232, 0.38);
   }
   .slsg-machine-table-panel {
+    min-width: 0;
     border-color: rgba(83, 109, 135, 0.9);
     background:
       radial-gradient(
@@ -766,6 +767,7 @@
   .slsg-machine-table-surface {
     position: relative;
     z-index: 1;
+    min-width: 0;
     overflow: hidden;
     border-radius: 13px;
   }
