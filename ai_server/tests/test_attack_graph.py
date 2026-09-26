@@ -7,6 +7,7 @@ from ai_server.models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    AutomaticFlagPlan,
     MachineInformation,
     PasswordCrackingSpec,
     ScenarioDraft,
@@ -154,6 +155,46 @@ def test_scenario_rejects_noncanonical_flag_case() -> None:
             definition="# Invalid flag",
             attack_graph=AttackGraph(steps=[step("entry")]),
             user_flag="FLAG{USER_A1D51D7F803F51F0356F3E547C842A0B}",
+        )
+
+
+@pytest.mark.parametrize(
+    ("selection", "needs_user", "needs_system"),
+    [
+        ("user", True, False),
+        ("system", False, True),
+        ("both", True, True),
+    ],
+)
+def test_automatic_flag_plan_applies_all_supported_selections(
+    selection: str,
+    needs_user: bool,
+    needs_system: bool,
+) -> None:
+    plan = AutomaticFlagPlan(
+        selection=selection,
+        user_flag_details="Obtain /home/student/user.txt" if needs_user else "",
+        system_flag_details="Obtain /root/system.txt" if needs_system else "",
+    )
+    machine = MachineInformation(
+        name="Automatic flags",
+        visibility="private",
+        theme="Web security",
+        difficulty="Medium",
+    ).with_automatic_flag_plan(plan)
+
+    assert machine.needs_user_flag is needs_user
+    assert machine.needs_system_flag is needs_system
+    assert bool(machine.user_flag_details) is needs_user
+    assert bool(machine.system_flag_details) is needs_system
+
+
+def test_automatic_flag_plan_rejects_missing_selected_details() -> None:
+    with pytest.raises(ValidationError, match="system_flag_details"):
+        AutomaticFlagPlan(
+            selection="both",
+            user_flag_details="Obtain /home/student/user.txt",
+            system_flag_details="",
         )
 
 

@@ -45,6 +45,8 @@ type ScenarioEvent = {
   data: unknown
 }
 
+type AutomaticFlagSelection = "user" | "system" | "both"
+
 const SCENARIO_STREAM_MAX_ATTEMPTS = 3
 const SCENARIO_STREAM_RETRY_DELAY_MS = 500
 
@@ -83,9 +85,16 @@ function readScenarioId(data: unknown): string | null {
   return typeof scenario.scenario_id === "string" ? scenario.scenario_id : null
 }
 
+function readAutomaticFlagSelection(data: unknown): AutomaticFlagSelection | null {
+  if (!data || typeof data !== "object" || !("selection" in data)) return null
+  const selection = data.selection
+  return selection === "user" || selection === "system" || selection === "both" ? selection : null
+}
+
 async function consumeScenarioStream(
   response: Response,
   onProgress: (generatedCharacters: number) => void,
+  onFlagsPlanned: (selection: AutomaticFlagSelection) => void,
 ): Promise<string> {
   if (!response.ok || !response.body) {
     throw new Error("AIサーバーに接続できませんでした。")
@@ -120,6 +129,10 @@ async function consumeScenarioStream(
     for (const block of blocks) {
       const parsed = parseEvent(block)
       if (!parsed) continue
+      if (parsed.event === "scenario.flags_planned") {
+        const selection = readAutomaticFlagSelection(parsed.data)
+        if (selection) onFlagsPlanned(selection)
+      }
       if (parsed.event === "scenario.delta") {
         const content =
           parsed.data && typeof parsed.data === "object" && "content" in parsed.data
@@ -151,6 +164,7 @@ async function consumeScenarioStream(
 async function waitForScenario(
   sessionId: string,
   onProgress: (generatedCharacters: number) => void,
+  onFlagsPlanned: (selection: AutomaticFlagSelection) => void,
   signal: AbortSignal,
 ): Promise<string> {
   let lastError: unknown
@@ -160,7 +174,7 @@ async function waitForScenario(
         cache: "no-store",
         signal,
       })
-      return await consumeScenarioStream(response, onProgress)
+      return await consumeScenarioStream(response, onProgress, onFlagsPlanned)
     } catch (error) {
       if (
         error instanceof ScenarioGenerationFailedError ||
@@ -406,6 +420,15 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           sessionId,
           (characters) => {
             setCreationMessage(`AIがシナリオを生成しています… ${characters.toLocaleString()}文字`)
+          },
+          (selection) => {
+            const label =
+              selection === "user"
+                ? "ユーザーフラグのみ"
+                : selection === "system"
+                  ? "システムフラグのみ"
+                  : "ユーザー・システムフラグの両方"
+            setCreationMessage(`AIが「${label}」を選択しました。シナリオを生成しています…`)
           },
           abortController.signal,
         )

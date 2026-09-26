@@ -9,6 +9,7 @@ from ..models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    AutomaticFlagPlan,
     GeneratedSource,
     GuidanceItem,
     GuidancePlan,
@@ -28,6 +29,45 @@ from .ai import _record_scenario_draft
 
 class StubGenerator:
     """Deterministic generator for local integration tests without an API key."""
+
+    async def plan_automatic_flags(
+        self,
+        machine: MachineInformation,
+    ) -> AutomaticFlagPlan:
+        theme = machine.theme.casefold()
+        system_markers = ("system", "root", "kernel", "sudo", "権限昇格", "システム")
+        initial_markers = ("web", "認証", "initial", "初期侵入", "ユーザー")
+        focuses_on_system = any(marker in theme for marker in system_markers)
+        includes_initial_access = any(marker in theme for marker in initial_markers)
+        if focuses_on_system and not includes_initial_access:
+            return AutomaticFlagPlan(
+                selection="system",
+                user_flag_details="",
+                system_flag_details=(
+                    "ユーザーフラグを前提にせず、管理者権限で動作する対象を攻略してroot権限を取得し、"
+                    "/root/system.txtを読み取る。"
+                ),
+            )
+        if machine.difficulty in {"Medium", "High"}:
+            return AutomaticFlagPlan(
+                selection="both",
+                user_flag_details=(
+                    "公開サービスを調査して一般ユーザーstudentの権限を取得し、"
+                    "/home/student/user.txtを読み取る。"
+                ),
+                system_flag_details=(
+                    "userフラグ取得後の足場からローカル権限設定を調査してroot権限を取得し、"
+                    "/root/system.txtを読み取る。"
+                ),
+            )
+        return AutomaticFlagPlan(
+            selection="user",
+            user_flag_details=(
+                "公開サービスを調査して一般ユーザーstudentの権限を取得し、"
+                "/home/student/user.txtを読み取る。"
+            ),
+            system_flag_details="",
+        )
 
     async def generate_scenario(
         self,

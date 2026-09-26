@@ -1031,3 +1031,46 @@ def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) 
         "source_semantic_review"
     ]
     assert updated_checksum != original_checksum
+
+
+def test_workbench_progress_is_live_before_final_archive_refresh(tmp_path: Path) -> None:
+    source_archive = SourceArchive(tmp_path)
+    archive_path, _ = source_archive.create(
+        "session", scenario(), web_generated_source()
+    )
+    running = {
+        "kind": "source_workbench",
+        "status": "running",
+        "active_command": {"argv": ["bash", "-n", "build.sh"]},
+        "observations": [],
+    }
+
+    source_archive.record_workbench_progress(archive_path, running)
+
+    live = source_archive.load_workbench_progress("session")
+    assert live is not None
+    assert live["report"] == running
+    first_recorded_at = live["recorded_at"]
+
+    completed = {
+        "kind": "source_workbench",
+        "status": "pass",
+        "summary": "Build script syntax passed.",
+        "observations": [
+            {
+                "kind": "command",
+                "exit_code": 0,
+                "stdout": "syntax passed\n",
+                "stderr": "",
+            }
+        ],
+    }
+    source_archive.record_workbench_report(archive_path, completed)
+
+    final = source_archive.load_workbench_progress("session")
+    assert final is not None
+    assert final["recorded_at"] == first_recorded_at
+    assert final["report"] == completed
+    with zipfile.ZipFile(archive_path) as zipped:
+        archived = json.loads(zipped.read("repair_report.json"))
+    assert archived["source_workbench"]["report"] == completed

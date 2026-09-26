@@ -2,6 +2,7 @@ import "server-only"
 
 import type { PoolClient } from "pg"
 import { cancelAiSessionService, getAiSessionService } from "@/lib/ai/service"
+import { resolveMachineFlag } from "@/lib/chat/flags"
 import { queryDatabase, withDatabaseTransaction } from "@/lib/database/client"
 import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
 import {
@@ -255,15 +256,15 @@ export async function createMachineDocumentService(
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
     if (!chat) return null
 
-    const userFlag = chat.answers.needsUserFlag ? flags.userFlag?.trim() : ""
-    const systemFlag = chat.answers.needsSystemFlag ? flags.systemFlag?.trim() : ""
+    const userFlag = resolveMachineFlag(chat.answers.needsUserFlag, flags.userFlag)
+    const systemFlag = resolveMachineFlag(chat.answers.needsSystemFlag, flags.systemFlag)
     if (chat.answers.needsUserFlag && !userFlag) {
       throw new Error("AI server did not return a user flag.")
     }
     if (chat.answers.needsSystemFlag && !systemFlag) {
       throw new Error("AI server did not return a system flag.")
     }
-    if ((userFlag?.length ?? 0) > 200 || (systemFlag?.length ?? 0) > 200) {
+    if (userFlag.length > 200 || systemFlag.length > 200) {
       throw new Error("AI server returned an invalid flag.")
     }
 
@@ -297,8 +298,8 @@ export async function createMachineDocumentService(
         BUILDING_MACHINE_DESCRIPTION,
         difficultyToLevel(chat.answers.difficulty),
         chat.answers.visibility === "公開",
-        systemFlag ?? "",
-        userFlag ?? "",
+        systemFlag,
+        userFlag,
         [chat.answers.theme],
       ],
     )
