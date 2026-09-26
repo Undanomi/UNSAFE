@@ -8,6 +8,7 @@ import {
   SearchX,
 } from "lucide-react"
 import Form from "next/form"
+import Image from "next/image"
 import Link from "next/link"
 import type { ReactNode } from "react"
 import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filter-reset-button"
@@ -314,11 +315,25 @@ export function MachineListResults({
                       >
                         <span
                           aria-hidden="true"
-                          className="grid size-10 shrink-0 place-items-center rounded-full border border-[#52627e] bg-[#2a3956] text-xs text-white"
+                          className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-full border border-[#52627e] bg-[#2a3956] text-xs text-white"
                         >
-                          {machine.author.slice(0, 1)}
+                          {machine.authorAvatarUrl ? (
+                            <Image
+                              alt=""
+                              className="object-cover"
+                              fill
+                              referrerPolicy="no-referrer"
+                              sizes="40px"
+                              src={machine.authorAvatarUrl}
+                              unoptimized
+                            />
+                          ) : (
+                            machine.author.slice(0, 1)
+                          )}
                         </span>
-                        <span className="text-xs [overflow-wrap:anywhere]">{machine.author}</span>
+                        <span className="slsg-machine-author-name text-xs [overflow-wrap:anywhere]">
+                          {machine.author}
+                        </span>
                       </Link>
                     </td>
                     <td className="px-4 py-6 text-xs text-[#a8b5cc]">
