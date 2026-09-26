@@ -2373,9 +2373,9 @@
   }
   .slsg-chat-header {
     position: relative;
-    flex: 0 0 150px;
+    flex: 0 0 auto;
     min-height: 150px;
-    padding-top: 12px;
+    padding: 12px 0 24px;
   }
   .slsg-chat-heading {
     position: relative;
@@ -2384,6 +2384,7 @@
   }
   .slsg-chat-heading h1 {
     margin-top: 16px;
+    overflow-wrap: anywhere;
     color: #e8fcff;
     font-size: var(--slsg-page-title-size);
     font-weight: 700;
@@ -3480,7 +3481,6 @@
     min-height: 420px;
   }
   .slsg-chat-header {
-    flex-basis: 170px;
     min-height: 170px;
   }
   .slsg-chat-progress {
@@ -3519,7 +3519,6 @@
     justify-self: center;
   }
   .slsg-chat-header {
-    flex-basis: 215px;
     min-height: 215px;
   }
   .slsg-chat-heading {
@@ -3629,7 +3628,6 @@
     margin-left: auto;
   }
   .slsg-chat-header {
-    flex-basis: 215px;
     min-height: 215px;
   }
   .slsg-chat-message-list {
