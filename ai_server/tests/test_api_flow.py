@@ -350,7 +350,11 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert fake_build.submitted_archive is not None
     with zipfile.ZipFile(fake_build.submitted_archive) as archive:
         provision = archive.read("contents/scripts/provision.sh").decode()
-    assert scenario.user_flag in provision
+        flag_installer = archive.read("contents/scripts/install-flags.sh").decode()
+        verifier = archive.read("contents/scripts/verify.sh").decode()
+    assert scenario.user_flag not in provision
+    assert scenario.user_flag in flag_installer
+    assert scenario.user_flag in verifier
 
     completed = await http.get(f"/v1/sessions/{session_id}", headers=headers)
     assert completed.status_code == 200
@@ -486,7 +490,7 @@ async def test_unspecified_flags_are_planned_and_persisted_before_scenario(clien
 
     assert events.status_code == 200
     assert "event: scenario.flags_planned" in events.text
-    assert '\"selection\": \"user\"' in events.text
+    assert '"selection": "user"' in events.text
     persisted = await app.state.repository.get(session_id)
     assert persisted.machine_information is not None
     assert persisted.machine_information.needs_user_flag is True
@@ -1846,12 +1850,15 @@ def test_full_source_reaudit_depends_on_contract_or_repair_surface_changes() -> 
     )
     base = source(manifest)
     local_candidate = source(manifest, provision="install web\nconfigure web\n")
-    assert _source_review_scope_invalidation_reasons(
-        base,
-        local_candidate,
-        review,
-        {"contents/scripts/provision.sh"},
-    ) == []
+    assert (
+        _source_review_scope_invalidation_reasons(
+            base,
+            local_candidate,
+            review,
+            {"contents/scripts/provision.sh"},
+        )
+        == []
+    )
 
     test_only_manifest = {**manifest, "acceptance_tests": [{"command": "test exploit"}]}
     manifest_review = review.model_copy(
@@ -1863,12 +1870,15 @@ def test_full_source_reaudit_depends_on_contract_or_repair_surface_changes() -> 
             ]
         }
     )
-    assert _source_review_scope_invalidation_reasons(
-        base,
-        source(test_only_manifest),
-        manifest_review,
-        {"contents/scenario_manifest.json"},
-    ) == []
+    assert (
+        _source_review_scope_invalidation_reasons(
+            base,
+            source(test_only_manifest),
+            manifest_review,
+            {"contents/scenario_manifest.json"},
+        )
+        == []
+    )
 
     test_support_candidate = source(test_only_manifest)
     test_support_candidate.files.append(
@@ -1877,18 +1887,19 @@ def test_full_source_reaudit_depends_on_contract_or_repair_surface_changes() -> 
     test_gap_review = manifest_review.model_copy(
         update={
             "findings": [
-                manifest_review.findings[0].model_copy(
-                    update={"category": "acceptance_test_gap"}
-                )
+                manifest_review.findings[0].model_copy(update={"category": "acceptance_test_gap"})
             ]
         }
     )
-    assert _source_review_scope_invalidation_reasons(
-        base,
-        test_support_candidate,
-        test_gap_review,
-        {"contents/scenario_manifest.json", "contents/tests/test-exploit.sh"},
-    ) == []
+    assert (
+        _source_review_scope_invalidation_reasons(
+            base,
+            test_support_candidate,
+            test_gap_review,
+            {"contents/scenario_manifest.json", "contents/tests/test-exploit.sh"},
+        )
+        == []
+    )
 
     changed_contract = {
         **manifest,
@@ -1981,9 +1992,7 @@ async def test_source_repair_review_receives_a_fixed_scope(client) -> None:
     assert len(repair_contexts) == 2
     assert len(reconsiderations) == 1
     assert reconsiderations[0]["kind"] == "source_repair_verification"
-    assert reconsiderations[0]["blocking_review"]["checks"][0]["repair_target"] == (
-        "source_code"
-    )
+    assert reconsiderations[0]["blocking_review"]["checks"][0]["repair_target"] == ("source_code")
     assert reconsiderations[0]["changed_files"] == ["contents/README.md"]
 
 

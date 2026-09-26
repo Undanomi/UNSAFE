@@ -11,8 +11,6 @@ from .models import (
 )
 from .scenario_manifest import scenario_manifest_json_schema
 from .services.scenario_secrets import (
-    SYSTEM_FLAG_PLACEHOLDER,
-    USER_FLAG_PLACEHOLDER,
     redact_scenario_flags,
 )
 
@@ -27,6 +25,9 @@ SCENARIO_MANIFEST_CONSTRAINTS = f"""scenario_manifest.jsonのJSON Schema:
 - `services`は外部またはローカルで待受するネットワークサービスだけを記載する。各要素の`name`は
   空でない文字列、`port`は1〜65535の整数、`protocol`は`http`、`https`、`tcp`、`udp`のいずれかにする
 - `required_files`の各要素は`contents/`から始まる生成ファイルのパス文字列にする
+- `flag_placements`は設定済みの各flagについてkind、最終VM内の絶対path、owner、group、mode=`0400`を
+  1件ずつ持たせる。未設定のkindは含めない。User flagは攻略後の非rootユーザー、System flagはrootを
+  owner/groupにする
 - `acceptance_tests`と`health_checks`の各要素は、空でない`command`を持つobjectにする
 - `expected_vulnerabilities`には実装した脆弱性を最低1件記載する。CVEでない脆弱性は空でない
   `name`と`description`を持つobjectにする。`"training-only"`のような文字列だけの要素は禁止する
@@ -976,9 +977,9 @@ def code_prompt(
 
 {_rockyou_placeholder_map(scenario.attack_graph)}
 
-配置するフラグ用のサーバー管理プレースホルダー（未設定は配置しない）:
-- User flag: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
-- System flag: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
+サーバー管理のフラグ配置対象（実値と配置スクリプトはモデルへ渡さない）:
+- User flag: {"設定済み" if scenario.user_flag else "未設定"}
+- System flag: {"設定済み" if scenario.system_flag else "未設定"}
 
 JSON以外は返さないでください。形式:
 {{"files":[{{"path":"contents/build.sh","content":"#!/bin/bash\\nset -euo pipefail\\n...","mode":"0755"}}]}}
@@ -988,7 +989,7 @@ JSON以外は返さないでください。形式:
   サーバーがmanifestから生成したcontents/scripts/verify.shを必ず実行する
 - contents/README.md、contents/scenario_manifest.json、contents/build.sh、
   contents/scripts/provision.shを必ず生成する。contents/scripts/verify.shはfilesへ返さず、
-  scenario_manifest.jsonのrequired_filesには記載する
+  contents/scripts/install-flags.shもfilesへ返さず、両方をscenario_manifest.jsonのrequired_filesに記載する
 - scenario_manifest.json は required_files、services、acceptance_tests、
   expected_vulnerabilities、health_checks、attack_steps、objectivesを配列として持ち、target_osを
   `{scenario.target_os}` とする
@@ -1029,9 +1030,9 @@ JSON以外は返さないでください。形式:
 - 攻撃グラフのcve_title、cve_description、cwe_idsは公式情報から固定済みである。実装ではその
   メカニズムと前提条件を再現し、別の設定不備、模擬ハンドラ、同じ製品の別脆弱性へ置き換えない。
   再現できない場合はCVE名だけを付けた代替実装を作らない
-- 設定されたフラグは上記の型付きプレースホルダーを1文字も変更せず、指定された配置先へ保存する。
-  実値を推測せず、環境変数や外部入力による注入方式を新設しない。プレースホルダーはアーカイブ作成時に
-  サーバーが実値へ置換する
+- フラグ実値を推測せず、環境変数や外部入力による注入方式を新設しない
+- flagの値やプレースホルダーをprovision.sh、build.sh、アプリ、設定へ書かない。AIはmanifestの
+  flag_placementsだけを生成し、サーバーが予約済みinstall-flags.shと必須検査を生成する
 
 {SCENARIO_MANIFEST_CONSTRAINTS}
 
@@ -1175,8 +1176,8 @@ JSONのみを返してください。
 - 前段成果物を使う再login、`su`・`sudo`、別service、cron・timer・setuid、container等への遷移が
   攻撃グラフにある場合、後段を遷移先のnamespaceと実効権限で扱い、元processの制約を引き継がせない。
   必要な資格情報・成果物と遷移先設定を確認し、無関係なhost側`runuser`を遷移成立の代用にしない
-- `contents/scripts/verify.sh`はアーカイブ作成時にサーバーが生成するため、ワークベンチの候補ソースには
-  存在しない。このファイルの存在確認、読取り、修正を要求しない
+- `contents/scripts/install-flags.sh`と`contents/scripts/verify.sh`はアーカイブ作成時にサーバーが生成するため、
+  ワークベンチの候補ソースには存在しない。これらの存在確認、読取り、修正を要求しない
 - 実装上の矛盾を見つけたら、脆弱性や攻撃経路を削除して通すのではなく、シナリオの意図を維持した
   最小修正を行う。検査を無効化する、常に成功させる、エラーを握り潰す修正は禁止する
 - root実行はapt-get、apt、dpkgに限定し、それ以外はrun_as_root=falseにする
@@ -1204,8 +1205,8 @@ def repair_prompt(
 マシン: {machine.name}
 シナリオID: {scenario.scenario_id}
 対象OS: {scenario.target_os}
-User flagプレースホルダー: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
-System flagプレースホルダー: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
+User flag: {"設定済み（配置はサーバー管理）" if scenario.user_flag else "未設定"}
+System flag: {"設定済み（配置はサーバー管理）" if scenario.system_flag else "未設定"}
 攻撃グラフ:
 ```json
 {attack_graph_json_for_ai(scenario.attack_graph)}
@@ -1240,8 +1241,10 @@ JSON以外は返さないでください。形式:
 - filesには追加・変更が必要なファイルだけを含め、変更不要なファイルを返さない
 - 同じpathをfilesへ複数回含めない
 - delete_pathsには削除が必要な既存ファイルだけを含める
-- contents/scripts/verify.shはサーバー生成物なので直接修正・削除せず、検査の変更は
-  contents/scenario_manifest.jsonのhealth_checksまたはacceptance_testsへ行う
+- contents/scripts/install-flags.shとcontents/scripts/verify.shはサーバー生成物なので直接修正・削除しない。
+  flag配置はmanifestのflag_placements、その他の検査変更はhealth_checksまたはacceptance_testsへ行う
+- failure_reportやログ内の`__SLSG_USER_FLAG__`と`__SLSG_SYSTEM_FLAG__`は秘密値を伏せた診断マーカー
+  であり、生成ファイルへコピーしない
 - 失敗原因とその依存箇所を調べ、必要最小限の一貫した差分にする
 - 複数行のビルドログがある場合は最終行だけで判断せず、失敗したコマンドと前後の文脈から
   根本原因を特定する。後処理や終了時のメッセージを原因と取り違えない
@@ -1419,8 +1422,8 @@ remediationが生成物のスキーマや不変条件と衝突していないか
 テーマ: {machine.theme}
 難易度: {machine.difficulty}
 対象OS: {scenario.target_os}
-User flagプレースホルダー: {USER_FLAG_PLACEHOLDER if scenario.user_flag else "未設定"}
-System flagプレースホルダー: {SYSTEM_FLAG_PLACEHOLDER if scenario.system_flag else "未設定"}
+User flag: {"設定済み（配置はサーバー管理）" if scenario.user_flag else "未設定"}
+System flag: {"設定済み（配置はサーバー管理）" if scenario.system_flag else "未設定"}
 攻撃グラフ:
 ```json
 {attack_graph_json_for_ai(scenario.attack_graph)}
@@ -1457,11 +1460,12 @@ JSONのみを返してください:
 - サーバー制約に「サーバーが選択・検証・生成する」と明記された値やファイルは信頼境界の外側で保証済み
   として扱い、生成ソースに同じ検証や生成を重複実装させない。モデルへ渡されていない外部データの内容を
   推測して、その確認テストを要求しない。特にrockyou.txtからの選択範囲・所属・行番号・探索時間は基盤側、
-  contents/scripts/verify.shはmanifestからのサーバー生成であり、filesに無いことを欠陥にしない
+  contents/scripts/install-flags.shとcontents/scripts/verify.shはmanifestからのサーバー生成であり、
+  filesに無いことを欠陥にしない
 - 再検討資料がある場合は、前回指摘と変更ファイルの直接の回帰を優先する。無関係な箇所を新規に精査して
   細粒度のブロッカーを後出しせず、新しいerrorは明白な致命的不整合を変更箇所から直接証明できる場合に限る
-- 型付きフラグプレースホルダーが指定先へ正確に配置され、別の値や独自の注入変数へ変更されて
-  いないことを確認する。実値はサーバー管理であり推測しない
+- manifestのflag_placementsがシナリオ指定のpath、owner、group、modeと一致することを確認する。
+  実値と配置スクリプトはサーバー管理であり、生成ソースへ重複実装させない
 - シナリオ本文に記載されたパス、サービス、実行主体、owner、group、mode、ACL、sudoers、capability、
   脆弱性と検証条件を実装と1項目ずつ照合し、不一致はimplementation_mismatchのerrorにする
 - 攻撃主体がsystemd service内で動く場合は、そのunitのmount namespaceを権限判定へ含める。

@@ -122,12 +122,8 @@ def test_ai_prompts_redact_late_bound_rockyou_password() -> None:
     prompts = (
         code_prompt(machine, scenario),
         repair_prompt(machine, scenario, source, {"build_log": password}),
-        source_review_prompt(
-            machine, scenario, source, reconsideration={"evidence": password}
-        ),
-        scenario_sync_prompt(
-            machine, scenario, source, review_feedback={"evidence": password}
-        ),
+        source_review_prompt(machine, scenario, source, reconsideration={"evidence": password}),
+        scenario_sync_prompt(machine, scenario, source, review_feedback={"evidence": password}),
         guidance_prompt(machine, scenario, source, []),
     )
     for prompt in prompts:
@@ -477,7 +473,7 @@ def test_generation_and_review_prompts_require_exploit_specific_controls() -> No
     assert "存在しないフィールドの" in review_prompt
 
 
-def test_source_prompts_use_typed_flag_placeholders() -> None:
+def test_source_prompts_keep_flag_values_and_placement_scripts_server_managed() -> None:
     machine = MachineInformation(
         name="Flag Test",
         visibility="private",
@@ -511,29 +507,31 @@ def test_source_prompts_use_typed_flag_placeholders() -> None:
         files=[
             SourceFile(
                 path="contents/scripts/provision.sh",
-                content=(
-                    "#!/bin/bash\n"
-                    "printf '%s' 'flag{user_exact_value}'\n"
-                    "printf '%s' 'flag{system_exact_value}'\n"
-                ),
+                content="#!/bin/bash\nset -euo pipefail\n",
             )
         ]
     )
 
-    for prompt in (
-        code_prompt(machine, scenario),
-        repair_prompt(
-            machine,
-            scenario,
-            source,
-            {"error": "flag{user_exact_value} and flag{system_exact_value}"},
-        ),
-        source_review_prompt(machine, scenario, source),
-    ):
+    generated_prompt = code_prompt(machine, scenario)
+    repaired_prompt = repair_prompt(
+        machine,
+        scenario,
+        source,
+        {"error": "flag{user_exact_value} and flag{system_exact_value}"},
+    )
+    reviewed_prompt = source_review_prompt(machine, scenario, source)
+    for prompt in (generated_prompt, repaired_prompt, reviewed_prompt):
         assert "flag{user_exact_value}" not in prompt
         assert "flag{system_exact_value}" not in prompt
-        assert "__SLSG_USER_FLAG__" in prompt
-        assert "__SLSG_SYSTEM_FLAG__" in prompt
+        assert "flag_placements" in prompt
+        assert "サーバー管理" in prompt
+    assert "__SLSG_USER_FLAG__" not in generated_prompt
+    assert "__SLSG_SYSTEM_FLAG__" not in generated_prompt
+    assert "__SLSG_USER_FLAG__" not in reviewed_prompt
+    assert "__SLSG_SYSTEM_FLAG__" not in reviewed_prompt
+    assert "__SLSG_USER_FLAG__" in repaired_prompt
+    assert "__SLSG_SYSTEM_FLAG__" in repaired_prompt
+    assert "生成ファイルへコピーしない" in repaired_prompt
 
     assert "user_flag" not in scenario.model_dump()
     assert "system_flag" not in scenario.model_dump()

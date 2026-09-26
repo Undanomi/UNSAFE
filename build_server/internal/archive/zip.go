@@ -22,6 +22,7 @@ var requiredScenarioFiles = [...]string{
 	"contents/scenario_manifest.json",
 	"contents/build.sh",
 	"contents/scripts/provision.sh",
+	"contents/scripts/install-flags.sh",
 	"contents/scripts/verify.sh",
 }
 

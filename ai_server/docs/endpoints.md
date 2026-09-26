@@ -248,6 +248,8 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 
 1. シナリオから `contents/` 以下のVMソースを生成
 2. 必須ファイル、manifestのJSON Schema、パス安全性、XML構文、攻撃グラフとの構造的一致を検証
+   - flagの配置情報はmanifestの`flag_placements`で構造化し、AIサーバーが
+     `contents/scripts/install-flags.sh`と必須検査を生成する。AI生成コードにはflag実値を配置しない
    - Shellやアプリコードの語句から実行時の挙動、権限、HTTP応答を推測する検査は行わない
    - Web到達性、アプリ固有の応答、実効権限、フラグの正解・不正解は、Packerが必ず実行する
      `contents/scripts/verify.sh`の結果と敵対的AIレビューで確認する

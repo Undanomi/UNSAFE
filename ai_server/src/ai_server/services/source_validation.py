@@ -21,6 +21,11 @@ REQUIRED_FILES = {
     "contents/scenario_manifest.json",
     "contents/build.sh",
     "contents/scripts/provision.sh",
+    "contents/scripts/install-flags.sh",
+    "contents/scripts/verify.sh",
+}
+SERVER_FLAG_FILES = {
+    "contents/scripts/install-flags.sh",
     "contents/scripts/verify.sh",
 }
 UNAVAILABLE_PACKAGE_PATTERNS = (
@@ -62,9 +67,7 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
         for step in scenario.attack_graph.steps:
             spec = step.password_cracking
             if spec is not None and spec.password:
-                message = message.replace(
-                    spec.password, rockyou_password_placeholder(step.step_id)
-                )
+                message = message.replace(spec.password, rockyou_password_placeholder(step.step_id))
         check: dict[str, object] = {"status": status, "name": name, "message": message}
         checks.append(check)
 
@@ -73,11 +76,12 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
     manifest_schema_valid = False
     if manifest is not None:
-        manifest_schema_valid = _validate_manifest(root, manifest, scenario.target_os, add)
+        manifest_schema_valid = _validate_manifest(root, manifest, scenario, add)
         if manifest_schema_valid:
             _validate_local_test_commands(manifest, add)
             _validate_attack_graph(manifest, scenario.attack_graph, add)
             _validate_cve_grounding(manifest, scenario.attack_graph, add)
+            _validate_flag_placements(manifest, scenario, add)
     _validate_password_selection(scenario.attack_graph, add)
     _validate_materialized_password_usage(root, scenario.attack_graph, add)
     _validate_materialized_flag_usage(root, scenario, add)
@@ -118,6 +122,7 @@ def _validate_materialized_flag_usage(root: Path, scenario: ScenarioDraft, add) 
         "system": scenario.system_flag,
     }
     occurrences = {kind: 0 for kind, value in configured.items() if value}
+    unmanaged: dict[str, list[str]] = {kind: [] for kind in occurrences}
     unsupported_injections: list[str] = []
     injection_pattern = re.compile(
         r"\$(?:\{)?[A-Z][A-Z0-9_]*(?:USER|SYSTEM)_FLAG(?:\b|[:}?])"
@@ -129,7 +134,10 @@ def _validate_materialized_flag_usage(root: Path, scenario: ScenarioDraft, add) 
             unsupported_injections.append(relative)
         for kind, value in configured.items():
             if value:
-                occurrences[kind] += content.count(value)
+                count = content.count(value)
+                occurrences[kind] += count
+                if count and relative not in SERVER_FLAG_FILES:
+                    unmanaged[kind].append(relative)
 
     if unsupported_injections:
         add(
@@ -151,6 +159,13 @@ def _validate_materialized_flag_usage(root: Path, scenario: ScenarioDraft, add) 
                 else "configured flag is absent from generated source"
             ),
         )
+        if unmanaged[kind]:
+            add(
+                "fail",
+                f"flags:{kind}:server_owned",
+                "flag placement is server-managed; remove flag values or placeholders from: "
+                + ", ".join(unmanaged[kind]),
+            )
 
 
 def _validate_source_syntax(root: Path, add) -> None:
@@ -244,7 +259,7 @@ def _load_manifest(path: Path, add) -> dict | None:
     return value
 
 
-def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add) -> bool:
+def _validate_manifest(root: Path, manifest: dict, scenario: ScenarioDraft, add) -> bool:
     schema_valid = True
     try:
         ScenarioManifest.model_validate(manifest)
@@ -261,9 +276,9 @@ def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add)
 
     target_os = manifest.get("target_os")
     add(
-        "pass" if target_os == expected_target_os else "fail",
+        "pass" if target_os == scenario.target_os else "fail",
         "manifest:target_os",
-        f"target_os must exactly match {expected_target_os}",
+        f"target_os must exactly match {scenario.target_os}",
     )
     required_files = manifest.get("required_files")
     declared_files = set(required_files) if isinstance(required_files, list) else set()
@@ -285,6 +300,45 @@ def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add)
         exists = root.joinpath(*normalized.parts).is_file()
         add("pass" if exists else "fail", f"manifest:file:{normalized}", "exists")
     return schema_valid
+
+
+def _validate_flag_placements(manifest: dict, scenario: ScenarioDraft, add) -> None:
+    placements = manifest.get("flag_placements", [])
+    indexed = {
+        item.get("kind"): item
+        for item in placements
+        if isinstance(item, dict) and item.get("kind") in {"user", "system"}
+    }
+    configured = {
+        "user": scenario.user_flag is not None,
+        "system": scenario.system_flag is not None,
+    }
+    for kind, required in configured.items():
+        placement = indexed.get(kind)
+        add(
+            "pass" if (placement is not None) == required else "fail",
+            f"flags:{kind}:placement",
+            (
+                "configured flag has exactly one structured placement"
+                if required
+                else "unconfigured flag must not have a placement"
+            ),
+        )
+        if placement is None:
+            continue
+        owner = placement.get("owner")
+        group = placement.get("group")
+        privileged_identity = owner == "root" and group == "root"
+        identity_valid = privileged_identity if kind == "system" else owner != "root"
+        add(
+            "pass" if identity_valid else "fail",
+            f"flags:{kind}:placement_identity",
+            (
+                "system flag must be root-owned"
+                if kind == "system"
+                else "user flag must be owned by the intended non-root account"
+            ),
+        )
 
 
 def _validate_password_selection(attack_graph: AttackGraph, add) -> None:

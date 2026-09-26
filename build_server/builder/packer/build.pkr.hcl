@@ -84,6 +84,8 @@ build {
       "export SLSG_PHASE=provision",
       "printf 'SLSG_PHASE_START %s\\n' \"$SLSG_PHASE\"",
       "bash ./build.sh",
+      "test -f ./scripts/install-flags.sh || { echo 'missing scripts/install-flags.sh in scenario source'; exit 1; }",
+      "bash ./scripts/install-flags.sh",
       "printf 'SLSG_PHASE_PASS %s\\n' \"$SLSG_PHASE\"",
       "test -f ./scripts/verify.sh || { echo 'missing scripts/verify.sh in scenario source'; exit 1; }",
       "export SLSG_PHASE=verification",

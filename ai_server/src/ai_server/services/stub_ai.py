@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
@@ -292,28 +291,26 @@ set -euo pipefail
 id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-student
 """
         acceptance_tests = [{"command": "test -f /opt/slsg-scenario/README.md"}]
+        flag_placements = []
         if scenario.user_flag:
-            quoted_user_flag = shlex.quote(scenario.user_flag)
-            provision += (
-                f"printf '%s\\n' {quoted_user_flag} > /home/slsg-student/user.txt\n"
-                "chown slsg-student:slsg-student /home/slsg-student/user.txt\n"
-                "chmod 0400 /home/slsg-student/user.txt\n"
-            )
-            acceptance_tests.append(
+            flag_placements.append(
                 {
-                    "command": (
-                        f"test \"$(cat /home/slsg-student/user.txt)\" = {quoted_user_flag}"
-                    )
+                    "kind": "user",
+                    "path": "/home/slsg-student/user.txt",
+                    "owner": "slsg-student",
+                    "group": "slsg-student",
+                    "mode": "0400",
                 }
             )
         if scenario.system_flag:
-            quoted_system_flag = shlex.quote(scenario.system_flag)
-            provision += (
-                f"printf '%s\\n' {quoted_system_flag} > /root/system.txt\n"
-                "chmod 0400 /root/system.txt\n"
-            )
-            acceptance_tests.append(
-                {"command": f"test \"$(cat /root/system.txt)\" = {quoted_system_flag}"}
+            flag_placements.append(
+                {
+                    "kind": "system",
+                    "path": "/root/system.txt",
+                    "owner": "root",
+                    "group": "root",
+                    "mode": "0400",
+                }
             )
         readme = (
             f"# {machine.name}\n\nTheme: {machine.theme}; difficulty: {machine.difficulty}.\n\n"
@@ -329,6 +326,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     "contents/scenario_manifest.json",
                     "contents/build.sh",
                     "contents/scripts/provision.sh",
+                    "contents/scripts/install-flags.sh",
                     "contents/scripts/verify.sh",
                 ],
                 "services": [{"name": "ssh", "protocol": "tcp", "port": 22}],
@@ -368,6 +366,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     objective.model_dump(mode="json")
                     for objective in scenario.attack_graph.objectives
                 ],
+                "flag_placements": flag_placements,
             },
             ensure_ascii=False,
             indent=2,

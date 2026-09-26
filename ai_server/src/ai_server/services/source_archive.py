@@ -10,14 +10,15 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from ..models import GeneratedSource, ScenarioDraft, SourceFile, rockyou_password_placeholder
+from ..scenario_manifest import ScenarioManifest
+from .flag_scripts import flag_verification_commands, render_flag_install_script
 from .rockyou import materialize_rockyou_placeholders
-from .scenario_secrets import (
-    materialize_scenario_flag_placeholders,
-    redact_scenario_flags,
-)
+from .scenario_secrets import materialize_scenario_flag_placeholders, redact_scenario_flags
 from .source_validation import validate_source
 
 VERIFICATION_SCRIPT = PurePosixPath("contents/scripts/verify.sh")
+FLAG_INSTALL_SCRIPT = PurePosixPath("contents/scripts/install-flags.sh")
+SERVER_GENERATED_SCRIPTS = frozenset({VERIFICATION_SCRIPT, FLAG_INSTALL_SCRIPT})
 
 
 class InvalidSourceError(ValueError):
@@ -50,7 +51,7 @@ class SourceArchive:
         for source_file in generated.files:
             relative = self._validate_path(source_file.path)
             normalized = relative.as_posix()
-            if relative == VERIFICATION_SCRIPT:
+            if relative in SERVER_GENERATED_SCRIPTS:
                 continue
             if normalized in paths:
                 raise InvalidSourceError(f"duplicate generated path: {normalized}")
@@ -96,7 +97,11 @@ class SourceArchive:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(content, encoding="utf-8")
             destination.chmod(int(source_file.mode, 8))
-        verification_size = self._write_verification_script(candidate_root)
+        flag_install_size = self._write_flag_install_script(candidate_root, scenario)
+        if flag_install_size:
+            paths.add(FLAG_INSTALL_SCRIPT.as_posix())
+            total_size += flag_install_size
+        verification_size = self._write_verification_script(candidate_root, scenario)
         if verification_size:
             paths.add(VERIFICATION_SCRIPT.as_posix())
             total_size += verification_size
@@ -145,7 +150,33 @@ class SourceArchive:
         return archive_path, self._write_archive(source_root, archive_path)
 
     @staticmethod
-    def _write_verification_script(candidate_root: Path) -> int:
+    def _load_typed_manifest(candidate_root: Path) -> ScenarioManifest | None:
+        try:
+            value = json.loads(
+                (candidate_root / "contents/scenario_manifest.json").read_text(encoding="utf-8")
+            )
+            return ScenarioManifest.model_validate(value)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return None
+
+    @classmethod
+    def _write_flag_install_script(cls, candidate_root: Path, scenario: ScenarioDraft) -> int:
+        manifest = cls._load_typed_manifest(candidate_root)
+        script = (
+            render_flag_install_script(manifest, scenario)
+            if manifest is not None
+            else "#!/bin/bash\nset -euo pipefail\n"
+        )
+        destination = candidate_root.joinpath(*FLAG_INSTALL_SCRIPT.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(script, encoding="utf-8")
+        destination.chmod(0o700)
+        return len(script.encode("utf-8"))
+
+    @classmethod
+    def _write_verification_script(
+        cls, candidate_root: Path, scenario: ScenarioDraft | None = None
+    ) -> int:
         commands: list[tuple[str, str]] = []
         manifest_path = candidate_root / "contents/scenario_manifest.json"
         try:
@@ -170,6 +201,16 @@ class SourceArchive:
                 break
             else:
                 commands = parsed_commands
+        if scenario is not None:
+            typed_manifest = cls._load_typed_manifest(candidate_root)
+            if typed_manifest is not None:
+                start = len(typed_manifest.acceptance_tests)
+                commands.extend(
+                    (f"acceptance_tests[{start + index}]", command)
+                    for index, command in enumerate(
+                        flag_verification_commands(typed_manifest, scenario)
+                    )
+                )
         script = """#!/bin/bash
 set -euo pipefail
 
@@ -221,9 +262,7 @@ run_check() {
             "recorded_at": datetime.now(UTC).isoformat(),
             "report": review_report,
         }
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return self._write_archive(source_root, archive_path)
 
     def record_workbench_progress(self, archive_path: Path, workbench_report: dict) -> None:
@@ -267,13 +306,7 @@ run_check() {
         session_id: str,
         scenario_version_id: str = "v1",
     ) -> dict | None:
-        report_path = (
-            self.root
-            / session_id
-            / scenario_version_id
-            / "source"
-            / "repair_report.json"
-        )
+        report_path = self.root / session_id / scenario_version_id / "source" / "repair_report.json"
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -318,6 +351,8 @@ run_check() {
         for path in sorted(contents.rglob("*")):
             if not path.is_file():
                 continue
+            if path.relative_to(source_root) in SERVER_GENERATED_SCRIPTS:
+                continue
             mode = "0755" if path.stat().st_mode & 0o111 else "0644"
             files.append(
                 SourceFile(
@@ -340,6 +375,8 @@ run_check() {
                     continue
                 try:
                     relative = self._validate_path(info.filename)
+                    if relative in SERVER_GENERATED_SCRIPTS:
+                        continue
                     content = archive.read(info).decode("utf-8")
                 except (InvalidSourceError, UnicodeDecodeError, OSError):
                     return None

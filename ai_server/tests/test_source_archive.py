@@ -146,6 +146,7 @@ def web_generated_source(
         "contents/scenario_manifest.json",
         "contents/build.sh",
         "contents/scripts/provision.sh",
+        "contents/scripts/install-flags.sh",
         "contents/scripts/verify.sh",
         php_path,
     ]
@@ -194,6 +195,28 @@ def web_generated_source(
     )
 
 
+def configure_user_flag_placement(
+    generated: GeneratedSource,
+    *,
+    path: str = "/home/user/user.txt",
+    owner: str = "user",
+) -> None:
+    manifest_file = next(
+        file for file in generated.files if file.path == "contents/scenario_manifest.json"
+    )
+    manifest = json.loads(manifest_file.content)
+    manifest["flag_placements"] = [
+        {
+            "kind": "user",
+            "path": path,
+            "owner": owner,
+            "group": owner,
+            "mode": "0400",
+        }
+    ]
+    manifest_file.content = json.dumps(manifest)
+
+
 def test_rejects_acceptance_test_that_fetches_third_party_poc(tmp_path: Path) -> None:
     generated = web_generated_source()
     manifest_file = next(
@@ -201,11 +224,7 @@ def test_rejects_acceptance_test_that_fetches_third_party_poc(tmp_path: Path) ->
     )
     manifest = json.loads(manifest_file.content)
     manifest["acceptance_tests"].append(
-        {
-            "command": (
-                "curl -fsSL https://raw.githubusercontent.com/example/public-poc/main/poc.py"
-            )
-        }
+        {"command": ("curl -fsSL https://raw.githubusercontent.com/example/public-poc/main/poc.py")}
     )
     manifest_file.content = json.dumps(manifest)
 
@@ -446,10 +465,7 @@ def test_does_not_statically_parse_runtime_hash_generation(tmp_path: Path) -> No
 
     with zipfile.ZipFile(archive_path) as archive:
         report = json.loads(archive.read("validation_report.json"))
-    assert all(
-        not check["name"].endswith(":runtime_hash_generation")
-        for check in report["checks"]
-    )
+    assert all(not check["name"].endswith(":runtime_hash_generation") for check in report["checks"])
 
 
 def test_accepts_source_grounded_in_official_cve_facts(tmp_path: Path) -> None:
@@ -494,35 +510,30 @@ def test_static_validation_requires_the_server_managed_flag(tmp_path: Path) -> N
     )
 
 
-def test_materializes_typed_flag_placeholder_at_archive_boundary(tmp_path: Path) -> None:
+def test_generates_server_owned_flag_install_script_at_archive_boundary(tmp_path: Path) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     flag_scenario = scenario().model_copy(update={"user_flag": expected})
     generated = web_generated_source()
-    provision = next(
-        file for file in generated.files if file.path == "contents/scripts/provision.sh"
-    )
-    provision.content += (
-        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
-    )
+    configure_user_flag_placement(generated)
 
     archive_path, _ = SourceArchive(tmp_path).create("session-flags", flag_scenario, generated)
 
     with zipfile.ZipFile(archive_path) as archive:
-        archived = archive.read("contents/scripts/provision.sh").decode()
-    assert expected in archived
-    assert "__SLSG_USER_FLAG__" not in archived
+        provision = archive.read("contents/scripts/provision.sh").decode()
+        installer = archive.read("contents/scripts/install-flags.sh").decode()
+        verifier = archive.read("contents/scripts/verify.sh").decode()
+    assert expected not in provision
+    assert expected in installer
+    assert "/home/user/user.txt" in installer
+    assert expected in verifier
+    assert "test -f /home/user/user.txt" in verifier
 
 
 def test_repair_report_does_not_persist_materialized_flag(tmp_path: Path) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     flag_scenario = scenario().model_copy(update={"user_flag": expected})
     generated = web_generated_source()
-    provision = next(
-        file for file in generated.files if file.path == "contents/scripts/provision.sh"
-    )
-    provision.content += (
-        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
-    )
+    configure_user_flag_placement(generated)
 
     archive_path, _ = SourceArchive(tmp_path).create(
         "session-redacted-history",
@@ -545,8 +556,7 @@ def test_rejects_invented_flag_environment_injection(tmp_path: Path) -> None:
         file for file in generated.files if file.path == "contents/scripts/provision.sh"
     )
     provision.content += (
-        "test -n \"$SLSG_USER_FLAG\"\n"
-        "printf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
+        "test -n \"$SLSG_USER_FLAG\"\nprintf '%s\\n' '__SLSG_USER_FLAG__' > /home/user/user.txt\n"
     )
 
     with pytest.raises(InvalidSourceError) as captured:
@@ -713,7 +723,9 @@ def test_materializes_empty_verification_entrypoint_before_manifest_validation(
     script_path = candidate_root / "contents/scripts/verify.sh"
     assert size > 0
     assert script_path.is_file()
-    assert script_path.read_text() == """#!/bin/bash
+    assert (
+        script_path.read_text()
+        == """#!/bin/bash
 set -euo pipefail
 
 run_check() {
@@ -732,6 +744,7 @@ run_check() {
 }
 
 """
+    )
     assert script_path.stat().st_mode & 0o777 == 0o755
 
 
@@ -839,6 +852,7 @@ def test_rejects_manifest_that_does_not_match_attack_graph(tmp_path: Path) -> No
         "contents/scenario_manifest.json",
         "contents/build.sh",
         "contents/scripts/provision.sh",
+        "contents/scripts/install-flags.sh",
         "contents/scripts/verify.sh",
     ]
     manifest = json.dumps(
@@ -894,6 +908,7 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
         "contents/scenario_manifest.json",
         "contents/build.sh",
         "contents/scripts/provision.sh",
+        "contents/scripts/install-flags.sh",
         "contents/scripts/verify.sh",
     ]
     manifest = json.dumps(
@@ -941,9 +956,7 @@ def test_rejected_candidate_does_not_replace_last_valid_source(tmp_path: Path) -
 
     rejected = generated("#!/bin/bash\nset -euo pipefail\nfalse\n")
     rejected.files = [
-        source_file
-        for source_file in rejected.files
-        if source_file.path != "contents/README.md"
+        source_file for source_file in rejected.files if source_file.path != "contents/README.md"
     ]
     with pytest.raises(InvalidSourceError):
         archive.create(
@@ -966,9 +979,7 @@ def test_static_validation_does_not_guess_test_markers_from_names(tmp_path: Path
     marker = "RSC_RCE_TEST_PAYLOAD_MARKER"
     for source_file in generated.files:
         if source_file.path == "contents/app/index.php":
-            source_file.content += (
-                f"if ($_POST['payload'] === '{marker}') {{ file_put_contents('/tmp/rce', 'ok'); }}\n"
-            )
+            source_file.content += f"if ($_POST['payload'] === '{marker}') {{ file_put_contents('/tmp/rce', 'ok'); }}\n"
         if source_file.path == "contents/scenario_manifest.json":
             manifest = json.loads(source_file.content)
             manifest["acceptance_tests"].append(
@@ -980,34 +991,46 @@ def test_static_validation_does_not_guess_test_markers_from_names(tmp_path: Path
     assert archive_path.is_file()
 
 
-def test_static_validation_does_not_infer_acceptance_test_semantics(tmp_path: Path) -> None:
+def test_rejects_ai_managed_placeholder_guard_with_permissive_acceptance_test(
+    tmp_path: Path,
+) -> None:
     expected = "flag{user_a1d51d7f803f51f0356f3e547c842a0b}"
     flag_scenario = scenario().model_copy(update={"user_flag": expected})
     generated = web_generated_source()
+    configure_user_flag_placement(generated, path="/home/rscuser/user.txt", owner="rscuser")
     for source_file in generated.files:
         if source_file.path == "contents/scripts/provision.sh":
-            source_file.content += f"printf '%s\\n' '{expected}' > /home/rscuser/user.txt\n"
+            source_file.content += (
+                "if [[ '__SLSG_USER_FLAG__' != '__SLSG_USER_FLAG__' ]]; then\n"
+                "  printf '%s\\n' '__SLSG_USER_FLAG__' > /home/rscuser/user.txt\n"
+                "else\n"
+                "  rm -f /home/rscuser/user.txt\n"
+                "fi\n"
+            )
         if source_file.path == "contents/scenario_manifest.json":
             manifest = json.loads(source_file.content)
             manifest["acceptance_tests"].append(
                 {
                     "command": (
-                        "sudo -u rscuser cat /home/rscuser/user.txt | "
-                        f"grep -Fxq '{expected}'"
+                        "if test -e /home/rscuser/user.txt; then test -s /home/rscuser/user.txt; "
+                        "else test ! -e /home/rscuser/user.txt; fi"
                     )
                 }
             )
             source_file.content = json.dumps(manifest)
 
-    archive_path, _ = SourceArchive(tmp_path).create("session", flag_scenario, generated)
-    assert archive_path.is_file()
+    with pytest.raises(InvalidSourceError) as captured:
+        SourceArchive(tmp_path).create("session", flag_scenario, generated)
+    assert any(
+        check["name"] == "flags:user:server_owned"
+        for check in captured.value.report["checks"]
+        if check["status"] == "fail"
+    )
 
 
 def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) -> None:
     archive = SourceArchive(tmp_path)
-    archive_path, original_checksum = archive.create(
-        "session", scenario(), web_generated_source()
-    )
+    archive_path, original_checksum = archive.create("session", scenario(), web_generated_source())
     review_report = {
         "kind": "source_semantic_review",
         "status": "rejected",
@@ -1015,29 +1038,24 @@ def test_records_rejected_semantic_review_in_source_and_archive(tmp_path: Path) 
         "checks": [],
     }
 
-    updated_checksum = archive.record_semantic_review(
-        archive_path, review_report, approved=False
-    )
+    updated_checksum = archive.record_semantic_review(archive_path, review_report, approved=False)
 
-    report = json.loads(
-        (archive_path.parent / "source" / "repair_report.json").read_text()
-    )
+    report = json.loads((archive_path.parent / "source" / "repair_report.json").read_text())
     assert report["source_semantic_review"]["status"] == "rejected"
     assert report["source_semantic_review"]["report"] == review_report
     with zipfile.ZipFile(archive_path) as zipped:
         archived_report = json.loads(zipped.read("repair_report.json"))
     assert archived_report["source_semantic_review"]["status"] == "rejected"
-    assert archive.load_semantic_review_from_archive(archive_path) == archived_report[
-        "source_semantic_review"
-    ]
+    assert (
+        archive.load_semantic_review_from_archive(archive_path)
+        == archived_report["source_semantic_review"]
+    )
     assert updated_checksum != original_checksum
 
 
 def test_workbench_progress_is_live_before_final_archive_refresh(tmp_path: Path) -> None:
     source_archive = SourceArchive(tmp_path)
-    archive_path, _ = source_archive.create(
-        "session", scenario(), web_generated_source()
-    )
+    archive_path, _ = source_archive.create("session", scenario(), web_generated_source())
     running = {
         "kind": "source_workbench",
         "status": "running",
