@@ -2748,7 +2748,7 @@
   .slsg-chat-composer {
     display: grid;
     flex: 0 0 auto;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     align-items: end;
     gap: 14px;
     padding: 22px 40px 24px;
@@ -2757,6 +2757,7 @@
     box-shadow: 0 -14px 32px rgba(6, 10, 18, 0.18);
   }
   .slsg-chat-current-input {
+    position: relative;
     grid-column: 1;
     grid-row: 1;
     min-width: 0;
@@ -2802,7 +2803,12 @@
     height: 69px;
   }
   .slsg-chat-current-input .slsg-chat-input {
-    padding-right: 110px;
+    padding-right: 150px;
+  }
+  .slsg-chat-current-input .slsg-chat-textarea {
+    min-height: 136px;
+    padding-right: 68px;
+    padding-bottom: 68px;
   }
   .slsg-chat-textarea {
     min-height: 99px;
@@ -2824,6 +2830,15 @@
     line-height: 1;
     pointer-events: none;
     transform: translateY(-50%);
+  }
+  .slsg-chat-current-input .slsg-chat-input + .slsg-chat-character-count {
+    right: 72px;
+  }
+  .slsg-chat-current-input .slsg-chat-theme-field .slsg-chat-character-count {
+    top: auto;
+    right: 72px;
+    bottom: 28px;
+    transform: none;
   }
   .slsg-chat-theme-input {
     display: grid;
@@ -2893,7 +2908,7 @@
     margin-top: 30px;
   }
   .slsg-chat-composer .slsg-chat-actions {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
     align-self: center;
     margin-top: 0;
@@ -2920,6 +2935,14 @@
       background 160ms ease,
       box-shadow 160ms ease,
       transform 160ms ease;
+  }
+  .slsg-chat-current-input > .slsg-chat-send-button {
+    position: absolute;
+    right: 12px;
+    bottom: 12px;
+    z-index: 1;
+    width: 44px;
+    height: 44px;
   }
   .slsg-chat-send-button:hover:not(:disabled) {
     border-color: #8ab7ff;
@@ -3622,10 +3645,6 @@
   .slsg-chat-composer {
     gap: 10px;
     padding: 16px 18px 18px;
-  }
-  .slsg-chat-send-button {
-    width: 54px;
-    height: 54px;
   }
   .slsg-chat-action-primary,
   .slsg-chat-action-secondary {
