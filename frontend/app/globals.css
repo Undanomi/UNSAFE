@@ -3712,9 +3712,8 @@
 /* Login screen: proportions are based on the 2610 × 1632 reference canvas. */
 .slsg-login-page {
   position: relative;
-  height: 100svh;
-  min-height: 0;
-  overflow: hidden;
+  min-height: 100svh;
+  overflow-x: clip;
   background:
     radial-gradient(circle at 78% 37%, rgba(70, 91, 116, 0.31), transparent 32%),
     radial-gradient(circle at 48% 49%, rgba(33, 55, 80, 0.19), transparent 39%),
@@ -3750,8 +3749,7 @@
   z-index: 2;
   display: grid;
   width: 100%;
-  height: calc(100svh - 90px);
-  min-height: 0;
+  min-height: calc(100svh - 90px);
   grid-template-columns: minmax(0, 720px) minmax(420px, 570px);
   align-items: center;
   justify-content: center;
@@ -4050,9 +4048,6 @@
 }
 
 @media (max-width: 1280px) {
-  .slsg-login-page {
-    overflow: hidden;
-  }
   .slsg-login-layout {
     grid-template-columns: minmax(0, 1fr) minmax(380px, 500px);
     gap: clamp(32px, 5vw, 64px);
@@ -4107,8 +4102,7 @@
     font-size: 2rem;
   }
   .slsg-login-layout {
-    height: calc(100svh - 76px);
-    min-height: 0;
+    min-height: calc(100svh - 76px);
     gap: 0;
     padding: 10px 16px 18px;
   }
