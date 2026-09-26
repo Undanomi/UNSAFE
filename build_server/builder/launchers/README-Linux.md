@@ -5,7 +5,7 @@
 ダウンロードしたZIP配布物を展開します。
 
 ```sh
-unzip <ARTIFACT_ID>.zip
+unzip ARTIFACT_ID.zip
 cd slsg-machine
 ```
 
@@ -27,141 +27,56 @@ sudo apt install qemu-system-x86 qemu-utils iproute2 unzip
 
 ## TAPを隔離ブリッジへ接続
 
-Kaliが接続する既存の隔離ブリッジと、QEMU用のTAPインターフェースを使用します。
-
-以降の `<BRIDGE_INTERFACE>` と `<TAP_INTERFACE>` は、実際の環境に合わせて置き換えてください。
-
-設定例：
-
-```text
-<BRIDGE_INTERFACE>: br-slsg
-<TAP_INTERFACE>: tap-slsg
-```
-
-隔離ブリッジは、専用の有線NICやハイパーバイザーの隔離ネットワークへ接続し、DHCPがターゲットへ届くよう事前に構成してください。
-
-既存のブリッジを確認します。
+以下では、Kaliが接続する既存の隔離ブリッジを`br-slsg`、QEMU用TAPを`tap-slsg`とします。`br-slsg`は、専用の有線NICやハイパーバイザーの隔離ネットワークへ接続し、DHCPがターゲットへ届くよう事前に構成してください。
 
 ```sh
-ip link show type bridge
-```
-
-使用するインターフェース名を変数へ設定します。
-
-```sh
-BRIDGE_INTERFACE="<BRIDGE_INTERFACE>"
-TAP_INTERFACE="<TAP_INTERFACE>"
-```
-
-設定例：
-
-```sh
-BRIDGE_INTERFACE="br-slsg"
-TAP_INTERFACE="tap-slsg"
-```
-
-QEMU用のTAPインターフェースを作成し、隔離ブリッジへ接続します。
-
-```sh
-sudo ip tuntap add dev "$TAP_INTERFACE" mode tap user "$USER"
-sudo ip link set "$TAP_INTERFACE" master "$BRIDGE_INTERFACE"
-sudo ip link set "$TAP_INTERFACE" up
-```
-
-次のコマンドで、TAPインターフェースが隔離ブリッジへ接続されていることを確認できます。
-
-```sh
-ip link show master "$BRIDGE_INTERFACE"
+sudo ip tuntap add dev tap-slsg mode tap user "$USER"
+sudo ip link set tap-slsg master br-slsg
+sudo ip link set tap-slsg up
 ```
 
 再起動後も使用する場合は、使用中のNetworkManagerまたはsystemd-networkdへ同じ設定を登録してください。
 
 ## 起動
 
-起動スクリプトへ実行権限を付与します。
-
 ```sh
 chmod +x start-linux.sh
-```
-
-スクリプトの既定値である `tap-slsg` を使用する場合は、次のように実行します。
-
-```sh
 ./start-linux.sh
 ```
 
-別名のTAPインターフェースを使用する場合は、その名前を指定します。
-
-```sh
-./start-linux.sh --tap <TAP_INTERFACE>
-```
-
-実行例：
+別名のTAPを使用する場合は指定できます。
 
 ```sh
 ./start-linux.sh --tap tap-scenario-1
 ```
 
-利用できる場合はKVM、利用できなければTCGによるx86_64エミュレーションを自動選択します。
-
-起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは `provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
+利用できる場合はKVM、利用できなければTCGによるx86_64エミュレーションを自動選択します。起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは`provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
 
 ## VMware Workstation Pro上のKali
 
-VMware Virtual Network EditorでKali用VMnetを、`<BRIDGE_INTERFACE>` と同じ隔離ネットワークへブリッジし、KaliのNICをそのVMnetへ接続します。
-
-専用の有線LANを使う場合は、`<BRIDGE_INTERFACE>` とKaliのVMnetを同じ有線NICへブリッジします。
-
-`<BRIDGE_INTERFACE>` は、実際に使用する隔離ブリッジ名へ置き換えてください。
+VMware Virtual Network EditorでKali用VMnetを`br-slsg`と同じ隔離ネットワークへブリッジし、KaliのNICをそのVMnetへ接続します。専用の有線LANを使う場合は、`br-slsg`とKaliのVMnetを同じ有線NICへブリッジします。
 
 ## VirtualBox上のKali
 
-Kaliの「ネットワーク」設定で「ブリッジアダプター」を選び、名前に `<BRIDGE_INTERFACE>` または `<BRIDGE_INTERFACE>` が使用する専用NICを指定します。
-
-VirtualBox Host-Onlyを利用する場合は、そのネットワークとTAPが同じLinuxブリッジへ所属し、DHCPが動作している必要があります。
+Kaliの「ネットワーク」設定で「ブリッジアダプター」を選び、名前に`br-slsg`または`br-slsg`が使用する専用NICを指定します。VirtualBox Host-Onlyを利用する場合は、そのネットワークとTAPが同じLinuxブリッジへ所属し、DHCPが動作している必要があります。
 
 ## WSL Kaliを別のWindows PCで使う場合
 
-Windows PCを `<BRIDGE_INTERFACE>` が接続している隔離LANへ接続します。
+Windows PCを`br-slsg`が接続している隔離LANへ接続します。WSL Kaliからコンソールに表示されたターゲットIPへ直接アクセスします。Windows Defender Firewallでは、WSLから隔離LANへの送信が許可されていることを確認してください。
 
-WSL Kaliから、コンソールに表示されたターゲットIPへ直接アクセスします。Windows Defender Firewallでは、WSLから隔離LANへの送信が許可されていることを確認してください。
+## Kaliから探索・接続
 
-## Kaliから探索・接続確認
-
-コンソールに表示されたIPアドレスを `<TARGET_IP>` に指定します。ホスト側の転送ポートは使用しません。
-
-最初に、Kaliからターゲットへpingを実行します。
-
-```sh
-ping <TARGET_IP>
-```
-
-応答が返れば、Kaliからターゲットへの接続は成功です。
-
-pingを終了する場合は、`Ctrl + C` を押します。
-
-必要に応じて、ターゲットを探索します。
+コンソールに表示されたIPをそのまま指定します。ホスト側の転送ポートは使用しません。
 
 ```sh
 sudo arp-scan --localnet
-sudo nmap -Pn -sS -sV -p- <TARGET_IP>
-sudo nmap -Pn -sU --top-ports 100 <TARGET_IP>
+sudo nmap -Pn -sS -sV -p- TARGET_IP
+sudo nmap -Pn -sU --top-ports 100 TARGET_IP
+ssh provisioner@TARGET_IP
 ```
 
-ターゲットIPへ到達できない場合は、次のコマンドでTAPが隔離ブリッジに所属していることを確認します。
-
-```sh
-ip link show master <BRIDGE_INTERFACE>
-```
-
-あわせて、Kaliとターゲットが同じサブネットのIPアドレスを取得していることを確認してください。
+ターゲットIPへ到達できない場合は、`ip link show master br-slsg`でTAPがブリッジに所属していること、Kaliとターゲットが同じサブネットのアドレスを取得していることを確認してください。
 
 ## 注意
 
-脆弱なサービスを企業LAN、公衆Wi-Fi、インターネットへ接続しないでください。専用のHost-Onlyネットワーク、隔離された仮想スイッチ、または物理的に隔離した有線LANを使用してください。
-
-終了するときは、ゲスト内で次のコマンドを実行します。
-
-```sh
-sudo poweroff
-```
+脆弱なサービスを企業LAN、公衆Wi-Fi、インターネットへ接続しないでください。専用のHost-Onlyネットワーク、隔離された仮想スイッチ、または物理的に隔離した有線LANを使用してください。終了はゲスト内で`sudo poweroff`を実行します。
