@@ -27,7 +27,10 @@ build-specific internal path:
 
 The worker derives this path from the generated build ID; callers cannot supply
 a filesystem path. The archive must contain `build.sh`, either at its root, in
-`contents/`, or within three levels of the root.
+`contents/`, or within three levels of the root. Validated SLSG archives also
+contain server-generated `contents/scripts/install-flags.sh` and
+`contents/scripts/verify.sh`; Packer runs them after the scenario `build.sh`, in
+that order.
 
 ## Local development
 

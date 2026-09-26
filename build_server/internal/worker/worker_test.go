@@ -77,11 +77,12 @@ func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 	}
 	text := string(template)
 	buildIndex := strings.Index(text, `"bash ./build.sh"`)
+	flagsIndex := strings.Index(text, `"bash ./scripts/install-flags.sh"`)
 	verifyIndex := strings.Index(text, `"bash ./scripts/verify.sh"`)
 	cleanupIndex := strings.Index(text, `"rm -rf /tmp/scenario"`)
 	bannerIndex := strings.Index(text, `"bash /tmp/slsg-configure-login-ip.sh"`)
 	passwordIndex := strings.Index(text, `provisioner '${var.machine_password}' | chpasswd`)
-	if buildIndex < 0 || verifyIndex <= buildIndex || cleanupIndex <= verifyIndex || bannerIndex <= cleanupIndex || passwordIndex <= bannerIndex {
+	if buildIndex < 0 || flagsIndex <= buildIndex || verifyIndex <= flagsIndex || cleanupIndex <= verifyIndex || bannerIndex <= cleanupIndex || passwordIndex <= bannerIndex {
 		t.Fatal("Packer must verify the scenario before configuring login and changing the password")
 	}
 	for _, required := range []string{

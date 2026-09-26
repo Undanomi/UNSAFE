@@ -72,6 +72,27 @@ func TestValidateScenarioSourceRequiresVerificationEntrypoint(t *testing.T) {
 	}
 }
 
+func TestValidateScenarioSourceRequiresFlagInstaller(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range requiredScenarioFiles {
+		if name == "contents/scripts/install-flags.sh" {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := ValidateScenarioSource(root)
+	if err == nil || !strings.Contains(err.Error(), "contents/scripts/install-flags.sh") {
+		t.Fatalf("ValidateScenarioSource() error = %v, want missing install-flags.sh", err)
+	}
+}
+
 func TestValidateScenarioSourceAllowsEmptyRequiredFiles(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range requiredScenarioFiles {

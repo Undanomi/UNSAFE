@@ -30,6 +30,7 @@ LangGraphの明示的なノードと条件分岐で実行します。セッシ�
 │   ├── scenario_manifest.json
 │   ├── build.sh
 │   ├── scripts/provision.sh
+│   ├── scripts/install-flags.sh # AIサーバーが配置情報から生成
 │   ├── scripts/verify.sh      # Packerがプロビジョニング後に必ず実行
 │   ├── app/                 # シナリオに応じて生成
 │   └── config/              # シナリオに応じて生成
@@ -40,8 +41,10 @@ LangGraphの明示的なノードと条件分岐で実行します。セッシ�
 
 build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
 ai_server ホスト上で実行することはありません。
-User/System flagの実値はモデルへ渡さず、型付きプレースホルダーをアーカイブ作成時にだけ実値へ
-置換します。修復履歴とAIへの再入力では再びプレースホルダーへ戻します。
+User/System flagの実値はモデルへ渡しません。モデルは`scenario_manifest.json`の
+`flag_placements`へ配置先、owner、group、modeだけを構造化して返し、AIサーバーが
+`install-flags.sh`と内容・所有者・権限を確認する必須検査を生成します。実値を含むサーバー生成
+スクリプトは修復用のモデル入力とWorkbenchから除外します。
 
 Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
 入口へ到達することを必須とします。HTTP応答、アプリ固有の肯定検査、Web実行ユーザーの実効権限は、
@@ -134,8 +137,8 @@ Workbenchの合格には少なくとも1件の合否検証成功を必須とし�
 `finish`を合格にはしません。明示的な検証拒否や、変更も検証証拠もないまま操作枠を使い切った場合は、
 根拠のないソース修正を繰り返さずワークフローを明確に失敗させます。候補内のREADMEやログは未信頼データとして
 扱い、そこに含まれる指示や作業拒否をエージェントへの命令として扱いません。
-`contents/scripts/verify.sh`は後段のアーカイブ作成時にサーバーが生成するため、Workbench内の存在確認対象には
-しません。共有されるのは読み取り元の不変なベースイメージだけで、
+`contents/scripts/install-flags.sh`と`contents/scripts/verify.sh`は後段のアーカイブ作成時にサーバーが
+生成するため、Workbench内の存在確認対象にはしません。共有されるのは読み取り元の不変なベースイメージだけで、
 コンテナ、書き込み可能なroot filesystem、`/workspace`、`/tmp`、導入済みpackage、生成物は候補ごとに
 独立し、検証終了時に破棄されます。実フラグとパスワードはワークベンチへ渡しません。
 
