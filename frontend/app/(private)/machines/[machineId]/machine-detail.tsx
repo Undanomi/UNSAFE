@@ -579,7 +579,7 @@ export function MachineDetailView({
                 <FlagPanel
                   challengeName={machine.name}
                   flag={{ ...machine.systemFlag, acquired: systemFlagAcquired }}
-                  index={2}
+                  index={machine.userFlag ? 2 : 1}
                   onCorrect={() => setSystemFlagAcquired(true)}
                 />
               </>
