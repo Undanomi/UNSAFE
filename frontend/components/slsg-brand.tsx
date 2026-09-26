@@ -1,3 +1,4 @@
+import Image from "next/image"
 import Link from "next/link"
 
 type SlsgBrandProps = {
@@ -34,10 +35,15 @@ export function SlsgBrand({
       className={`slsg-brand slsg-brand-${variant} ${className}`}
       href={href}
     >
-      <span aria-hidden="true" className={`slsg-brand-mark slsg-brand-mark-${variant}`}>
-        <UnsafeBrandSymbol />
-      </span>
-      <span>UNSAFE</span>
+      <Image
+        alt=""
+        className="slsg-brand-image"
+        height={60}
+        preload
+        src="/thumb.svg"
+        unoptimized
+        width={211}
+      />
     </Link>
   )
 }

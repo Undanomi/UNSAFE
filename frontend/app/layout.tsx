@@ -17,6 +17,7 @@ const notoSansJp = Noto_Sans_JP({
 export const metadata: Metadata = {
   title: "UNSAFE",
   description: "セキュリティ学習用のシナリオ作成ジェネレーター",
+  icons: { icon: { url: "/logo.svg", type: "image/svg+xml" } },
 }
 
 export default function RootLayout({

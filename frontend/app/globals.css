@@ -271,6 +271,11 @@
     letter-spacing: 0.025em;
     line-height: 1;
   }
+  .slsg-brand-image {
+    display: block;
+    width: 190px;
+    height: auto;
+  }
   .slsg-brand-mark {
     position: relative;
     display: grid;
@@ -307,6 +312,9 @@
     font-size: clamp(1.6rem, 2.3vw, 2.35rem);
     font-weight: 500;
     letter-spacing: 0.15em;
+  }
+  .slsg-brand-orbit .slsg-brand-image {
+    width: clamp(160px, 13.5vw, 178px);
   }
   .slsg-brand-mark-orbit {
     width: 68px;
