@@ -21,6 +21,7 @@ from ..models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    AutomaticFlagPlan,
     GeneratedSource,
     GuidancePlan,
     MachineInformation,
@@ -39,6 +40,7 @@ from ..prompts import (
     attack_graph_json_for_ai,
     attack_graph_prompt,
     attack_graph_revision_prompt,
+    automatic_flag_plan_prompt,
     code_prompt,
     guidance_prompt,
     repair_prompt,
@@ -286,6 +288,11 @@ class CVEVerification(BaseModel):
 
 
 class AIGenerator(Protocol):
+    async def plan_automatic_flags(
+        self,
+        machine: MachineInformation,
+    ) -> AutomaticFlagPlan: ...
+
     async def generate_guidance(
         self,
         machine: MachineInformation,
@@ -400,6 +407,44 @@ class _BaseGenerator:
         max_output_tokens: int | None = None,
     ) -> str:
         raise NotImplementedError
+
+    async def plan_automatic_flags(
+        self,
+        machine: MachineInformation,
+    ) -> AutomaticFlagPlan:
+        prompt = automatic_flag_plan_prompt(machine)
+        last_error: Exception | None = None
+        last_response: str | None = None
+        for _ in range(self.settings.generation_retries):
+            response: str | None = None
+            try:
+                response = await self._generate(
+                    prompt,
+                    json_output=True,
+                    response_schema=AutomaticFlagPlan,
+                    max_output_tokens=min(self.max_output_tokens, 2_000),
+                )
+                last_response = response
+                value = json.loads(response)
+                raw_plan = (
+                    value.get("flag_plan", value) if isinstance(value, dict) else value
+                )
+                return AutomaticFlagPlan.model_validate(raw_plan)
+            except (
+                httpx.HTTPError,
+                RuntimeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+                ValidationError,
+            ) as error:
+                last_error = error
+                prompt = _prompt_with_rejection(prompt, error, response)
+        raise RuntimeError(
+            f"Could not determine an automatic flag plan safely: {last_error}; "
+            f"last output: {(last_response or '')[:2_000]}"
+        )
 
     async def _draft_attack_graph(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import io
 import struct
 import tarfile
@@ -502,13 +503,23 @@ class FakeWorkbenchGenerator:
         )
 
 
+class RecordingSourceArchive:
+    def __init__(self) -> None:
+        self.progress: list[dict] = []
+
+    def record_workbench_progress(self, _archive_path, report: dict) -> None:
+        self.progress.append(copy.deepcopy(report))
+
+
 @pytest.mark.asyncio
-async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() -> None:
+async def test_workbench_agent_imports_generated_files_and_destroys_sandbox(tmp_path) -> None:
     sandbox = FakeSourceSandbox()
+    archive = RecordingSourceArchive()
     workflow = object.__new__(MachineWorkflow)
     workflow.source_sandbox = sandbox
     workflow.source_workbench_action_limit = 3
     workflow.generator = FakeWorkbenchGenerator()
+    workflow.source_archive = archive
     source = GeneratedSource(
         files=[SourceFile(path="contents/package.json", content='{"scripts":{}}\n')]
     )
@@ -538,6 +549,7 @@ async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() ->
             ),
         ),
         source,
+        archive_path=tmp_path / "source.zip",
     )
 
     assert report["status"] == "pass"
@@ -546,6 +558,10 @@ async def test_workbench_agent_imports_generated_files_and_destroys_sandbox() ->
         "contents/package.json",
         "contents/package-lock.json",
     }
+    assert any(item.get("active_command") for item in archive.progress)
+    assert any(item["status"] == "running" and item["observations"] for item in archive.progress)
+    assert archive.progress[-1]["status"] == "pass"
+    assert archive.progress[-1]["observations"][0]["stdout"] == "build passed\n"
     assert sandbox.destroyed == ["sandbox-1"]
 
 

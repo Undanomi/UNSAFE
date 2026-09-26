@@ -226,9 +226,8 @@ run_check() {
         )
         return self._write_archive(source_root, archive_path)
 
-    def record_workbench_report(self, archive_path: Path, workbench_report: dict) -> str:
-        """Persist command evidence produced by the isolated source workbench."""
-
+    def record_workbench_progress(self, archive_path: Path, workbench_report: dict) -> None:
+        """Atomically persist the latest isolated workbench progress for live readers."""
         source_root = archive_path.parent / "source"
         report_path = source_root / "repair_report.json"
         try:
@@ -237,14 +236,50 @@ run_check() {
             report = {"attempts": []}
         if not isinstance(report, dict):
             report = {"attempts": []}
+        now = datetime.now(UTC).isoformat()
+        previous = report.get("source_workbench")
+        recorded_at = (
+            previous.get("recorded_at")
+            if isinstance(previous, dict) and isinstance(previous.get("recorded_at"), str)
+            else now
+        )
         report["source_workbench"] = {
-            "recorded_at": datetime.now(UTC).isoformat(),
+            "recorded_at": recorded_at,
+            "updated_at": now,
             "report": workbench_report,
         }
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+        temporary = report_path.with_name(f".{report_path.name}.tmp")
+        temporary.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
+        temporary.replace(report_path)
+
+    def record_workbench_report(self, archive_path: Path, workbench_report: dict) -> str:
+        """Persist final command evidence and refresh the submitted archive checksum."""
+
+        self.record_workbench_progress(archive_path, workbench_report)
+        source_root = archive_path.parent / "source"
         return self._write_archive(source_root, archive_path)
+
+    def load_workbench_progress(
+        self,
+        session_id: str,
+        scenario_version_id: str = "v1",
+    ) -> dict | None:
+        report_path = (
+            self.root
+            / session_id
+            / scenario_version_id
+            / "source"
+            / "repair_report.json"
+        )
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        progress = report.get("source_workbench") if isinstance(report, dict) else None
+        return progress if isinstance(progress, dict) else None
 
     @staticmethod
     def _write_archive(source_root: Path, archive_path: Path) -> str:

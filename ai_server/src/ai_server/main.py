@@ -100,6 +100,7 @@ def create_app(
             if resolved.source_sandbox_enabled
             else None
         )
+        scenario_archive = ScenarioDraftArchive(resolved.source_root)
         app.state.repository = repository
         app.state.skills = skill_service
         app.state.scenarios = ScenarioCoordinator(
@@ -108,7 +109,7 @@ def create_app(
             broker,
             resolved.scenario_chunk_size,
             resolved.scenario_generation_attempts,
-            ScenarioDraftArchive(resolved.source_root),
+            scenario_archive,
             skill_service,
         )
         app.state.workflow = MachineWorkflow(
@@ -125,6 +126,7 @@ def create_app(
             rockyou_max_line=resolved.rockyou_max_line,
             source_sandbox=source_sandbox,
             source_workbench_action_limit=resolved.source_workbench_action_limit,
+            scenario_archive=scenario_archive,
         )
         app.state.download_signer = DownloadSigner(
             resolved.download_signing_secret.get_secret_value(),

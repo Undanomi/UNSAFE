@@ -171,6 +171,24 @@ class ScenarioCoordinator:
             await self.broker.publish(
                 session_id, ServerEvent("scenario.started", {"session_id": session_id})
             )
+            if (
+                state.machine_information.needs_user_flag is None
+                and state.machine_information.needs_system_flag is None
+            ):
+                flag_plan = await self.generator.plan_automatic_flags(
+                    state.machine_information
+                )
+                state.machine_information = (
+                    state.machine_information.with_automatic_flag_plan(flag_plan)
+                )
+                await self.repository.save(state)
+                await self.broker.publish(
+                    session_id,
+                    ServerEvent(
+                        "scenario.flags_planned",
+                        flag_plan.model_dump(mode="json"),
+                    ),
+                )
             attack_graph_skills = await self.skill_service.resolve(
                 session_id,
                 SkillPhase.ATTACK_GRAPH,
