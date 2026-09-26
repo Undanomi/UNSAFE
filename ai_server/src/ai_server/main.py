@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from .services.events import EventBroker
 from .services.scenario_archive import ScenarioDraftArchive
 from .services.scenarios import ScenarioCoordinator
 from .services.source_archive import SourceArchive
+from .services.source_sandbox import SourceSandboxClient
 from .services.stub_ai import StubGenerator
 from .services.workflow import MachineWorkflow
 from .skills.planning import SemanticSkillPlanner
@@ -46,6 +48,9 @@ def create_app(
         )
         build_http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(resolved.build_timeout_seconds, connect=10)
+        )
+        sandbox_http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(resolved.source_sandbox_timeout_seconds, connect=10)
         )
         if resolved.ai_provider == "stub":
             generator = StubGenerator()
@@ -85,6 +90,17 @@ def create_app(
             resolved.build_server_url,
             resolved.build_server_token.get_secret_value(),
         )
+        source_sandbox = (
+            SourceSandboxClient(
+                sandbox_http_client,
+                resolved.source_sandbox_url,
+                resolved.source_sandbox_token.get_secret_value(),
+                resolved.source_sandbox_timeout_seconds,
+            )
+            if resolved.source_sandbox_enabled
+            else None
+        )
+        scenario_archive = ScenarioDraftArchive(resolved.source_root)
         app.state.repository = repository
         app.state.skills = skill_service
         app.state.scenarios = ScenarioCoordinator(
@@ -93,7 +109,7 @@ def create_app(
             broker,
             resolved.scenario_chunk_size,
             resolved.scenario_generation_attempts,
-            ScenarioDraftArchive(resolved.source_root),
+            scenario_archive,
             skill_service,
         )
         app.state.workflow = MachineWorkflow(
@@ -108,19 +124,26 @@ def create_app(
             rockyou_path=resolved.rockyou_path,
             rockyou_min_line=resolved.rockyou_min_line,
             rockyou_max_line=resolved.rockyou_max_line,
+            source_sandbox=source_sandbox,
+            source_workbench_action_limit=resolved.source_workbench_action_limit,
+            scenario_archive=scenario_archive,
         )
         app.state.download_signer = DownloadSigner(
             resolved.download_signing_secret.get_secret_value(),
             resolved.download_url_ttl_seconds,
         )
         yield
-        for task in [
+        background_tasks = [
             *app.state.scenarios.tasks.values(),
             *app.state.workflow.tasks.values(),
-        ]:
+        ]
+        for task in background_tasks:
             task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         await ai_client.aclose()
         await build_http_client.aclose()
+        await sandbox_http_client.aclose()
         await repository.close()
 
     app = FastAPI(title=resolved.app_name, version="0.1.0", lifespan=lifespan)

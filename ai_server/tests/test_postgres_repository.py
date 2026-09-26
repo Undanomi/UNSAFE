@@ -73,6 +73,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
             scenario_description="Investigate the database training machine.",
             definition="# persisted scenario",
             target_os="Debian 13.7.0",
+            tags=["PostgreSQL", "永続化"],
             user_flag="flag{user_postgres_test}",
             system_flag="flag{system_postgres_test}",
             attack_graph=AttackGraph(
@@ -112,6 +113,7 @@ async def test_postgres_migration_and_session_round_trip() -> None:
         )
         assert persisted.scenario.definition == "# persisted scenario"
         assert persisted.scenario.target_os == "Debian 13.7.0"
+        assert persisted.scenario.tags == ["PostgreSQL", "永続化"]
         assert persisted.scenario.user_flag == "flag{user_postgres_test}"
         assert persisted.scenario.system_flag == "flag{system_postgres_test}"
         assert persisted.scenario.attack_graph.steps[0].vulnerable_version == "1.0"

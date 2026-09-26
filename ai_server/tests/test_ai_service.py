@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -22,6 +23,8 @@ from ai_server.models import (
 )
 from ai_server.prompts import attack_graph_json_for_ai
 from ai_server.services.ai import (
+    AIProviderRequestError,
+    AIProviderSafetyRefusalError,
     CVEVerification,
     GeminiGenerator,
     OpenAIGenerator,
@@ -171,6 +174,188 @@ async def test_openai_generation_reports_incomplete_response() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(RuntimeError, match="max_output_tokens"):
             await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_reports_safety_refusal_distinctly() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "status": "completed",
+                        "content": [
+                            {
+                                "type": "refusal",
+                                "refusal": "This request cannot be processed safely.",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderSafetyRefusalError, match="安全ポリシー"):
+            await OpenAIGenerator(settings, client)._generate("Generate JSON", json_output=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_retries_temporary_rate_limit_without_changing_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                429,
+                headers={"Retry-After": "0", "x-request-id": "req-rate-limited"},
+                json={
+                    "error": {
+                        "type": "rate_limit_error",
+                        "code": "slow_down",
+                        "message": "Reduce request rate.",
+                    }
+                },
+            )
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await OpenAIGenerator(settings, client)._generate("unchanged prompt")
+
+    assert result == "generated"
+    assert len(requests) == 2
+    assert requests[0].content == requests[1].content
+    assert requests[0].headers["X-Client-Request-Id"] == requests[1].headers[
+        "X-Client-Request-Id"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openai_generation_does_not_retry_spend_limit() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "project_spend_limit_exceeded",
+                    "message": "Project spend limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_request_min_interval_seconds=0,
+        ai_transient_retry_attempts=3,
+        ai_transient_retry_jitter_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError, match="non-retryable") as raised:
+            await OpenAIGenerator(settings, client)._generate("prompt")
+
+    assert raised.value.error_code == "project_spend_limit_exceeded"
+    assert raised.value.retryable is False
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_does_not_consume_model_output_retries() -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "organization_usage_limit_exceeded",
+                    "message": "Organization usage limit reached.",
+                }
+            },
+        )
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        generation_retries=3,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AIProviderRequestError):
+            await OpenAIGenerator(settings, client).generate_source(
+                MachineInformation(
+                    name="Provider failure",
+                    visibility="private",
+                    theme="Retry separation",
+                    difficulty="Easy",
+                ),
+                ScenarioDraft(
+                    scenario_id="scenario-provider-failure",
+                    title="Provider failure",
+                    definition="# Provider failure",
+                    attack_graph=graph_without_objectives(),
+                ),
+            )
+
+    assert requests == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_generator_serializes_shared_requests() -> None:
+    active = 0
+    max_active = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return openai_response("generated")
+
+    settings = Settings(
+        ai_provider="openai",
+        openai_api_key="test-openai-key",
+        ai_max_concurrent_requests=1,
+        ai_request_min_interval_seconds=0,
+        _env_file=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        generator = OpenAIGenerator(settings, client)
+        results = await asyncio.gather(
+            generator._generate("first"),
+            generator._generate("second"),
+        )
+
+    assert results == ["generated", "generated"]
+    assert max_active == 1
 
 
 @pytest.mark.asyncio
@@ -457,6 +642,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
                 {
                     "scenario_description": "Investigate the machine.",
                     "definition": compacted_definition,
+                    "tags": ["Web"],
                 }
             )
 
@@ -472,6 +658,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
                 {
                     "scenario_description": "Investigate the machine.",
                     "definition": overlong_definition,
+                    "tags": ["Web"],
                 }
             ),
         )
@@ -479,6 +666,7 @@ async def test_overlong_scenario_is_compacted_instead_of_regenerated(monkeypatch
     assert len(overlong_definition) > 12_000
     assert len(result.definition) <= 10_500
     assert result.definition == compacted_definition
+    assert result.tags == ["Web"]
     assert "新しい案へ作り直さず" in prompts[0]
     assert overlong_definition in prompts[0]
 
@@ -1044,6 +1232,115 @@ async def test_source_review_discards_framework_owned_rockyou_test_request() -> 
 
 
 @pytest.mark.asyncio
+async def test_source_review_does_not_require_third_party_poc_in_automated_tests() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-third-party-poc",
+        title="External PoC boundary",
+        definition="# Scenario\nThe learner may obtain a public PoC.",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The automated test does not run the public PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": [
+                            "contents/scenario_manifest.json",
+                            "contents/README.md",
+                        ],
+                        "evidence": (
+                            "README requires the learner to obtain a separate public PoC, "
+                            "but acceptance_tests do not execute it."
+                        ),
+                        "remediation": (
+                            "Download and execute that PoC in the acceptance test to prove "
+                            "the exploit."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/README.md", content="Obtain the PoC.")]
+            ),
+        )
+
+    assert review.approved is True
+    assert len(review.findings) == 1
+    assert review.findings[0].severity == "warning"
+    assert "READMEで攻略者へ入手を案内" in review.findings[0].remediation
+
+
+@pytest.mark.asyncio
+async def test_source_review_keeps_existing_automated_third_party_poc_as_error() -> None:
+    scenario = ScenarioDraft(
+        scenario_id="scenario-unsafe-poc-test",
+        title="Unsafe PoC automation",
+        definition="# Scenario",
+        attack_graph=graph_without_objectives(),
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return gemini_response(
+            {
+                "approved": False,
+                "summary": "The acceptance test downloads and executes a third-party PoC.",
+                "findings": [
+                    {
+                        "step_id": "enumerate-web",
+                        "severity": "error",
+                        "category": "acceptance_test_gap",
+                        "repair_target": "source_code",
+                        "affected_files": ["contents/scenario_manifest.json"],
+                        "evidence": (
+                            "acceptance_tests uses curl to download poc.py from GitHub and "
+                            "executes it with python3."
+                        ),
+                        "remediation": (
+                            "Remove the third-party PoC from automated validation; skip this "
+                            "attack-specific test if no local replacement can be generated."
+                        ),
+                    }
+                ],
+            }
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        review = await GeminiGenerator(Settings(gemini_api_key="test-key"), client).review_source(
+            MachineInformation(
+                name="PoC boundary",
+                visibility="private",
+                theme="CVE",
+                difficulty="High",
+            ),
+            scenario,
+            GeneratedSource(
+                files=[SourceFile(path="contents/scenario_manifest.json", content="{}")]
+            ),
+        )
+
+    assert review.approved is False
+    assert review.findings[0].severity == "error"
+
+
+@pytest.mark.asyncio
 async def test_invalid_non_cve_cwe_review_is_rejected_before_routing() -> None:
     requests: list[dict] = []
     scenario = ScenarioDraft(
@@ -1299,6 +1596,7 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
                         f"# Generated scenario attempt {request_number}\n\n"
                         "Parent directory mode is unspecified."
                     ),
+                    "tags": ["権限設定"],
                 }
             )
         if request_number == 3:
@@ -1355,12 +1653,16 @@ async def test_generate_scenario_retries_after_semantic_review_rejection() -> No
     assert attempts == 2
     assert len(requests) == 5
     retry_prompt = requests[3]["contents"][0]["parts"][0]["text"]
+    verification_prompt = requests[4]["contents"][0]["parts"][0]["text"]
     assert "scenario_semantic_review" in retry_prompt
     assert "permission_blocker" in retry_prompt
     assert "No mode is specified for the parent directory." in retry_prompt
     assert "Specify and validate owner, group, and mode." in retry_prompt
     assert "# Generated scenario attempt 2" in retry_prompt
     assert "文書全体を生成し直してはいけません" in retry_prompt
+    assert "scenario_repair_verification" in verification_prompt
+    assert "新しいフル監査ではなく" in verification_prompt
+    assert "より細かい実装要件を後出し" in verification_prompt
     graph_prompts = [
         request
         for request in requests
@@ -1432,7 +1734,7 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="Persisted draft was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)
@@ -1449,6 +1751,93 @@ async def test_generate_scenario_resumes_persisted_rejected_draft(monkeypatch) -
     assert len(observer.recorded) == 2
     assert observer.recorded[-1][1] is not None
     assert observer.recorded[-1][1].approved is True
+
+
+@pytest.mark.asyncio
+async def test_scenario_correction_uses_only_the_current_review(monkeypatch) -> None:
+    machine = MachineInformation(
+        name="Focused Repair", visibility="private", theme="Web", difficulty="Easy"
+    )
+    persisted = ScenarioDraft(
+        scenario_id="scenario-focused-repair",
+        title="Focused Repair",
+        scenario_description="Inspect the machine and obtain the flags.",
+        definition="# Scenario\n\nBase implementation plan.",
+        attack_graph=graph_without_objectives(),
+    )
+    first_review = ScenarioReview(
+        approved=False,
+        summary="First issue.",
+        findings=[
+            ScenarioReviewFinding(
+                step_id="enumerate",
+                severity="error",
+                category="implementation_gap",
+                evidence="OBSOLETE_FIRST_DIAGNOSTIC",
+                remediation="Apply the first focused repair.",
+            )
+        ],
+    )
+
+    class Observer:
+        resume_scenario = persisted
+        resume_review = first_review
+
+        async def __call__(self) -> None:
+            return None
+
+        async def record_draft(self, *_args, **_kwargs) -> None:
+            return None
+
+    correction_prompts: list[str] = []
+    review_calls = 0
+    async with httpx.AsyncClient() as client:
+        generator = GeminiGenerator(
+            Settings(gemini_api_key="test-key", scenario_generation_attempts=2), client
+        )
+
+        async def generate(prompt, **_kwargs):
+            correction_prompts.append(prompt)
+            if len(correction_prompts) == 1:
+                old = "Base implementation plan."
+                new = "Base implementation plan with the first repair."
+            else:
+                old = "Base implementation plan with the first repair."
+                new = "Base implementation plan with both repairs."
+            return json.dumps(
+                {
+                    "scenario_description": None,
+                    "definition_replacements": [{"old": old, "new": new}],
+                }
+            )
+
+        async def review(_machine, _scenario, **_kwargs):
+            nonlocal review_calls
+            review_calls += 1
+            if review_calls == 1:
+                return ScenarioReview(
+                    approved=False,
+                    summary="Second issue.",
+                    findings=[
+                        ScenarioReviewFinding(
+                            step_id="enumerate",
+                            severity="error",
+                            category="implementation_gap",
+                            evidence="CURRENT_SECOND_DIAGNOSTIC",
+                            remediation="Apply the second focused repair.",
+                        )
+                    ],
+                )
+            return ScenarioReview(approved=True, summary="Focused repairs are complete.")
+
+        monkeypatch.setattr(generator, "_generate", generate)
+        monkeypatch.setattr(generator, "review_scenario", review)
+        scenario = await generator.generate_scenario(machine, on_attempt=Observer())
+
+    assert scenario.definition.endswith("both repairs.")
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" in correction_prompts[0]
+    assert "CURRENT_SECOND_DIAGNOSTIC" in correction_prompts[1]
+    assert "OBSOLETE_FIRST_DIAGNOSTIC" not in correction_prompts[1]
 
 
 @pytest.mark.asyncio
@@ -1669,7 +2058,7 @@ async def test_resumed_graph_review_revises_graph_before_scenario_text(monkeypat
                 }
             )
 
-        async def approve(_machine, _scenario):
+        async def approve(_machine, _scenario, **_kwargs):
             return ScenarioReview(approved=True, summary="The mismatch was repaired.")
 
         monkeypatch.setattr(generator, "_draft_attack_graph", should_not_generate_graph)
@@ -1788,6 +2177,7 @@ async def test_generate_scenario_regenerates_graph_after_broken_chain_review() -
                         f"# Generated scenario attempt {request_number}\n\n"
                         "The credential is available without the prerequisite."
                     ),
+                    "tags": ["認証情報"],
                 }
             )
         if request_number == 3:
@@ -1865,6 +2255,7 @@ async def test_generated_graph_issue_cannot_be_routed_to_user_input() -> None:
         {
             "scenario_description": "Training scenario.",
             "definition": "# Training scenario",
+            "tags": ["CVE"],
         },
         {
             "approved": False,
@@ -1940,6 +2331,7 @@ async def test_explicit_input_contradiction_requests_input_revision() -> None:
         {
             "scenario_description": "Training scenario.",
             "definition": "# Training scenario",
+            "tags": ["権限昇格"],
         },
         {
             "approved": False,
@@ -2394,6 +2786,7 @@ async def test_generate_scenario_without_cve_does_not_request_cve_services() -> 
                 {
                     "scenario_description": "Investigate the training machine and capture the flag.",
                     "definition": "# Generated scenario",
+                    "tags": ["Web"],
                 }
             )
         return gemini_response(

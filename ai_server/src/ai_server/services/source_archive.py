@@ -9,11 +9,16 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from ..models import GeneratedSource, ScenarioDraft, SourceFile
+from ..models import GeneratedSource, ScenarioDraft, SourceFile, rockyou_password_placeholder
+from ..scenario_manifest import ScenarioManifest
+from .flag_scripts import flag_verification_commands, render_flag_install_script
 from .rockyou import materialize_rockyou_placeholders
+from .scenario_secrets import materialize_scenario_flag_placeholders, redact_scenario_flags
 from .source_validation import validate_source
 
 VERIFICATION_SCRIPT = PurePosixPath("contents/scripts/verify.sh")
+FLAG_INSTALL_SCRIPT = PurePosixPath("contents/scripts/install-flags.sh")
+SERVER_GENERATED_SCRIPTS = frozenset({VERIFICATION_SCRIPT, FLAG_INSTALL_SCRIPT})
 
 
 class InvalidSourceError(ValueError):
@@ -46,7 +51,7 @@ class SourceArchive:
         for source_file in generated.files:
             relative = self._validate_path(source_file.path)
             normalized = relative.as_posix()
-            if relative == VERIFICATION_SCRIPT:
+            if relative in SERVER_GENERATED_SCRIPTS:
                 continue
             if normalized in paths:
                 raise InvalidSourceError(f"duplicate generated path: {normalized}")
@@ -68,6 +73,23 @@ class SourceArchive:
                 raise InvalidSourceError(
                     f"generated source validation failed: {error}", report
                 ) from error
+            try:
+                content = materialize_scenario_flag_placeholders(content, scenario)
+            except ValueError as error:
+                report = {
+                    "status": "fail",
+                    "summary": {"passed": 0, "failed": 1, "warnings": 0},
+                    "checks": [
+                        {
+                            "status": "fail",
+                            "name": f"flags:placeholder:{normalized}",
+                            "message": str(error),
+                        }
+                    ],
+                }
+                raise InvalidSourceError(
+                    f"generated source validation failed: {error}", report
+                ) from error
             total_size += len(content.encode("utf-8"))
             if total_size > 5 * 1024 * 1024:
                 raise InvalidSourceError("generated source exceeds 5 MiB")
@@ -75,7 +97,11 @@ class SourceArchive:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(content, encoding="utf-8")
             destination.chmod(int(source_file.mode, 8))
-        verification_size = self._write_verification_script(candidate_root)
+        flag_install_size = self._write_flag_install_script(candidate_root, scenario)
+        if flag_install_size:
+            paths.add(FLAG_INSTALL_SCRIPT.as_posix())
+            total_size += flag_install_size
+        verification_size = self._write_verification_script(candidate_root, scenario)
         if verification_size:
             paths.add(VERIFICATION_SCRIPT.as_posix())
             total_size += verification_size
@@ -90,7 +116,12 @@ class SourceArchive:
             history[-1]["validation_status_after"] = validation["status"]
             history[-1]["validation_summary_after"] = validation["summary"]
         (candidate_root / "repair_report.json").write_text(
-            json.dumps({"attempts": history}, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(
+                {"attempts": _redact_repair_history(history, scenario)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         generation_manifest = {
             "scenario_id": scenario.scenario_id,
@@ -119,24 +150,67 @@ class SourceArchive:
         return archive_path, self._write_archive(source_root, archive_path)
 
     @staticmethod
-    def _write_verification_script(candidate_root: Path) -> int:
+    def _load_typed_manifest(candidate_root: Path) -> ScenarioManifest | None:
+        try:
+            value = json.loads(
+                (candidate_root / "contents/scenario_manifest.json").read_text(encoding="utf-8")
+            )
+            return ScenarioManifest.model_validate(value)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return None
+
+    @classmethod
+    def _write_flag_install_script(cls, candidate_root: Path, scenario: ScenarioDraft) -> int:
+        manifest = cls._load_typed_manifest(candidate_root)
+        script = (
+            render_flag_install_script(manifest, scenario)
+            if manifest is not None
+            else "#!/bin/bash\nset -euo pipefail\n"
+        )
+        destination = candidate_root.joinpath(*FLAG_INSTALL_SCRIPT.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(script, encoding="utf-8")
+        destination.chmod(0o700)
+        return len(script.encode("utf-8"))
+
+    @classmethod
+    def _write_verification_script(
+        cls, candidate_root: Path, scenario: ScenarioDraft | None = None
+    ) -> int:
+        commands: list[tuple[str, str]] = []
         manifest_path = candidate_root / "contents/scenario_manifest.json"
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return 0
-        if not isinstance(manifest, dict):
-            return 0
-        commands: list[tuple[str, str]] = []
-        for field in ("health_checks", "acceptance_tests"):
-            checks = manifest.get(field)
-            if not isinstance(checks, list):
-                return 0
-            for index, check in enumerate(checks):
-                command = check.get("command") if isinstance(check, dict) else None
-                if not isinstance(command, str) or not command.strip():
-                    return 0
-                commands.append((f"{field}[{index}]", command))
+            manifest = None
+        if isinstance(manifest, dict):
+            parsed_commands: list[tuple[str, str]] = []
+            for field in ("health_checks", "acceptance_tests"):
+                checks = manifest.get(field)
+                if not isinstance(checks, list):
+                    parsed_commands = []
+                    break
+                for index, check in enumerate(checks):
+                    command = check.get("command") if isinstance(check, dict) else None
+                    if not isinstance(command, str) or not command.strip():
+                        parsed_commands = []
+                        break
+                    parsed_commands.append((f"{field}[{index}]", command))
+                else:
+                    continue
+                break
+            else:
+                commands = parsed_commands
+        if scenario is not None:
+            typed_manifest = cls._load_typed_manifest(candidate_root)
+            if typed_manifest is not None:
+                start = len(typed_manifest.acceptance_tests)
+                commands.extend(
+                    (f"acceptance_tests[{start + index}]", command)
+                    for index, command in enumerate(
+                        flag_verification_commands(typed_manifest, scenario)
+                    )
+                )
         script = """#!/bin/bash
 set -euo pipefail
 
@@ -188,10 +262,57 @@ run_check() {
             "recorded_at": datetime.now(UTC).isoformat(),
             "report": review_report,
         }
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return self._write_archive(source_root, archive_path)
+
+    def record_workbench_progress(self, archive_path: Path, workbench_report: dict) -> None:
+        """Atomically persist the latest isolated workbench progress for live readers."""
+        source_root = archive_path.parent / "source"
+        report_path = source_root / "repair_report.json"
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            report = {"attempts": []}
+        if not isinstance(report, dict):
+            report = {"attempts": []}
+        now = datetime.now(UTC).isoformat()
+        previous = report.get("source_workbench")
+        recorded_at = (
+            previous.get("recorded_at")
+            if isinstance(previous, dict) and isinstance(previous.get("recorded_at"), str)
+            else now
+        )
+        report["source_workbench"] = {
+            "recorded_at": recorded_at,
+            "updated_at": now,
+            "report": workbench_report,
+        }
+        temporary = report_path.with_name(f".{report_path.name}.tmp")
+        temporary.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(report_path)
+
+    def record_workbench_report(self, archive_path: Path, workbench_report: dict) -> str:
+        """Persist final command evidence and refresh the submitted archive checksum."""
+
+        self.record_workbench_progress(archive_path, workbench_report)
+        source_root = archive_path.parent / "source"
+        return self._write_archive(source_root, archive_path)
+
+    def load_workbench_progress(
+        self,
+        session_id: str,
+        scenario_version_id: str = "v1",
+    ) -> dict | None:
+        report_path = self.root / session_id / scenario_version_id / "source" / "repair_report.json"
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        progress = report.get("source_workbench") if isinstance(report, dict) else None
+        return progress if isinstance(progress, dict) else None
 
     @staticmethod
     def _write_archive(source_root: Path, archive_path: Path) -> str:
@@ -230,6 +351,8 @@ run_check() {
         for path in sorted(contents.rglob("*")):
             if not path.is_file():
                 continue
+            if path.relative_to(source_root) in SERVER_GENERATED_SCRIPTS:
+                continue
             mode = "0755" if path.stat().st_mode & 0o111 else "0644"
             files.append(
                 SourceFile(
@@ -252,6 +375,8 @@ run_check() {
                     continue
                 try:
                     relative = self._validate_path(info.filename)
+                    if relative in SERVER_GENERATED_SCRIPTS:
+                        continue
                     content = archive.read(info).decode("utf-8")
                 except (InvalidSourceError, UnicodeDecodeError, OSError):
                     return None
@@ -308,3 +433,15 @@ run_check() {
         if any(part in {"", "/"} for part in path.parts):
             raise InvalidSourceError(f"invalid generated path: {value}")
         return path
+
+
+def _redact_repair_history(history: list[dict], scenario: ScenarioDraft) -> list[dict]:
+    serialized = redact_scenario_flags(json.dumps(history, ensure_ascii=False), scenario)
+    replacements = [
+        (spec.password, rockyou_password_placeholder(step.step_id))
+        for step in scenario.attack_graph.steps
+        if (spec := step.password_cracking) is not None and spec.password
+    ]
+    for password, placeholder in sorted(replacements, key=lambda item: len(item[0]), reverse=True):
+        serialized = serialized.replace(password, placeholder)
+    return json.loads(serialized)

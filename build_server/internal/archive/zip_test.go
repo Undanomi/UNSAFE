@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +48,65 @@ func TestExtractZIPRejectsSymlink(t *testing.T) {
 	err = ExtractZIP(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()), filepath.Join(t.TempDir(), "source"))
 	if err == nil {
 		t.Fatal("ExtractZIP() accepted symbolic link")
+	}
+}
+
+func TestValidateScenarioSourceRequiresVerificationEntrypoint(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range requiredScenarioFiles {
+		if name == "contents/scripts/verify.sh" {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := ValidateScenarioSource(root)
+	if err == nil || !strings.Contains(err.Error(), "contents/scripts/verify.sh") {
+		t.Fatalf("ValidateScenarioSource() error = %v, want missing verify.sh", err)
+	}
+}
+
+func TestValidateScenarioSourceRequiresFlagInstaller(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range requiredScenarioFiles {
+		if name == "contents/scripts/install-flags.sh" {
+			continue
+		}
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := ValidateScenarioSource(root)
+	if err == nil || !strings.Contains(err.Error(), "contents/scripts/install-flags.sh") {
+		t.Fatalf("ValidateScenarioSource() error = %v, want missing install-flags.sh", err)
+	}
+}
+
+func TestValidateScenarioSourceAllowsEmptyRequiredFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range requiredScenarioFiles {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ValidateScenarioSource(root); err != nil {
+		t.Fatal(err)
 	}
 }
 

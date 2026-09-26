@@ -1,6 +1,11 @@
+import type { MachineRecord } from "@/types/postgres"
+
 export type ProfileMachine = {
   id: string
   name: string
+  level: MachineRecord["level"]
+  authorId: string
+  authorName: string
   createdAt: string
   solvedAt?: string
 }

@@ -2,7 +2,7 @@ import "server-only"
 
 import { queryDatabase } from "@/lib/database/client"
 import { buildInitialUserDocument, type UserIdentity } from "@/lib/users/user-document"
-import type { UserRecord } from "@/types/postgres"
+import type { MachineRecord, UserRecord } from "@/types/postgres"
 import type { UserProfile } from "@/types/profile"
 
 export type UserProfileUpdate = Partial<
@@ -12,6 +12,9 @@ export type UserProfileUpdate = Partial<
 type ProfileMachineRow = {
   id: string
   name: string
+  level: MachineRecord["level"]
+  author_id: string
+  author_name: string
   created_at: Date
 }
 
@@ -63,8 +66,13 @@ export async function getUserProfileService(
     `SELECT
        m.id,
        m.name,
+       m.level,
+       author.id AS author_id,
+       author.name AS author_name,
        m.created_at
      FROM machines m
+     JOIN users author
+       ON author.id = m.created_by
      WHERE m.created_by = $2
        AND m.status <> 'deleted'
        AND (
@@ -79,11 +87,16 @@ export async function getUserProfileService(
     `SELECT
        m.id,
        m.name,
+       m.level,
+       author.id AS author_id,
+       author.name AS author_name,
        m.created_at,
        s.solved_at
      FROM machine_solutions s
      JOIN machines m
        ON m.id = s.machine_id
+     JOIN users author
+       ON author.id = m.created_by
      WHERE s.user_id = $2
        AND m.status <> 'deleted'
        AND (
@@ -103,11 +116,17 @@ export async function getUserProfileService(
     createdMachines: createdResult.rows.map((machine) => ({
       id: machine.id,
       name: machine.name,
+      level: machine.level,
+      authorId: machine.author_id,
+      authorName: machine.author_name || "ユーザー",
       createdAt: formatProfileDate(machine.created_at),
     })),
     solvedMachines: solvedResult.rows.map((machine) => ({
       id: machine.id,
       name: machine.name,
+      level: machine.level,
+      authorId: machine.author_id,
+      authorName: machine.author_name || "ユーザー",
       createdAt: formatProfileDate(machine.created_at),
       solvedAt: formatProfileDate(machine.solved_at),
     })),

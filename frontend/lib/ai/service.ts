@@ -23,11 +23,39 @@ export type AiSessionResponse = {
   download_url: string | null
   user_flag: string | null
   system_flag: string | null
+  failure: {
+    kind: "ai_safety_refusal"
+    summary: string
+    retry_allowed: false
+  } | null
+  source_workbench: {
+    updated_at?: string
+    report?: {
+      status?: string
+      summary?: string
+      error_message?: string
+      active_command?: {
+        argv?: string[]
+        cwd?: string
+      }
+      observations?: Array<{
+        kind?: string
+        summary?: string
+        reason?: string
+        error?: string
+        exit_code?: number
+        stdout?: string
+        stderr?: string
+        command?: { argv?: string[]; cwd?: string }
+      }>
+    }
+  } | null
   scenario: {
     scenario_id: string
     title: string
     scenario_description: string
     definition: string
+    tags: string[]
   } | null
 }
 

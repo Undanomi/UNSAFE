@@ -20,10 +20,17 @@ export type MachineGuidance = {
   items: GuidanceItem[]
 }
 
+export type MachineBuildFailure = {
+  kind: "ai_safety_refusal"
+  summary: string
+  retryAllowed: boolean
+}
+
 export type MachineBuildState = {
   status: MachineRecord["status"]
   progress: number
   description?: string
+  failure?: MachineBuildFailure | null
 }
 
 export type MachineDetail = Pick<
@@ -39,6 +46,7 @@ export type MachineDetail = Pick<
   | "description"
 > & {
   buildProgress?: number
+  buildFailure?: MachineBuildFailure | null
   canRetry?: boolean
   status?: MachineRecord["status"]
   guidance: MachineGuidance | null

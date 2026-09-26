@@ -1,5 +1,11 @@
 import { cookies } from "next/headers"
 import type { ReactNode } from "react"
+import {
+  CircuitFrame,
+  DesignArtwork,
+  HudCornerDecoration,
+  MachineListHud,
+} from "@/components/design-artwork"
 import { SiteSidebar } from "@/components/site-sidebar"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
@@ -8,9 +14,16 @@ import { getUserDocumentService } from "@/lib/users/service"
 type AppShellProps = {
   children: ReactNode
   contentClassName?: string
+  artworkVariant?: "infrastructure" | "machines"
+  layoutVariant?: "chat" | "default" | "machine-detail" | "profile"
 }
 
-export async function AppShell({ children, contentClassName = "" }: AppShellProps) {
+export async function AppShell({
+  children,
+  contentClassName = "",
+  artworkVariant = "infrastructure",
+  layoutVariant = "default",
+}: AppShellProps) {
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const authenticatedUser = await verifySessionCookieService(sessionCookie)
   const userDocument = authenticatedUser
@@ -22,10 +35,21 @@ export async function AppShell({ children, contentClassName = "" }: AppShellProp
   }
 
   return (
-    <div className="min-h-screen bg-white">
+    <div
+      className={`slsg-shell min-h-screen ${artworkVariant === "machines" ? "slsg-shell-machines" : ""} ${layoutVariant === "machine-detail" ? "slsg-machine-detail-shell" : ""} ${layoutVariant === "chat" ? "slsg-chat-shell" : ""} ${layoutVariant === "profile" ? "slsg-profile-shell" : ""}`}
+    >
       <SiteSidebar user={sidebarUser} />
+      {artworkVariant === "machines" ? (
+        <>
+          <MachineListHud />
+          <HudCornerDecoration />
+        </>
+      ) : (
+        <CircuitFrame />
+      )}
+      <DesignArtwork variant={artworkVariant} />
       <main
-        className={`mx-auto w-[min(1180px,calc(100%-368px))] py-12 pb-[72px] lg:mr-12 max-lg:w-full max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
+        className={`slsg-main relative z-[1] ml-[240px] min-h-screen px-[clamp(26px,3vw,54px)] py-9 pb-16 max-lg:ml-0 max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
       >
         {children}
       </main>

@@ -4,17 +4,15 @@ import {
   AlertCircle,
   ArrowRight,
   Bot,
+  Check,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   LoaderCircle,
-  MessageSquareText,
   Pencil,
   XCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react"
 import {
   cancelMachineCreationAction,
   markMachineCreationFailedAction,
@@ -23,6 +21,7 @@ import {
   saveChatProgressAction,
   startMachineBuildAction,
 } from "@/app/actions/chat"
+import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import {
   CHAT_CONFIG,
   CHAT_COPY,
@@ -33,7 +32,7 @@ import {
   type ChatSession,
   DIFFICULTY_OPTIONS,
   EMPTY_CHAT_ANSWERS,
-  THEME_SUGGESTIONS,
+  SCENARIO_PROMPT_SUGGESTIONS,
   VISIBILITY_OPTIONS,
 } from "@/stores/chat"
 
@@ -45,6 +44,8 @@ type ScenarioEvent = {
   event: string
   data: unknown
 }
+
+type AutomaticFlagSelection = "user" | "system" | "both"
 
 const SCENARIO_STREAM_MAX_ATTEMPTS = 3
 const SCENARIO_STREAM_RETRY_DELAY_MS = 500
@@ -84,9 +85,16 @@ function readScenarioId(data: unknown): string | null {
   return typeof scenario.scenario_id === "string" ? scenario.scenario_id : null
 }
 
+function readAutomaticFlagSelection(data: unknown): AutomaticFlagSelection | null {
+  if (!data || typeof data !== "object" || !("selection" in data)) return null
+  const selection = data.selection
+  return selection === "user" || selection === "system" || selection === "both" ? selection : null
+}
+
 async function consumeScenarioStream(
   response: Response,
   onProgress: (generatedCharacters: number) => void,
+  onFlagsPlanned: (selection: AutomaticFlagSelection) => void,
 ): Promise<string> {
   if (!response.ok || !response.body) {
     throw new Error("AIサーバーに接続できませんでした。")
@@ -121,6 +129,10 @@ async function consumeScenarioStream(
     for (const block of blocks) {
       const parsed = parseEvent(block)
       if (!parsed) continue
+      if (parsed.event === "scenario.flags_planned") {
+        const selection = readAutomaticFlagSelection(parsed.data)
+        if (selection) onFlagsPlanned(selection)
+      }
       if (parsed.event === "scenario.delta") {
         const content =
           parsed.data && typeof parsed.data === "object" && "content" in parsed.data
@@ -152,6 +164,7 @@ async function consumeScenarioStream(
 async function waitForScenario(
   sessionId: string,
   onProgress: (generatedCharacters: number) => void,
+  onFlagsPlanned: (selection: AutomaticFlagSelection) => void,
   signal: AbortSignal,
 ): Promise<string> {
   let lastError: unknown
@@ -161,7 +174,7 @@ async function waitForScenario(
         cache: "no-store",
         signal,
       })
-      return await consumeScenarioStream(response, onProgress)
+      return await consumeScenarioStream(response, onProgress, onFlagsPlanned)
     } catch (error) {
       if (
         error instanceof ScenarioGenerationFailedError ||
@@ -243,18 +256,6 @@ function getChatPrompt(step: number, isBasicReady: boolean) {
   return CHAT_PROMPTS[step] ?? CHAT_COPY.completePrompt
 }
 
-function buildChatSummary(answers: ChatAnswers) {
-  const { labels } = CHAT_COPY.summary
-  return [
-    [labels.machineName, answers.name],
-    [labels.visibility, answers.visibility],
-    [labels.theme, answers.theme],
-    [labels.difficulty, answers.difficulty],
-    [labels.userFlag, formatFlagSetting(answers.needsUserFlag)],
-    [labels.systemFlag, formatFlagSetting(answers.needsSystemFlag)],
-  ]
-}
-
 function buildChatTranscript(currentStep: number, isBasicReady: boolean, answers: ChatAnswers) {
   return Object.values(CHAT_STEPS)
     .filter((step) => step < CHAT_STEPS.complete)
@@ -302,6 +303,7 @@ function formatFlagSetting(value: boolean | null) {
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const router = useRouter()
   const [answers, setAnswers] = useState<ChatAnswers>(() => buildInitialAnswers(session))
+  const [confirmedMachineName, setConfirmedMachineName] = useState(session.name)
   const [step, setStep] = useState(session.initialStep)
   const [basicReady, setBasicReady] = useState(() => session.status === "基本設定完了")
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -315,11 +317,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const [error, setError] = useState("")
   const [editingStep, setEditingStep] = useState<number | null>(null)
   const [editingError, setEditingError] = useState("")
-  const [isSummaryOpen, setIsSummaryOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
   const [showRebuildButton, setShowRebuildButton] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
+  const editingAnswersSnapshotRef = useRef<ChatAnswers | null>(null)
   const creationStartedRef = useRef(false)
   const creationAbortRef = useRef<AbortController | null>(null)
   const cancellationRequestedRef = useRef(false)
@@ -336,11 +338,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     const conversation = conversationRef.current
     if (conversation) {
       conversation.scrollTo({
-        behavior: editingStep === null ? "smooth" : "auto",
+        behavior: "smooth",
         top: conversation.scrollHeight,
       })
     }
-  }, [chatProgress, editingStep])
+  }, [chatProgress])
 
   function updateAnswers(values: Partial<ChatAnswers>) {
     setAnswers((current) => ({ ...current, ...values }))
@@ -381,6 +383,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     }
     const nextStep = getNextChatStep(step, answers)
     if (!(await persistProgress(nextStep, false))) return
+    if (step === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     setStep(nextStep)
   }
 
@@ -417,6 +420,15 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           sessionId,
           (characters) => {
             setCreationMessage(`AIがシナリオを生成しています… ${characters.toLocaleString()}文字`)
+          },
+          (selection) => {
+            const label =
+              selection === "user"
+                ? "ユーザーフラグのみ"
+                : selection === "system"
+                  ? "システムフラグのみ"
+                  : "ユーザー・システムフラグの両方"
+            setCreationMessage(`AIが「${label}」を選択しました。シナリオを生成しています…`)
           },
           abortController.signal,
         )
@@ -477,6 +489,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function handleCancel() {
+    if (creationStatus === "completed") return
     if (!sessionId || creationStatus === "input") {
       router.push("/machines")
       return
@@ -488,7 +501,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function cancelActiveCreation() {
-    if (!sessionId) return false
+    if (!sessionId || creationStatus === "completed") return false
     const previousCreationStatus = creationStatus
     const previousCreationMessage = creationMessage
     cancellationRequestedRef.current = true
@@ -517,7 +530,16 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     ) {
       return
     }
+    editingAnswersSnapshotRef.current = answers
     setEditingStep(targetStep)
+    setEditingError("")
+  }
+
+  function cancelEditing() {
+    const previousAnswers = editingAnswersSnapshotRef.current
+    if (previousAnswers) setAnswers(previousAnswers)
+    editingAnswersSnapshotRef.current = null
+    setEditingStep(null)
     setEditingError("")
   }
 
@@ -548,168 +570,192 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setShowRebuildButton(true)
+    if (editingStep === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
+    editingAnswersSnapshotRef.current = null
     setEditingStep(null)
   }
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-92px)] max-w-5xl min-h-0 flex-col max-lg:h-[calc(100dvh-64px)]">
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-[#e5e5e2] bg-white shadow-sm">
-        <div className="border-b border-[#e5e5e2] px-7 py-5 max-sm:px-5">
-          <div className="flex items-center justify-between gap-5 max-sm:items-start">
-            <div className="flex items-center gap-3">
-              <span className="grid size-10 place-items-center rounded-xl bg-[#20201e] text-white">
-                <MessageSquareText aria-hidden="true" size={19} strokeWidth={2} />
-              </span>
+    <div className="slsg-chat-workspace">
+      <header className="slsg-chat-header">
+        <div className="slsg-chat-heading">
+          <p className="slsg-page-eyebrow">MACHINE CREATION</p>
+          <h1 className="slsg-heading-offset-up">{confirmedMachineName}</h1>
+          <p className="slsg-heading-offset-up">
+            対話形式で設定を進めて、学習用のマシンを作成します。
+          </p>
+        </div>
+      </header>
+
+      <div className="slsg-chat-layout">
+        <section className="slsg-chat-conversation">
+          <div className="slsg-chat-conversation-inner">
+            <header className="slsg-chat-panel-header">
               <div>
-                <p className="text-[0.78rem] font-bold text-[#61605b]">マシン作成アシスタント</p>
-                <h1 className="mt-0.5 text-[clamp(1.2rem,2vw,1.5rem)] leading-[1.15] font-bold tracking-[-0.035em]">
-                  {session.name}
-                </h1>
+                <h2>マシン作成チャット</h2>
               </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-3 max-sm:flex-col max-sm:items-end">
-              <button
-                className="text-[0.78rem] font-bold text-[#61605b] hover:text-[#20201e] disabled:cursor-not-allowed disabled:opacity-55"
-                disabled={isCancelling}
-                onClick={() => void handleCancel()}
-                type="button"
-              >
-                {isCancelling ? "中止しています…" : "中止する"}
-              </button>
-              <span className="rounded-full border border-[#d6d6d2] bg-[#f8f8f7] px-3 py-1.5 text-[0.75rem] font-extrabold text-[#61605b]">
-                {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
-              </span>
-            </div>
-          </div>
-          <div
-            aria-label={`ステップ ${progress} / ${CHAT_STEPS.systemFlagDetails}`}
-            aria-valuemax={CHAT_STEPS.systemFlagDetails}
-            aria-valuemin={CHAT_CONFIG.progressMinimum}
-            aria-valuenow={progress}
-            className="mt-4 h-1.5 overflow-hidden rounded-full bg-[#e5e5e2]"
-            role="progressbar"
-          >
-            <span
-              className="block h-full rounded-full bg-[#20201e] transition-[width]"
-              style={{
-                width: `${(progress / CHAT_STEPS.systemFlagDetails) * CHAT_CONFIG.progressPercentage}%`,
-              }}
-            />
-          </div>
-          <section className="mt-4">
-            <button
-              aria-expanded={isSummaryOpen}
-              className="flex w-full items-center justify-between text-left text-[0.82rem] font-extrabold text-[#61605b] hover:text-[#20201e]"
-              onClick={() => setIsSummaryOpen((open) => !open)}
-              type="button"
-            >
-              <span>{CHAT_COPY.summary.title}</span>
-              {isSummaryOpen ? (
-                <ChevronUp aria-hidden="true" size={17} strokeWidth={2} />
-              ) : (
-                <ChevronDown aria-hidden="true" size={17} strokeWidth={2} />
-              )}
-            </button>
-            {isSummaryOpen ? <AnswerSummary answers={answers} /> : null}
-          </section>
-        </div>
+              <div className="slsg-chat-panel-progress">
+                <ChatProgress progress={progress} />
+                <button
+                  className="slsg-chat-cancel"
+                  disabled={isCancelling || creationStatus === "completed"}
+                  onClick={() => void handleCancel()}
+                  type="button"
+                >
+                  {isCancelling ? "中止しています…" : "中止する"}
+                </button>
+              </div>
+            </header>
 
-        <div
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-7 py-6 max-sm:px-5"
-          ref={conversationRef}
-        >
-          <div className="grid gap-5">
-            {transcript.map((message) => (
-              <div className="grid gap-3" key={message.step}>
-                <AssistantMessage prompt={message.prompt} />
-                <UserMessage
-                  answer={message.answer}
-                  disabled={isCancelling}
-                  onEdit={() => void startEditing(message.step)}
-                />
-                {editingStep === message.step ? (
-                  <AnswerEditor
-                    actionLabel={
-                      getFlagDetailsStep(message.step, answers) === null ? "更新" : "次へ"
-                    }
-                    answers={answers}
-                    error={editingError}
-                    onChange={updateAnswers}
-                    onComplete={completeEditing}
-                    step={message.step}
-                  />
+            <div className="slsg-chat-panel-body">
+              <div className="slsg-chat-message-list" ref={conversationRef}>
+                {transcript.map((message) => (
+                  <article className="slsg-chat-message" key={message.step}>
+                    <AssistantMessage prompt={message.prompt} />
+                    <UserMessage
+                      answer={message.answer}
+                      disabled={isCancelling}
+                      onEdit={() => void startEditing(message.step)}
+                    />
+                    {editingStep === message.step ? (
+                      <AnswerEditor
+                        actionLabel={
+                          getFlagDetailsStep(message.step, answers) === null ? "更新" : "次へ"
+                        }
+                        answers={answers}
+                        error={editingError}
+                        onCancel={cancelEditing}
+                        onChange={updateAnswers}
+                        onComplete={completeEditing}
+                        step={message.step}
+                      />
+                    ) : null}
+                  </article>
+                ))}
+                <article className="slsg-chat-message is-current">
+                  <AssistantMessage prompt={prompt} />
+                </article>
+              </div>
+
+              <div className="slsg-chat-composer">
+                {creationStatus === "input" && !basicReady && !isFinalStep ? (
+                  <div className="slsg-chat-current-input">
+                    <StepInput
+                      answers={answers}
+                      onChange={updateAnswers}
+                      onSubmit={isSaving ? undefined : () => void advance()}
+                      step={step}
+                    />
+                  </div>
                 ) : null}
-              </div>
-            ))}
-            <AssistantMessage prompt={prompt} />
-          </div>
-        </div>
+                {error ? <p className="slsg-chat-error">{error}</p> : null}
 
-        <div className="border-t border-[#e5e5e2] bg-white px-7 py-5 max-sm:px-5">
-          {creationStatus === "input" && !basicReady && !isFinalStep ? (
-            <StepInput answers={answers} onChange={updateAnswers} step={step} />
-          ) : null}
-          {error ? <p className="mt-3 text-[0.86rem] font-bold text-[#b14334]">{error}</p> : null}
-          {creationStatus !== "input" ? (
-            <CreationStatusPanel
-              machineId={session.machineId}
-              message={creationMessage || "マシンを作成しています…"}
-              failure={creationFailure}
-              onRetry={handleMachineCreation}
-              status={creationStatus}
-            />
-          ) : basicReady ? (
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button
-                className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-                disabled={isSaving}
-                onClick={handleMachineCreation}
-                type="button"
-              >
-                {showRebuildButton ? "改めてマシンをビルドする" : CHAT_COPY.buttons.createBasic}
-              </button>
-              <button
-                className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-[#d6d6d2] bg-white px-[18px] text-[0.92rem] font-extrabold text-[#20201e] shadow-sm transition hover:-translate-y-px"
-                disabled={isSaving}
-                onClick={continueDetails}
-                type="button"
-              >
-                {CHAT_COPY.buttons.continueDetails}
-              </button>
+                <div className="slsg-chat-actions">
+                  {creationStatus !== "input" ? (
+                    <CreationStatusPanel
+                      failure={creationFailure}
+                      machineId={session.machineId}
+                      message={creationMessage || "マシンを作成しています…"}
+                      onRetry={handleMachineCreation}
+                      status={creationStatus}
+                    />
+                  ) : basicReady ? (
+                    <div className="slsg-chat-actions-group">
+                      <button
+                        className="slsg-chat-action-primary"
+                        disabled={isSaving}
+                        onClick={handleMachineCreation}
+                        type="button"
+                      >
+                        {showRebuildButton
+                          ? "改めてマシンをビルドする"
+                          : CHAT_COPY.buttons.createBasic}
+                      </button>
+                      <button
+                        className="slsg-chat-action-secondary"
+                        disabled={isSaving}
+                        onClick={continueDetails}
+                        type="button"
+                      >
+                        {CHAT_COPY.buttons.continueDetails}
+                      </button>
+                    </div>
+                  ) : isFinalStep ? (
+                    <button
+                      className="slsg-chat-action-primary"
+                      disabled={isSaving}
+                      onClick={handleMachineCreation}
+                      type="button"
+                    >
+                      {showRebuildButton
+                        ? "改めてマシンをビルドする"
+                        : CHAT_COPY.buttons.createComplete}
+                    </button>
+                  ) : (
+                    <button
+                      aria-label={
+                        step === CHAT_STEPS.difficulty
+                          ? CHAT_COPY.buttons.setBasic
+                          : CHAT_COPY.buttons.next
+                      }
+                      className="slsg-chat-send-button"
+                      disabled={isSaving}
+                      onClick={advance}
+                      type="button"
+                    >
+                      {isSaving ? (
+                        <LoaderCircle aria-hidden="true" className="animate-spin" size={19} />
+                      ) : (
+                        <ArrowRight aria-hidden="true" size={20} strokeWidth={2} />
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
-          ) : isFinalStep ? (
-            <button
-              className="mt-5 inline-flex min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={isSaving}
-              onClick={handleMachineCreation}
-              type="button"
+          </div>
+        </section>
+      </div>
+      <TerminalTelemetry />
+    </div>
+  )
+}
+
+function ChatProgress({ progress }: { progress: number }) {
+  return (
+    <div
+      aria-label={`ステップ ${progress} / ${CHAT_STEPS.systemFlagDetails}`}
+      aria-valuemax={CHAT_STEPS.systemFlagDetails}
+      aria-valuemin={CHAT_CONFIG.progressMinimum}
+      aria-valuenow={progress}
+      className="slsg-chat-progress"
+      role="progressbar"
+    >
+      {Array.from({ length: CHAT_STEPS.systemFlagDetails }, (_, index) => index + 1).map(
+        (stepNumber, index) => (
+          <div className="slsg-chat-progress-segment" key={stepNumber}>
+            <span
+              className={`slsg-chat-progress-node ${
+                stepNumber < progress
+                  ? "is-completed"
+                  : stepNumber === progress
+                    ? "is-current"
+                    : "is-upcoming"
+              }`}
             >
-              {showRebuildButton ? "改めてマシンをビルドする" : CHAT_COPY.buttons.createComplete}
-            </button>
-          ) : (
-            <button
-              className="mt-4 inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-transparent bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={isSaving}
-              onClick={advance}
-              type="button"
-            >
-              {isSaving ? (
-                <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" size={16} />
-                  保存中…
-                </>
-              ) : step === CHAT_STEPS.difficulty ? (
-                CHAT_COPY.buttons.setBasic
-              ) : (
-                <>
-                  {CHAT_COPY.buttons.next}
-                  <ArrowRight aria-hidden="true" size={16} strokeWidth={2} />
-                </>
-              )}
-            </button>
-          )}
-        </div>
-      </section>
+              {stepNumber < progress ? <Check aria-hidden="true" size={15} /> : stepNumber}
+            </span>
+            {index < CHAT_STEPS.systemFlagDetails - 1 ? (
+              <span
+                className={`slsg-chat-progress-line ${stepNumber < progress ? "is-completed" : ""}`}
+              />
+            ) : null}
+          </div>
+        ),
+      )}
+      <span className="slsg-chat-progress-copy">
+        {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
+      </span>
     </div>
   )
 }
@@ -729,16 +775,13 @@ function CreationStatusPanel({
 }) {
   if (status === "building" || status === "completed") {
     return (
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
+      <div className="slsg-chat-creation-status is-success">
         <span className="flex items-center gap-2 text-[0.88rem] font-bold">
-          <CheckCircle2 aria-hidden="true" className="text-[#357a4b]" size={18} />
+          <CheckCircle2 aria-hidden="true" size={18} />
           {status === "completed" ? "マシンのビルドが完了しました。" : message}
         </span>
         {machineId ? (
-          <Link
-            className="inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
-            href={`/machines/${machineId}`}
-          >
+          <Link className="slsg-chat-status-action" href={`/machines/${machineId}`}>
             マシンの状態を確認
           </Link>
         ) : null}
@@ -748,14 +791,19 @@ function CreationStatusPanel({
 
   if (status === "failed") {
     const revisionFailure = failure?.kind === "settings" ? failure : null
+    const safetyRefused = failure?.kind === "ai_safety_refusal"
     return (
-      <div className="mt-4 rounded-2xl border border-[#e3bdb7] bg-[#fff8f6] p-4">
-        <p className="flex items-start gap-2 text-[0.88rem] font-bold text-[#9a392d]">
+      <div className="slsg-chat-creation-status is-failed">
+        <p className="flex items-start gap-2 text-[0.88rem] font-bold">
           <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
-          {revisionFailure ? "問題設定の見直しが必要です。" : "マシンを作成できませんでした。"}
+          {revisionFailure
+            ? "問題設定の見直しが必要です。"
+            : safetyRefused
+              ? "安全上の理由でAIが処理を拒否しました"
+              : "マシンを作成できませんでした。"}
         </p>
         {revisionFailure ? (
-          <div className="mt-3 space-y-3 text-[0.84rem] leading-[1.65] text-[#63352f]">
+          <div className="slsg-chat-failure-details">
             <p>{revisionFailure.summary}</p>
             {revisionFailure.suggestions.length > 0 ? (
               <ul className="list-disc space-y-2 pl-5">
@@ -769,29 +817,29 @@ function CreationStatusPanel({
             </p>
           </div>
         ) : null}
-        <button
-          className="mt-4 inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
-          onClick={onRetry}
-          type="button"
-        >
-          {revisionFailure ? "修正した設定で再生成する" : "もう一度試す"}
-        </button>
+        {safetyRefused ? (
+          <div className="slsg-chat-failure-details">
+            <p>{failure.summary}</p>
+            <p>このマシンの処理は停止しました。同じ設定のまま再生成することはできません。</p>
+          </div>
+        ) : null}
+        {!safetyRefused ? (
+          <button className="slsg-chat-status-action" onClick={onRetry} type="button">
+            {revisionFailure ? "修正した設定で再生成する" : "もう一度試す"}
+          </button>
+        ) : null}
       </div>
     )
   }
 
   if (status === "cancelled") {
     return (
-      <div className="mt-4 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
-        <p className="flex items-center gap-2 text-[0.88rem] font-bold text-[#61605b]">
+      <div className="slsg-chat-creation-status is-cancelled">
+        <p className="flex items-center gap-2 text-[0.88rem] font-bold">
           <XCircle aria-hidden="true" size={18} />
           マシン作成を中止しました。
         </p>
-        <button
-          className="mt-4 inline-flex min-h-10 items-center justify-center rounded-xl bg-[#20201e] px-4 text-[0.82rem] font-extrabold text-white"
-          onClick={onRetry}
-          type="button"
-        >
+        <button className="slsg-chat-status-action" onClick={onRetry} type="button">
           もう一度作成する
         </button>
       </div>
@@ -799,7 +847,7 @@ function CreationStatusPanel({
   }
 
   return (
-    <div className="mt-4 flex items-center gap-3 rounded-2xl border border-[#d6d6d2] bg-[#f8f8f7] p-4">
+    <div className="slsg-chat-creation-status is-building">
       <LoaderCircle aria-hidden="true" className="shrink-0 animate-spin" size={19} />
       <p className="text-[0.88rem] font-bold">{message}</p>
     </div>
@@ -808,19 +856,14 @@ function CreationStatusPanel({
 
 function AssistantMessage({ prompt }: { prompt: { help: string; question: string } }) {
   return (
-    <div className="flex items-start gap-3">
-      <span
-        aria-label={CHAT_COPY.assistantLabel}
-        className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#20201e] text-white"
-        role="img"
-      >
-        <Bot aria-hidden="true" size={18} strokeWidth={2} />
+    <div className="slsg-chat-assistant">
+      <span aria-label="UNSAFEチャットボット" className="slsg-chat-assistant-avatar" role="img">
+        <Bot aria-hidden="true" size={23} strokeWidth={1.8} />
       </span>
-      <div className="min-w-0 rounded-2xl rounded-tl-sm border border-[#e5e5e2] bg-[#f8f8f7] px-4 py-3">
-        <h2 className="text-[1rem] font-bold tracking-[-0.02em]">{prompt.question}</h2>
-        {prompt.help ? (
-          <p className="mt-1.5 text-[0.88rem] leading-[1.6] text-[#61605b]">{prompt.help}</p>
-        ) : null}
+      <div className="slsg-chat-assistant-content">
+        <span className="slsg-chat-assistant-name">UNSAFE</span>
+        <h2>{prompt.question}</h2>
+        {prompt.help ? <p>{prompt.help}</p> : null}
       </div>
     </div>
   )
@@ -836,21 +879,17 @@ function UserMessage({
   onEdit: () => void
 }) {
   return (
-    <div className="ml-auto flex max-w-[80%] flex-col items-end gap-1">
-      <div className="w-full rounded-2xl rounded-tr-sm bg-[#20201e] px-4 py-3 text-white">
-        <span className="text-[0.7rem] font-bold tracking-wide text-[#c5c4bd]">
-          {CHAT_COPY.userLabel}
-        </span>
-        <p className="mt-1 text-[0.9rem] leading-[1.55]">{answer}</p>
-      </div>
+    <div className="slsg-chat-answer">
+      <p>{answer}</p>
       <button
         aria-label="この回答を編集"
-        className="inline-flex size-7 items-center justify-center rounded-md text-[#61605b] hover:bg-[#f5f5f3] hover:text-[#20201e]"
+        className="slsg-chat-edit-button"
         disabled={disabled}
         onClick={onEdit}
         type="button"
       >
-        <Pencil aria-hidden="true" size={14} strokeWidth={2} />
+        <Pencil aria-hidden="true" size={18} strokeWidth={1.8} />
+        編集
       </button>
     </div>
   )
@@ -860,6 +899,7 @@ function AnswerEditor({
   actionLabel,
   answers,
   error,
+  onCancel,
   onChange,
   onComplete,
   step,
@@ -867,22 +907,24 @@ function AnswerEditor({
   actionLabel: "更新" | "次へ"
   answers: ChatAnswers
   error: string
+  onCancel: () => void
   onChange: (values: Partial<ChatAnswers>) => void
   onComplete: () => void
   step: number
 }) {
   return (
-    <div className="ml-auto grid w-full max-w-[80%] gap-4 rounded-2xl border border-[#d6d6d2] bg-white p-4 shadow-sm">
-      <p className="text-[0.82rem] font-extrabold">回答を編集</p>
-      <StepInput answers={answers} onChange={onChange} step={step} />
-      {error ? <p className="text-[0.86rem] font-bold text-[#b14334]">{error}</p> : null}
-      <button
-        className="inline-flex w-fit min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-        onClick={onComplete}
-        type="button"
-      >
-        {actionLabel}
-      </button>
+    <div className="slsg-chat-answer-editor">
+      <p>回答を編集</p>
+      <StepInput answers={answers} onChange={onChange} onSubmit={onComplete} step={step} />
+      {error ? <p className="slsg-chat-error">{error}</p> : null}
+      <div className="slsg-chat-answer-editor-actions">
+        <button className="slsg-chat-action-secondary is-compact" onClick={onCancel} type="button">
+          取り消す
+        </button>
+        <button className="slsg-chat-action-primary is-compact" onClick={onComplete} type="button">
+          {actionLabel}
+        </button>
+      </div>
     </div>
   )
 }
@@ -890,22 +932,41 @@ function AnswerEditor({
 type StepInputProps = {
   answers: ChatAnswers
   onChange: (values: Partial<ChatAnswers>) => void
+  onSubmit?: () => void
   step: number
 }
 
-function StepInput({ answers, onChange, step }: StepInputProps) {
+function submitChatInputOnEnter(
+  event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  onSubmit?: () => void,
+) {
+  if (
+    event.key !== "Enter" ||
+    event.shiftKey ||
+    event.nativeEvent.isComposing ||
+    onSubmit === undefined
+  ) {
+    return
+  }
+
+  event.preventDefault()
+  onSubmit()
+}
+
+function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   if (step === CHAT_STEPS.machineName) {
     return (
-      <label className="grid gap-2 text-[0.86rem] font-extrabold">
-        <span>{CHAT_COPY.fields.machineName}</span>
+      <label className="slsg-chat-field">
+        <span className="sr-only">{CHAT_COPY.fields.machineName}</span>
         <input
-          className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none placeholder:text-[#8a8984] focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+          className="slsg-input slsg-chat-input"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
           onChange={(event) => onChange({ name: event.target.value })}
+          onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
           placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
         />
-        <small className="text-right text-[0.75rem] font-normal text-[#61605b]">
+        <small className="slsg-chat-character-count">
           {answers.name.length} / {CHAT_CONFIG.machineNameMaxLength}
         </small>
       </label>
@@ -922,15 +983,11 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
   }
   if (step === CHAT_STEPS.theme) {
     return (
-      <div className="grid gap-3">
-        <div className="flex flex-wrap gap-2">
-          {THEME_SUGGESTIONS.map((theme) => (
+      <div className="slsg-chat-theme-input">
+        <div className="slsg-chat-theme-options">
+          {SCENARIO_PROMPT_SUGGESTIONS.map((theme) => (
             <button
-              className={`rounded-full border px-2.5 py-1 text-[0.78rem] font-bold transition ${
-                answers.theme === theme
-                  ? "border-[#20201e] bg-[#20201e] text-white"
-                  : "border-[#d6d6d2] bg-white hover:border-[#20201e]"
-              }`}
+              className={`slsg-chat-option ${answers.theme === theme ? "is-selected" : ""}`}
               key={theme}
               onClick={() => onChange({ theme })}
               type="button"
@@ -939,14 +996,18 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
             </button>
           ))}
         </div>
-        <label className="grid gap-2 text-[0.86rem] font-extrabold">
-          <span>{CHAT_COPY.fields.freeInput}</span>
-          <input
-            className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none placeholder:text-[#8a8984] focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+        <label className="slsg-chat-field">
+          <span>{CHAT_COPY.fields.scenarioPrompt}</span>
+          <textarea
+            className="slsg-input slsg-chat-textarea"
+            maxLength={500}
             onChange={(event) => onChange({ theme: event.target.value })}
-            placeholder={CHAT_COPY.fields.themePlaceholder}
+            onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
+            placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
+            rows={5}
             value={answers.theme}
           />
+          <small className="slsg-chat-character-count">{answers.theme.length} / 500</small>
         </label>
       </div>
     )
@@ -973,6 +1034,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
       <DetailInput
         label={CHAT_COPY.fields.userFlagDetails}
         onChange={(userFlagDetails) => onChange({ userFlagDetails })}
+        onSubmit={onSubmit}
         placeholder={CHAT_COPY.fields.userFlagDetailsPlaceholder}
         value={answers.userFlagDetails}
       />
@@ -990,6 +1052,7 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
     <DetailInput
       label={CHAT_COPY.fields.systemFlagDetails}
       onChange={(systemFlagDetails) => onChange({ systemFlagDetails })}
+      onSubmit={onSubmit}
       placeholder={CHAT_COPY.fields.systemFlagDetailsPlaceholder}
       value={answers.systemFlagDetails}
     />
@@ -999,20 +1062,23 @@ function StepInput({ answers, onChange, step }: StepInputProps) {
 function DetailInput({
   label,
   onChange,
+  onSubmit,
   placeholder,
   value,
 }: {
   label: string
   onChange: (value: string) => void
+  onSubmit?: () => void
   placeholder: string
   value: string
 }) {
   return (
-    <label className="grid gap-2 text-[0.86rem] font-extrabold">
+    <label className="slsg-chat-field">
       <span>{label}</span>
       <textarea
-        className="min-h-28 w-full resize-y rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none placeholder:text-[#8a8984] focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+        className="slsg-input slsg-chat-textarea"
         onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
         placeholder={placeholder}
         value={value}
       />
@@ -1030,14 +1096,10 @@ function OptionButtons<T extends string>({
   value: T | ""
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 max-sm:grid-cols-1">
+    <div className="slsg-chat-option-grid">
       {options.map((option) => (
         <button
-          className={`min-h-11 rounded-xl border px-3 text-left text-[0.82rem] font-extrabold transition ${
-            value === option
-              ? "border-[#20201e] bg-[#20201e] text-white"
-              : "border-[#d6d6d2] bg-white hover:border-[#20201e]"
-          }`}
+          className={`slsg-chat-option ${value === option ? "is-selected" : ""}`}
           key={option}
           onClick={() => onSelect(option)}
           type="button"
@@ -1057,24 +1119,16 @@ function YesNoButtons({
   value: boolean | null
 }) {
   return (
-    <div className="grid grid-cols-2 gap-2.5 max-sm:grid-cols-1">
+    <div className="slsg-chat-option-grid">
       <button
-        className={`min-h-11 rounded-xl border px-3 text-left text-[0.82rem] font-extrabold transition ${
-          value === true
-            ? "border-[#20201e] bg-[#20201e] text-white"
-            : "border-[#d6d6d2] bg-white hover:border-[#20201e]"
-        }`}
+        className={`slsg-chat-option ${value === true ? "is-selected" : ""}`}
         onClick={() => onSelect(true)}
         type="button"
       >
         {CHAT_COPY.yesNo.yes}
       </button>
       <button
-        className={`min-h-11 rounded-xl border px-3 text-left text-[0.82rem] font-extrabold transition ${
-          value === false
-            ? "border-[#20201e] bg-[#20201e] text-white"
-            : "border-[#d6d6d2] bg-white hover:border-[#20201e]"
-        }`}
+        className={`slsg-chat-option ${value === false ? "is-selected" : ""}`}
         onClick={() => onSelect(false)}
         type="button"
       >
@@ -1084,32 +1138,20 @@ function YesNoButtons({
   )
 }
 
-function AnswerSummary({ answers }: { answers: ChatAnswers }) {
-  return (
-    <dl className="mt-4 grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-      {buildChatSummary(answers).map(([label, value]) => (
-        <div className="rounded-xl bg-[#f8f8f7] p-3" key={label}>
-          <dt className="text-[0.72rem] font-bold text-[#61605b]">{label}</dt>
-          <dd className="mt-1 text-[0.88rem] font-bold">{value || CHAT_COPY.summary.empty}</dd>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
 export function MissingChatSession() {
   return (
-    <section className="grid gap-4 rounded-3xl border border-[#e5e5e2] bg-white p-8 shadow-sm">
-      <h1 className="text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]">
-        {CHAT_COPY.missingSession.title}
-      </h1>
-      <p className="leading-[1.65] text-[#61605b]">{CHAT_COPY.missingSession.message}</p>
-      <Link
-        className="inline-flex w-fit min-h-[46px] items-center justify-center gap-2 rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-        href={CHAT_CONFIG.newChatPath}
-      >
-        {CHAT_COPY.missingSession.action}
-      </Link>
+    <section className="slsg-panel slsg-state-card">
+      <div className="slsg-state-card-content">
+        <span aria-hidden="true" className="slsg-state-card-icon">
+          <AlertCircle size={25} strokeWidth={1.7} />
+        </span>
+        <h1>{CHAT_COPY.missingSession.title}</h1>
+        <p>{CHAT_COPY.missingSession.message}</p>
+        <Link className="slsg-state-card-action" href={CHAT_CONFIG.newChatPath}>
+          {CHAT_COPY.missingSession.action}
+          <ArrowRight aria-hidden="true" size={17} />
+        </Link>
+      </div>
     </section>
   )
 }

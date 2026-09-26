@@ -1,20 +1,31 @@
 from __future__ import annotations
 
+import ast
 import json
+import os
 import re
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
-from ..models import AttackGraph, ScenarioDraft
+from ..models import AttackGraph, ScenarioDraft, rockyou_password_placeholder
 from ..scenario_manifest import ScenarioManifest
+from .scenario_secrets import redact_scenario_flags
 
 REQUIRED_FILES = {
     "contents/README.md",
     "contents/scenario_manifest.json",
     "contents/build.sh",
     "contents/scripts/provision.sh",
+    "contents/scripts/install-flags.sh",
+    "contents/scripts/verify.sh",
+}
+SERVER_FLAG_FILES = {
+    "contents/scripts/install-flags.sh",
     "contents/scripts/verify.sh",
 }
 UNAVAILABLE_PACKAGE_PATTERNS = (
@@ -40,6 +51,8 @@ MISSING_SYSTEMD_UNIT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
+URL_PATTERN = re.compile(r"https?://[^\s'\"`<>]+", re.IGNORECASE)
+LOCAL_TEST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
@@ -50,6 +63,11 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
         name: str,
         message: str,
     ) -> None:
+        message = redact_scenario_flags(message, scenario)
+        for step in scenario.attack_graph.steps:
+            spec = step.password_cracking
+            if spec is not None and spec.password:
+                message = message.replace(spec.password, rockyou_password_placeholder(step.step_id))
         check: dict[str, object] = {"status": status, "name": name, "message": message}
         checks.append(check)
 
@@ -58,12 +76,16 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
     manifest_schema_valid = False
     if manifest is not None:
-        manifest_schema_valid = _validate_manifest(root, manifest, scenario.target_os, add)
+        manifest_schema_valid = _validate_manifest(root, manifest, scenario, add)
         if manifest_schema_valid:
+            _validate_local_test_commands(manifest, add)
             _validate_attack_graph(manifest, scenario.attack_graph, add)
             _validate_cve_grounding(manifest, scenario.attack_graph, add)
+            _validate_flag_placements(manifest, scenario, add)
     _validate_password_selection(scenario.attack_graph, add)
     _validate_materialized_password_usage(root, scenario.attack_graph, add)
+    _validate_materialized_flag_usage(root, scenario, add)
+    _validate_source_syntax(root, add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
             try:
@@ -82,6 +104,137 @@ def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
         },
         "checks": checks,
     }
+
+
+def _text_files(root: Path):
+    for path in sorted((root / "contents").rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            yield path, path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+
+def _validate_materialized_flag_usage(root: Path, scenario: ScenarioDraft, add) -> None:
+    configured = {
+        "user": scenario.user_flag,
+        "system": scenario.system_flag,
+    }
+    occurrences = {kind: 0 for kind, value in configured.items() if value}
+    unmanaged: dict[str, list[str]] = {kind: [] for kind in occurrences}
+    unsupported_injections: list[str] = []
+    injection_pattern = re.compile(
+        r"\$(?:\{)?[A-Z][A-Z0-9_]*(?:USER|SYSTEM)_FLAG(?:\b|[:}?])"
+        r"|\$(?:\{)?(?:USER|SYSTEM)_FLAG(?:\b|[:}?])"
+    )
+    for path, content in _text_files(root):
+        relative = path.relative_to(root).as_posix()
+        if injection_pattern.search(content):
+            unsupported_injections.append(relative)
+        for kind, value in configured.items():
+            if value:
+                count = content.count(value)
+                occurrences[kind] += count
+                if count and relative not in SERVER_FLAG_FILES:
+                    unmanaged[kind].append(relative)
+
+    if unsupported_injections:
+        add(
+            "fail",
+            "flags:unsupported_injection",
+            (
+                "flag environment variables are not injected by the build platform; use the "
+                "typed server-managed placeholders in: "
+                + ", ".join(sorted(set(unsupported_injections)))
+            ),
+        )
+    for kind, count in occurrences.items():
+        add(
+            "pass" if count else "fail",
+            f"flags:{kind}:materialized",
+            (
+                "server-managed flag was materialized"
+                if count
+                else "configured flag is absent from generated source"
+            ),
+        )
+        if unmanaged[kind]:
+            add(
+                "fail",
+                f"flags:{kind}:server_owned",
+                "flag placement is server-managed; remove flag values or placeholders from: "
+                + ", ".join(unmanaged[kind]),
+            )
+
+
+def _validate_source_syntax(root: Path, add) -> None:
+    bash = shutil.which("bash")
+    for path, content in _text_files(root):
+        relative = path.relative_to(root).as_posix()
+        suffix = path.suffix.lower()
+        if suffix == ".py":
+            try:
+                ast.parse(content, filename=relative)
+            except SyntaxError as error:
+                add(
+                    "fail",
+                    f"preflight:python:{relative}",
+                    f"{error.msg} at line {error.lineno}",
+                )
+            else:
+                add("pass", f"preflight:python:{relative}", "valid Python syntax")
+        elif suffix == ".json" and path.name != "scenario_manifest.json":
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as error:
+                add(
+                    "fail",
+                    f"preflight:json:{relative}",
+                    f"{error.msg} at line {error.lineno} column {error.colno}",
+                )
+            else:
+                add("pass", f"preflight:json:{relative}", "valid JSON")
+        elif suffix == ".sh" and bash:
+            try:
+                result = subprocess.run(
+                    [bash, "--noprofile", "--norc", "-n", str(path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env={"PATH": os.defpath, "LC_ALL": "C"},
+                )
+            except subprocess.TimeoutExpired:
+                add("fail", f"preflight:shell:{relative}", "bash -n timed out")
+            else:
+                message = (result.stderr or result.stdout).strip()
+                add(
+                    "pass" if result.returncode == 0 else "fail",
+                    f"preflight:shell:{relative}",
+                    message or "valid Bash syntax",
+                )
+
+
+def _validate_local_test_commands(manifest: dict, add) -> None:
+    external_urls: list[str] = []
+    for field in ("health_checks", "acceptance_tests"):
+        for check in manifest.get(field, []):
+            command = check.get("command", "") if isinstance(check, dict) else ""
+            for raw_url in URL_PATTERN.findall(command):
+                hostname = (urlsplit(raw_url).hostname or "").casefold()
+                if hostname not in LOCAL_TEST_HOSTS:
+                    external_urls.append(raw_url)
+    add(
+        "fail" if external_urls else "pass",
+        "manifest:test_network_scope",
+        (
+            "health and acceptance tests must not fetch external URLs: "
+            + ", ".join(sorted(set(external_urls)))
+            if external_urls
+            else "health and acceptance test URLs are local"
+        ),
+    )
 
 
 def known_failed_resources(repair_history: list[dict]) -> dict[str, list[str]]:
@@ -106,7 +259,7 @@ def _load_manifest(path: Path, add) -> dict | None:
     return value
 
 
-def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add) -> bool:
+def _validate_manifest(root: Path, manifest: dict, scenario: ScenarioDraft, add) -> bool:
     schema_valid = True
     try:
         ScenarioManifest.model_validate(manifest)
@@ -123,9 +276,9 @@ def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add)
 
     target_os = manifest.get("target_os")
     add(
-        "pass" if target_os == expected_target_os else "fail",
+        "pass" if target_os == scenario.target_os else "fail",
         "manifest:target_os",
-        f"target_os must exactly match {expected_target_os}",
+        f"target_os must exactly match {scenario.target_os}",
     )
     required_files = manifest.get("required_files")
     declared_files = set(required_files) if isinstance(required_files, list) else set()
@@ -147,6 +300,45 @@ def _validate_manifest(root: Path, manifest: dict, expected_target_os: str, add)
         exists = root.joinpath(*normalized.parts).is_file()
         add("pass" if exists else "fail", f"manifest:file:{normalized}", "exists")
     return schema_valid
+
+
+def _validate_flag_placements(manifest: dict, scenario: ScenarioDraft, add) -> None:
+    placements = manifest.get("flag_placements", [])
+    indexed = {
+        item.get("kind"): item
+        for item in placements
+        if isinstance(item, dict) and item.get("kind") in {"user", "system"}
+    }
+    configured = {
+        "user": scenario.user_flag is not None,
+        "system": scenario.system_flag is not None,
+    }
+    for kind, required in configured.items():
+        placement = indexed.get(kind)
+        add(
+            "pass" if (placement is not None) == required else "fail",
+            f"flags:{kind}:placement",
+            (
+                "configured flag has exactly one structured placement"
+                if required
+                else "unconfigured flag must not have a placement"
+            ),
+        )
+        if placement is None:
+            continue
+        owner = placement.get("owner")
+        group = placement.get("group")
+        privileged_identity = owner == "root" and group == "root"
+        identity_valid = privileged_identity if kind == "system" else owner != "root"
+        add(
+            "pass" if identity_valid else "fail",
+            f"flags:{kind}:placement_identity",
+            (
+                "system flag must be root-owned"
+                if kind == "system"
+                else "user flag must be owned by the intended non-root account"
+            ),
+        )
 
 
 def _validate_password_selection(attack_graph: AttackGraph, add) -> None:

@@ -10,10 +10,16 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
   -> マシン基本情報を保存
   -> シナリオを生成して SSE 配信
   -> 選択したシナリオでマシン作成を要求
-  -> VM ソースを生成・静的検証・ZIP 化
+  -> VM ソースを生成・静的検証
+  -> 候補専用コンテナでruntime導入・ビルド・テスト
+  -> AI意味レビュー・ZIP 化
   -> build_server に非同期ビルドを依頼
   -> ai_server が発行した一時的な署名付き URL から成果物をダウンロード
 ```
+
+マシン作成後の `生成・差分修正 -> build_server投入 -> ビルド監視 -> 必要なら再修正` は
+LangGraphの明示的なノードと条件分岐で実行します。セッションDBを永続状態として使うため、APIプロセスの
+メモリだけを正とせず、既存の再開・キャンセル契約を維持します。
 
 生成ソースは PoC と同じ契約を使います。
 
@@ -24,6 +30,7 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 │   ├── scenario_manifest.json
 │   ├── build.sh
 │   ├── scripts/provision.sh
+│   ├── scripts/install-flags.sh # AIサーバーが配置情報から生成
 │   ├── scripts/verify.sh      # Packerがプロビジョニング後に必ず実行
 │   ├── app/                 # シナリオに応じて生成
 │   └── config/              # シナリオに応じて生成
@@ -34,6 +41,10 @@ FastAPI で実装した、シナリオ生成・VM ソース生成・build_server
 
 build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
 ai_server ホスト上で実行することはありません。
+User/System flagの実値はモデルへ渡しません。モデルは`scenario_manifest.json`の
+`flag_placements`へ配置先、owner、group、modeだけを構造化して返し、AIサーバーが
+`install-flags.sh`と内容・所有者・権限を確認する必須検査を生成します。実値を含むサーバー生成
+スクリプトは修復用のモデル入力とWorkbenchから除外します。
 
 Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
 入口へ到達することを必須とします。HTTP応答、アプリ固有の肯定検査、Web実行ユーザーの実効権限は、
@@ -43,7 +54,8 @@ Webサービスを含む生成物は、IPアドレスだけで`/`へアクセス
 生成・レビュー時に判断します。
 
 シナリオは、攻略のネタバレを避けたプレイヤー向けの `scenario_description`、実装者向けの
-`scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）を保存します。
+`scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）、完成内容からAIが生成した
+検索・分類用の `tags` を保存します。
 攻撃グラフは可変長のステップ、
 ステップ間の依存関係、user/system flagの到達目標を持ちます。CVEは攻撃ステップの任意の
 種類の1つであり、Web脆弱性、設定不備、認証情報、ロジック不備なども組み合わせられます。
@@ -83,18 +95,68 @@ Geminiでは`GEMINI_MAX_OUTPUT_TOKENS`（既定値65536）、OpenAIでは
 攻撃グラフの生成失敗またはシナリオの敵対的AIレビュー不合格時の再試行回数は
 `SCENARIO_GENERATION_ATTEMPTS`（既定値5）、
 CVE検証・生成・修復・レビューなど単一の構造化AI操作内で不正な応答を再試行する回数は
-`GENERATION_RETRIES`（既定値3）です。ソース修復後に実装とシナリオ本文を同期して再レビューする回数は
+`GENERATION_RETRIES`（既定値3）です。ソース修復で意味契約が変わった場合、またはレビューが
+シナリオ本文の修正を要求した場合に、実装と本文を同期して再レビューする回数は
 `SCENARIO_SYNC_ATTEMPTS`（既定値3）で、ソース生成回数とは別に記録されます。
+OpenAIへの通信は全ワークフローで共有するキューを通し、既定では同時1リクエスト、開始間隔1秒に
+抑えます。一時的な429・503・通信障害は`Retry-After`を優先し、指定がなければ指数バックオフと
+ジッターで最大8回・合計600秒まで再試行します。課金残高、組織・プロジェクトのspend limit、
+usage limitは待機しても回復しないため再試行しません。これらは`AI_MAX_CONCURRENT_REQUESTS`、
+`AI_REQUEST_MIN_INTERVAL_SECONDS`、`AI_TRANSIENT_RETRY_ATTEMPTS`、
+`AI_TRANSIENT_RETRY_MAX_SECONDS`、`AI_TRANSIENT_RETRY_JITTER_SECONDS`で変更できます。
 CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定値2024）で変更できます。
 完成したシナリオは保存前に独立したAI呼び出しで意味レビューされます。攻撃グラフとの一貫性、
 前提ステップを飛ばす近道、実装可能性、acceptance test計画に加え、実行主体、owner/group/mode、
 親ディレクトリの探索権限、ACL・sudo・setuid・capability、flagの攻略前後の可読性を重点確認します。
 不合格所見は次の生成試行へ渡され、レビューを通過したシナリオだけが保存されます。
-生成ソースは必須ファイル、JSON Schema、パス安全性、XML構文などの決定的validationに加え、
+初回レビューは重大な問題をまとめて検出し、本文修正後は直前の未解決findingと直接の回帰だけを
+固定スコープで確認します。修正AIには解消済みの古いレビューを累積せず、現在の診断だけを渡します。
+具体的なフレームワーク内部の配線や完成コードはシナリオ本文で紙上証明させず、ソースレビューと
+Packer上の受入試験へ委ねます。攻撃グラフを修正・再生成した場合は固定スコープを破棄します。
+生成ソースは必須ファイル、JSON Schema、パス安全性、および生成物に存在するXML/JSON/Python/Bashの
+構文など、技術スタックに依存しない決定的preflight validationに加え、
 攻撃グラフと実コードを比較する
 敵対的AIレビューを通過する必要があります。意図した手法を使わない近道、通常機能による成果物の
 先出し、単なるエラーや接続成功だけのexploit判定、前提ステップを飛ばせる攻撃経路は修復対象です。
+初回は全体を監査しますが、その後は未解決findingと変更ファイルの回帰へ範囲を固定します。サービス、
+脆弱性、攻撃ステップ、目的などの契約が変わった場合だけ全体監査とシナリオ同期を開き直し、README、
+テスト、ビルド手順だけの修正では同期しません。不合格候補も捨てず、直前までに成立した修正を保ったまま
+次の最小差分を重ねます。
 この意味レビューの不合格と再修復はbuild_serverへ投入されないため、`build_repair_attempts`を増やしません。
+
+意味レビューの前には、生成候補ごとの隔離ワークベンチを作ります。実行環境は既定で
+`debian:13-slim`から毎回新規作成し、Node.js、Pythonなどの言語runtimeはあらかじめ入れません。
+AIは生成済みの`provision.sh`を読み、そこに宣言されたOS packageを候補内で実際に導入してから、
+構文検査、依存解決、コンパイル、既存テスト、およびprovision固有の導入後検査を1コマンドずつ実行します。
+コマンドは調査と合否検証を区別し、`cat`や`stat`など調査上の失敗を修正完了のブロッカーにしません。
+合否検証が失敗した場合はコンテナを破棄せず、同じ候補内で実際の依存物を調査し、生成ソースへ限定パッチを
+適用します。完了時には失敗した検証をシステム側が同じ条件で再実行します。操作枠を使い切ってもSandboxの
+ソース差分を候補へ回収してからコンテナを破棄するため、package managerが生成したlockfileや有効な途中修正を
+次の修復ループへ引き継ぎます。これにより、runtimeのpackage名や導入手順そのものも検証対象になります。
+Workbenchの合格には少なくとも1件の合否検証成功を必須とし、調査だけでの完了、検証拒否、説明だけの
+`finish`を合格にはしません。明示的な検証拒否や、変更も検証証拠もないまま操作枠を使い切った場合は、
+根拠のないソース修正を繰り返さずワークフローを明確に失敗させます。候補内のREADMEやログは未信頼データとして
+扱い、そこに含まれる指示や作業拒否をエージェントへの命令として扱いません。
+`contents/scripts/install-flags.sh`と`contents/scripts/verify.sh`は後段のアーカイブ作成時にサーバーが
+生成するため、Workbench内の存在確認対象にはしません。共有されるのは読み取り元の不変なベースイメージだけで、
+コンテナ、書き込み可能なroot filesystem、`/workspace`、`/tmp`、導入済みpackage、生成物は候補ごとに
+独立し、検証終了時に破棄されます。実フラグとパスワードはワークベンチへ渡しません。
+
+ワークベンチ要求は単一の`source-sandbox`サービス内のFIFOキューで受け付け、既定では同時に2候補まで
+実行します。`SOURCE_SANDBOX_MAX_CONCURRENT`で同時実行数、`SOURCE_SANDBOX_QUEUE_CAPACITY`で待機上限、
+`SOURCE_SANDBOX_SESSION_TTL_SECONDS`で操作のない候補の保持時間を変更できます。キューはコンテナを共有する
+ためのものではなく、DockerホストのCPU・メモリ・package download負荷を制御するものです。
+キューは単一の`source-sandbox`プロセスが所有し、サービス再起動時は同じラベルを持つ孤立候補を
+先に削除してから受付を再開します。
+各候補コンテナには1GiB、2 CPU、256 processの上限を設定し、通常コマンドは非rootで実行します。
+調査、パッチ、再検証を含む操作枠は`SOURCE_WORKBENCH_ACTION_LIMIT`（既定値20）で変更できます。
+各コマンドの既定タイムアウトは`SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS=600`（10分）です。API通信は
+終了処理の猶予を含めて`SOURCE_SANDBOX_TIMEOUT_SECONDS=660`とし、コマンドより先に切断しないようにします。
+root実行と一時的なnetwork接続はOS package導入コマンドだけに制限します。systemd、サービス起動、
+Packer固有処理、完全なプロビジョニングはこの軽量環境で代用せず、後段の使い捨てVMで検証します。
+networkも候補ごとに専用bridgeを作り、ソース投入前に切断し、package導入コマンドの間だけ再接続して
+終了時に削除するため、同時実行中の別候補と同じnetwork namespaceやbridgeを共有しません。
+
 Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPTS`（既定値3）で変更でき、
 `0` を指定すると自動修正を無効化できます。`build_repair_attempts`はbuild_serverへの投入に成功した
 修復ビルドの累積実行回数で、静的validationの再試行とbuild_serverへの接続失敗では増えません。
@@ -202,6 +264,8 @@ build_serverへの接続だけが失敗した場合は、同じ `POST /machines`
 `source.zip` が残っていれば、AIコード生成を繰り返さずにビルド依頼から再開します。
 Packerビルド自体が失敗またはキャンセルされた場合は、ai_serverがバックグラウンドで失敗を
 検知し、ビルドエラーをAIへ渡して、失敗に関係するファイルだけを自動で差分修正します。
+Packerはフェーズ、失敗したスクリプト、行番号、終了コードを`SLSG_SCRIPT_FAIL`として記録し、
+コマンドトレースで秘密値を出力しません。検証完了後は生成ソースをVMの`/tmp`から削除します。
 新しいビルドも継続して監視するため、クライアントからの状態ポーリングが止まっても次の修正へ
 進みます。既定では3回まで行い、上限に達した場合は `failed` になります。修正履歴は
 `repair_report.json` で確認できます。
