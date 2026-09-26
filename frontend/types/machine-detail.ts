@@ -26,18 +26,11 @@ export type MachineBuildFailure = {
   retryAllowed: boolean
 }
 
-export type MachineWorkbenchLog = {
-  status: string
-  updatedAt: string | null
-  lines: string[]
-}
-
 export type MachineBuildState = {
   status: MachineRecord["status"]
   progress: number
   description?: string
   failure?: MachineBuildFailure | null
-  workbench?: MachineWorkbenchLog
 }
 
 export type MachineDetail = Pick<
