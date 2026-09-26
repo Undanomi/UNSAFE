@@ -201,7 +201,16 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
             id="sidebar-account-menu"
             role="menu"
           >
-            <form action={logoutAction}>
+            <form
+              action={logoutAction}
+              onSubmit={() => {
+                try {
+                  localStorage.removeItem(`slsg:chat-list-open:${user.id}`)
+                } catch {
+                  // Keep logout available when browser storage is unavailable.
+                }
+              }}
+            >
               <button
                 className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-sm font-bold text-[#eef5ff] transition-colors hover:bg-[#1b2c49]"
                 role="menuitem"
