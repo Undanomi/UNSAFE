@@ -62,10 +62,18 @@ build {
     destination = "/tmp/slsg-configure-login-ip.sh"
   }
 
+  provisioner "file" {
+    source      = "${path.root}/scripts/bash-env.sh"
+    destination = "/tmp/slsg-bash-env.sh"
+  }
+
   provisioner "shell" {
     execute_command = "echo 'provisioner' | sudo -S bash '{{ .Path }}'"
     inline = [
-      "set -e",
+      "set -Eeuo pipefail",
+      "export BASH_ENV=/tmp/slsg-bash-env.sh",
+      "export SLSG_PHASE=platform",
+      "source /tmp/slsg-bash-env.sh",
       "BUILD_SH=/tmp/scenario/contents/build.sh",
       "if [ ! -f \"$BUILD_SH\" ]; then BUILD_SH=/tmp/scenario/build.sh; fi",
       "if [ ! -f \"$BUILD_SH\" ]; then BUILD_SH=$(find /tmp/scenario -mindepth 1 -maxdepth 3 -type f -name build.sh | head -n 1); fi",
@@ -73,9 +81,22 @@ build {
       "chmod +x \"$BUILD_SH\"",
       "cd \"$(dirname \"$BUILD_SH\")\"",
       "find . -type f -name '*.sh' -exec chmod +x {} \\;",
-      "./build.sh",
+      "export SLSG_PHASE=provision",
+      "printf 'SLSG_PHASE_START %s\\n' \"$SLSG_PHASE\"",
+      "bash ./build.sh",
+      "test -f ./scripts/install-flags.sh || { echo 'missing scripts/install-flags.sh in scenario source'; exit 1; }",
+      "bash ./scripts/install-flags.sh",
+      "printf 'SLSG_PHASE_PASS %s\\n' \"$SLSG_PHASE\"",
+      "test -f ./scripts/verify.sh || { echo 'missing scripts/verify.sh in scenario source'; exit 1; }",
+      "export SLSG_PHASE=verification",
+      "printf 'SLSG_PHASE_START %s\\n' \"$SLSG_PHASE\"",
+      "bash ./scripts/verify.sh",
+      "printf 'SLSG_PHASE_PASS %s\\n' \"$SLSG_PHASE\"",
+      "export SLSG_PHASE=cleanup",
+      "cd /",
+      "rm -rf /tmp/scenario",
       "bash /tmp/slsg-configure-login-ip.sh",
-      "rm -f /tmp/slsg-configure-login-ip.sh",
+      "rm -f /tmp/slsg-configure-login-ip.sh /tmp/slsg-bash-env.sh",
       "printf '%s:%s\\n' provisioner '${var.machine_password}' | chpasswd",
     ]
   }

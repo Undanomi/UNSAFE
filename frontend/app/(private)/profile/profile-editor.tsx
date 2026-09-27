@@ -1,21 +1,22 @@
 "use client"
 
-import { ArrowLeft, Pencil } from "lucide-react"
+import { ArrowLeft, ChevronRight, Pencil } from "lucide-react"
 import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
-import { PROFILE_DATA, type ProfileMachine, type UserProfile } from "@/stores/profile"
+import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import type { ProfileMachine, UserProfile } from "@/types/profile"
 
 type ProfileEditorProps = {
-  profile?: UserProfile
+  profile: UserProfile
   canEdit?: boolean
   showBackLink?: boolean
 }
 
 export function ProfileEditor({
-  profile = PROFILE_DATA,
+  profile,
   canEdit = true,
   showBackLink = true,
 }: ProfileEditorProps) {
@@ -89,49 +90,119 @@ export function ProfileEditor({
   }
 
   return (
-    <section className="grid gap-7">
-      <div>
+    <section className={`slsg-profile-page ${canEdit ? "is-own-profile" : "is-public-profile"}`}>
+      <header className="slsg-profile-header">
         {showBackLink ? (
-          <Link
-            className="inline-flex items-center gap-2 text-[0.86rem] font-bold text-[#61605b] transition hover:text-[#20201e]"
-            href="/machines"
-          >
+          <Link className="slsg-profile-back" href="/machines">
             <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
             マシン一覧へ戻る
           </Link>
         ) : null}
-        <h1
-          className={`${showBackLink ? "mt-5" : ""} text-[clamp(1.75rem,3vw,2.5rem)] leading-[1.05] font-bold tracking-[-0.035em]`}
-        >
-          ユーザー情報
-        </h1>
-        <p className="mt-2 leading-[1.65] text-[#61605b]">
-          プロフィールと、これまでの学習記録を確認できます。
+        {canEdit ? <p className="slsg-page-eyebrow">USER PROFILE</p> : null}
+        <h1 className={canEdit ? "slsg-heading-offset-up" : undefined}>プロフィール</h1>
+        <p className={`slsg-profile-description ${canEdit ? "slsg-heading-offset-up" : ""}`}>
+          アカウント情報の確認と管理を行います。
         </p>
-      </div>
+      </header>
 
-      <section className="relative flex items-start gap-6 rounded-3xl border border-[#e5e5e2] bg-white p-7 shadow-sm max-sm:flex-col">
-        <div className="relative grid size-20 shrink-0 place-items-center overflow-hidden rounded-full bg-[#20201e] text-2xl font-bold text-white">
-          {displayAvatarUrl ? (
-            <Image
-              alt={`${displayFields.name}のプロフィール画像`}
-              fill
-              className="size-full object-cover"
-              sizes="80px"
-              src={displayAvatarUrl}
-              unoptimized
+      <section
+        className={`slsg-profile-hero ${isEditing ? "is-editing" : ""} ${canEdit ? "" : "is-public"}`}
+      >
+        {canEdit ? <ProfileCardGlow /> : null}
+        <div className="slsg-profile-avatar-frame">
+          <svg
+            aria-hidden="true"
+            className="slsg-profile-avatar-border"
+            preserveAspectRatio="xMidYMid meet"
+            viewBox="0 0 100 100"
+          >
+            <defs>
+              <clipPath id="slsg-profile-avatar-rounded-hex" clipPathUnits="objectBoundingBox">
+                <path d="M.46.023 Q.5 0 .54.023 L.89.227 Q.93.25.93.3 L.93.7 Q.93.75.89.773 L.54.977 Q.5 1 .46.977 L.11.773 Q.07.75.07.7 L.07.3 Q.07.25.11.227 Z" />
+              </clipPath>
+              <linearGradient
+                id="slsg-profile-avatar-border-base-gradient"
+                gradientUnits="userSpaceOnUse"
+                x1="0"
+                x2="100"
+                y1="0"
+                y2="100"
+              >
+                <stop offset="0" stopColor="#c5f8ff" />
+                <stop offset="0.3" stopColor="#78bfd5" />
+                <stop offset="0.66" stopColor="#5698ff" />
+                <stop offset="1" stopColor="#304e8e" stopOpacity="0.52" />
+              </linearGradient>
+              <linearGradient
+                id="slsg-profile-avatar-glow-upper"
+                gradientUnits="userSpaceOnUse"
+                x1="46"
+                x2="7"
+                y1="2.3"
+                y2="42"
+              >
+                <stop offset="0" stopColor="#78bfd5" stopOpacity="0" />
+                <stop offset="0.34" stopColor="#78bfd5" stopOpacity="0.42" />
+                <stop offset="0.68" stopColor="#c5f8ff" />
+                <stop offset="0.84" stopColor="#78bfd5" stopOpacity="0.34" />
+                <stop offset="1" stopColor="#78bfd5" stopOpacity="0" />
+              </linearGradient>
+              <linearGradient
+                id="slsg-profile-avatar-glow-lower"
+                gradientUnits="userSpaceOnUse"
+                x1="93"
+                x2="54"
+                y1="58"
+                y2="97.7"
+              >
+                <stop offset="0" stopColor="#78bfd5" stopOpacity="0" />
+                <stop offset="0.16" stopColor="#78bfd5" stopOpacity="0.38" />
+                <stop offset="0.32" stopColor="#c5f8ff" />
+                <stop offset="0.62" stopColor="#78bfd5" stopOpacity="0.38" />
+                <stop offset="1" stopColor="#78bfd5" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <path
+              className="slsg-profile-avatar-border-base"
+              d="M46 2.3 Q50 0 54 2.3 L89 22.7 Q93 25 93 30 L93 70 Q93 75 89 77.3 L54 97.7 Q50 100 46 97.7 L11 77.3 Q7 75 7 70 L7 30 Q7 25 11 22.7 Z"
+              stroke="url(#slsg-profile-avatar-border-base-gradient)"
+              vectorEffect="non-scaling-stroke"
             />
-          ) : (
-            profileInitial
-          )}
+            <path
+              className="slsg-profile-avatar-border-glow"
+              d="M46 2.3 L11 22.7 Q7 25 7 30 L7 42"
+              stroke="url(#slsg-profile-avatar-glow-upper)"
+              vectorEffect="non-scaling-stroke"
+            />
+            <path
+              className="slsg-profile-avatar-border-glow"
+              d="M93 58 L93 70 Q93 75 89 77.3 L54 97.7"
+              stroke="url(#slsg-profile-avatar-glow-lower)"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+          <div className="slsg-profile-avatar">
+            {displayAvatarUrl ? (
+              <Image
+                alt={`${displayFields.name}のプロフィール画像`}
+                fill
+                className="size-full object-cover"
+                sizes="136px"
+                src={displayAvatarUrl}
+                unoptimized
+              />
+            ) : (
+              profileInitial
+            )}
+          </div>
         </div>
-        <div className="min-w-0 flex-1 pr-12">
+        <div className="slsg-profile-identity">
           {isEditing ? (
-            <div className="grid gap-3">
-              <label className="grid gap-2 text-[0.86rem] font-extrabold">
+            <div className="slsg-profile-edit-form">
+              <label className="slsg-profile-field">
                 <span>ユーザー名</span>
                 <input
-                  className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+                  className="slsg-input"
                   maxLength={30}
                   onChange={(event) =>
                     setDraftFields((current) => ({ ...current, name: event.target.value }))
@@ -139,33 +210,33 @@ export function ProfileEditor({
                   value={draftFields.name}
                 />
               </label>
-              <fieldset className="grid gap-2">
-                <legend className="text-[0.86rem] font-extrabold">アイコンの表示</legend>
-                <div className="flex flex-wrap gap-3">
-                  <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#d6d6d2] px-4 py-3 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1]">
+              <fieldset className="slsg-profile-field">
+                <legend>アイコンの表示</legend>
+                <div className="slsg-profile-icon-options">
+                  <label>
                     <input
                       checked={iconMode === "google"}
                       name="profile-icon-mode"
                       onChange={() => setIconMode("google")}
                       type="radio"
                     />
-                    <span className="text-[0.82rem] font-bold">Googleアイコン</span>
+                    <span className="text-sm font-bold">Googleアイコン</span>
                   </label>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-[#d6d6d2] px-4 py-3 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1]">
+                  <label>
                     <input
                       checked={iconMode === "initial"}
                       name="profile-icon-mode"
                       onChange={() => setIconMode("initial")}
                       type="radio"
                     />
-                    <span className="text-[0.82rem] font-bold">イニシャル</span>
+                    <span className="text-sm font-bold">イニシャル</span>
                   </label>
                 </div>
               </fieldset>
-              <label className="grid gap-2 text-[0.86rem] font-extrabold">
+              <label className="slsg-profile-field">
                 <span>自己紹介</span>
                 <textarea
-                  className="min-h-28 w-full resize-y rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
+                  className="slsg-input min-h-28 resize-y"
                   maxLength={500}
                   onChange={(event) =>
                     setDraftFields((current) => ({ ...current, bio: event.target.value }))
@@ -174,13 +245,13 @@ export function ProfileEditor({
                 />
               </label>
               {saveError ? (
-                <p className="text-[0.86rem] font-bold text-[#b14334]" role="alert">
+                <p className="slsg-profile-error" role="alert">
                   {saveError}
                 </p>
               ) : null}
-              <div className="flex flex-wrap gap-3">
+              <div className="slsg-profile-edit-actions">
                 <button
-                  className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-transparent bg-[#20201e] px-[18px] text-[0.92rem] font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
+                  className="slsg-button-primary px-6"
                   disabled={isSaving}
                   onClick={saveProfile}
                   type="button"
@@ -188,7 +259,7 @@ export function ProfileEditor({
                   {isSaving ? "保存しています…" : "保存する"}
                 </button>
                 <button
-                  className="inline-flex min-h-[46px] items-center justify-center rounded-[15px] border border-transparent bg-transparent px-[18px] text-[0.92rem] font-extrabold text-[#61605b] hover:bg-[#f5f5f3]"
+                  className="slsg-button-secondary px-6"
                   disabled={isSaving}
                   onClick={cancelEditing}
                   type="button"
@@ -199,66 +270,134 @@ export function ProfileEditor({
             </div>
           ) : (
             <>
-              <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
-                {profileFields.name}
-              </h2>
-              <p className="mt-2 leading-[1.65] text-[#61605b]">{profileFields.bio}</p>
+              <h2>{profileFields.name}</h2>
+              <p>{profileFields.bio}</p>
             </>
           )}
         </div>
         {canEdit && !isEditing ? (
           <button
             aria-label="プロフィールを編集"
-            className="absolute top-6 right-6 inline-flex size-10 items-center justify-center rounded-xl border border-[#d6d6d2] bg-white text-[#20201e] shadow-sm transition hover:-translate-y-px hover:bg-[#f8f8f7]"
+            className="slsg-profile-edit-button"
             onClick={startEditing}
             type="button"
           >
-            <Pencil aria-hidden="true" size={17} strokeWidth={2} />
+            <Pencil aria-hidden="true" size={22} strokeWidth={1.8} />
+            プロフィールを編集
           </button>
         ) : null}
       </section>
 
-      <div className="grid grid-cols-2 gap-6 max-md:grid-cols-1">
-        <MachineRecordList items={profile.createdMachines} title="作成したマシン" />
-        <MachineRecordList items={profile.solvedMachines} title="解いたマシン" />
-      </div>
+      {!isEditing ? (
+        <>
+          <div className="slsg-profile-history-grid">
+            <MachineRecordList
+              items={profile.createdMachines}
+              kind="created"
+              profileId={profile.id}
+              title="作成したマシン"
+            />
+            <MachineRecordList
+              items={profile.solvedMachines}
+              kind="solved"
+              profileId={profile.id}
+              title="解いたマシン"
+            />
+          </div>
+
+          <TerminalTelemetry />
+        </>
+      ) : null}
     </section>
   )
 }
 
 type MachineRecordListProps = {
   items: ProfileMachine[]
+  kind: "created" | "solved"
+  profileId: string
   title: string
 }
 
-function MachineRecordList({ items, title }: MachineRecordListProps) {
+const profileDifficultyLabels = {
+  easy: "Easy",
+  medium: "Medium",
+  hard: "High",
+} as const
+
+const profileDifficultyClasses = {
+  easy: "slsg-difficulty-easy",
+  medium: "slsg-difficulty-medium",
+  hard: "slsg-difficulty-high",
+} as const
+
+function formatProfileDate(value: string) {
+  return value.replaceAll("/", ".").replaceAll("-", ".")
+}
+
+function MachineRecordList({ items, kind, profileId, title }: MachineRecordListProps) {
   return (
-    <section className="flex h-80 flex-col rounded-3xl border border-[#e5e5e2] bg-white p-6 shadow-sm">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-[clamp(1.15rem,1.6vw,1.5rem)] font-bold tracking-[-0.035em]">
-          {title}
-        </h2>
-        <span className="grid min-w-7 place-items-center rounded-full bg-[#20201e] px-2 py-1 text-[0.75rem] font-bold text-white">
-          {items.length}
-        </span>
+    <section className={`slsg-profile-history-card is-${kind}`}>
+      <ProfileCardGlow />
+      <header className="slsg-profile-history-header">
+        <h2>{title}</h2>
+      </header>
+      <div className="slsg-profile-history-columns" aria-hidden="true">
+        <span>マシン名</span>
+        <span>難易度</span>
+        {kind === "solved" ? <span>作成者</span> : null}
+        <span>{kind === "created" ? "作成日" : "解いた日"}</span>
       </div>
-      <ul className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-2">
+      <ul className="slsg-profile-history-list">
         {items.length > 0 ? (
           items.map((machine) => (
-            <li className="border-t border-[#e5e5e2] first:border-t-0" key={machine.id}>
-              <Link className="grid gap-1 py-3 hover:underline" href={`/machines/${machine.id}`}>
-                <span>{machine.name}</span>
-                <small className="text-[0.75rem] text-[#61605b]">
-                  作成 {machine.createdAt}
-                  {"solvedAt" in machine && machine.solvedAt ? ` · 解答 ${machine.solvedAt}` : ""}
-                </small>
-              </Link>
+            <li key={machine.id}>
+              <div className="slsg-profile-machine-row">
+                <Link
+                  aria-label={`${machine.name}の詳細を見る`}
+                  className="slsg-profile-machine-row-hit-area"
+                  href={`/machines/${encodeURIComponent(machine.id)}?from=profile&profileId=${encodeURIComponent(profileId)}`}
+                />
+                <span className="slsg-profile-machine-copy">
+                  <strong>{machine.name}</strong>
+                </span>
+                <span
+                  className={`slsg-difficulty slsg-profile-difficulty ${profileDifficultyClasses[machine.level]}`}
+                >
+                  {profileDifficultyLabels[machine.level]}
+                </span>
+                {kind === "solved" ? (
+                  <Link
+                    className="slsg-profile-machine-author"
+                    href={`/users/${encodeURIComponent(machine.authorId)}`}
+                  >
+                    {machine.authorName}
+                  </Link>
+                ) : null}
+                <time>
+                  {formatProfileDate(
+                    kind === "solved" && machine.solvedAt ? machine.solvedAt : machine.createdAt,
+                  )}
+                </time>
+                <ChevronRight aria-hidden="true" size={21} strokeWidth={1.6} />
+              </div>
             </li>
           ))
         ) : (
-          <li className="py-3 text-[0.86rem] text-[#61605b]">まだ記録はありません。</li>
+          <li className="slsg-profile-history-empty">まだ記録はありません。</li>
         )}
       </ul>
     </section>
+  )
+}
+
+function ProfileCardGlow() {
+  return (
+    <div aria-hidden="true" className="slsg-profile-card-glow">
+      <span className="slsg-profile-card-glow-top" />
+      <span className="slsg-profile-card-glow-right" />
+      <span className="slsg-profile-card-glow-bottom" />
+      <span className="slsg-profile-card-glow-left" />
+    </div>
   )
 }

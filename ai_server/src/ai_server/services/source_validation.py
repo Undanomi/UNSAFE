@@ -1,26 +1,32 @@
 from __future__ import annotations
 
+import ast
 import json
+import os
 import re
-import stat
+import shutil
+import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
-from ..models import AttackGraph, ScenarioDraft
+from pydantic import ValidationError
+
+from ..models import AttackGraph, ScenarioDraft, rockyou_password_placeholder
+from ..scenario_manifest import ScenarioManifest
+from .scenario_secrets import redact_scenario_flags
 
 REQUIRED_FILES = {
     "contents/README.md",
     "contents/scenario_manifest.json",
     "contents/build.sh",
     "contents/scripts/provision.sh",
+    "contents/scripts/install-flags.sh",
+    "contents/scripts/verify.sh",
 }
-MANIFEST_LISTS = {
-    "required_files",
-    "services",
-    "acceptance_tests",
-    "expected_vulnerabilities",
-    "health_checks",
-    "attack_steps",
+SERVER_FLAG_FILES = {
+    "contents/scripts/install-flags.sh",
+    "contents/scripts/verify.sh",
 }
 UNAVAILABLE_PACKAGE_PATTERNS = (
     re.compile(r"unable to locate package\s+([a-z0-9][a-z0-9+.-]*)", re.IGNORECASE),
@@ -45,37 +51,41 @@ MISSING_SYSTEMD_UNIT_PATTERNS = (
         re.IGNORECASE,
     ),
 )
-def validate_source(
-    root: Path, scenario: ScenarioDraft, repair_history: list[dict] | None = None
-) -> dict:
+URL_PATTERN = re.compile(r"https?://[^\s'\"`<>]+", re.IGNORECASE)
+LOCAL_TEST_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def validate_source(root: Path, scenario: ScenarioDraft) -> dict:
     checks: list[dict[str, object]] = []
 
     def add(
         status: str,
         name: str,
         message: str,
-        *,
-        required_commands: list[str] | None = None,
     ) -> None:
+        message = redact_scenario_flags(message, scenario)
+        for step in scenario.attack_graph.steps:
+            spec = step.password_cracking
+            if spec is not None and spec.password:
+                message = message.replace(spec.password, rockyou_password_placeholder(step.step_id))
         check: dict[str, object] = {"status": status, "name": name, "message": message}
-        if status == "fail" and required_commands:
-            check["required_commands"] = required_commands
         checks.append(check)
 
     for relative in sorted(REQUIRED_FILES):
         add("pass" if (root / relative).is_file() else "fail", f"required:{relative}", "exists")
     manifest = _load_manifest(root / "contents/scenario_manifest.json", add)
+    manifest_schema_valid = False
     if manifest is not None:
-        _validate_manifest(root, manifest, add)
-        _validate_attack_graph(manifest, scenario.attack_graph, add)
-        _validate_cve_grounding(root / "contents", manifest, scenario.attack_graph, add)
-    _validate_build(root / "contents/build.sh", add)
-    _validate_source_modes(root / "contents", add)
-    if manifest is not None:
-        _validate_web_delivery(root / "contents", manifest, add)
-        _validate_flag_values(root / "contents", manifest, scenario, add)
-        _validate_exploit_acceptance_tests(root / "contents", manifest, scenario, add)
-    _validate_base_image_compatibility(root / "contents", repair_history or [], add)
+        manifest_schema_valid = _validate_manifest(root, manifest, scenario, add)
+        if manifest_schema_valid:
+            _validate_local_test_commands(manifest, add)
+            _validate_attack_graph(manifest, scenario.attack_graph, add)
+            _validate_cve_grounding(manifest, scenario.attack_graph, add)
+            _validate_flag_placements(manifest, scenario, add)
+    _validate_password_selection(scenario.attack_graph, add)
+    _validate_materialized_password_usage(root, scenario.attack_graph, add)
+    _validate_materialized_flag_usage(root, scenario, add)
+    _validate_source_syntax(root, add)
     for path in (root / "contents").rglob("*"):
         if path.is_file() and path.suffix.lower() in {".xml", ".pom"}:
             try:
@@ -96,75 +106,133 @@ def validate_source(
     }
 
 
-def _validate_flag_values(contents: Path, manifest: dict, scenario: ScenarioDraft, add) -> None:
-    manifest_text = json.dumps(manifest, ensure_ascii=False)
-    text_files = [path for path in sorted(contents.rglob("*")) if path.is_file()]
-    deployment_text = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for path in text_files
-        if path.name not in {"README.md", "scenario_manifest.json"}
-    )
-    for kind, expected in (("user", scenario.user_flag), ("system", scenario.system_flag)):
-        if expected is None:
+def _text_files(root: Path):
+    for path in sorted((root / "contents").rglob("*")):
+        if not path.is_file():
             continue
+        try:
+            yield path, path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+
+def _validate_materialized_flag_usage(root: Path, scenario: ScenarioDraft, add) -> None:
+    configured = {
+        "user": scenario.user_flag,
+        "system": scenario.system_flag,
+    }
+    occurrences = {kind: 0 for kind, value in configured.items() if value}
+    unmanaged: dict[str, list[str]] = {kind: [] for kind in occurrences}
+    unsupported_injections: list[str] = []
+    injection_pattern = re.compile(
+        r"\$(?:\{)?[A-Z][A-Z0-9_]*(?:USER|SYSTEM)_FLAG(?:\b|[:}?])"
+        r"|\$(?:\{)?(?:USER|SYSTEM)_FLAG(?:\b|[:}?])"
+    )
+    for path, content in _text_files(root):
+        relative = path.relative_to(root).as_posix()
+        if injection_pattern.search(content):
+            unsupported_injections.append(relative)
+        for kind, value in configured.items():
+            if value:
+                count = content.count(value)
+                occurrences[kind] += count
+                if count and relative not in SERVER_FLAG_FILES:
+                    unmanaged[kind].append(relative)
+
+    if unsupported_injections:
         add(
-            "pass" if expected in deployment_text else "fail",
-            f"flag:{kind}:deployment_exact_value",
-            "deployment input must contain the exact case-sensitive persisted flag value",
-        )
-        add(
-            "pass" if expected in manifest_text else "fail",
-            f"flag:{kind}:manifest_exact_value",
-            "manifest checks must contain the exact case-sensitive persisted flag value",
-        )
-        mismatched_paths = []
-        pattern = re.compile(re.escape(expected), re.IGNORECASE)
-        for path in text_files:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if any(match.group(0) != expected for match in pattern.finditer(text)):
-                mismatched_paths.append(path.relative_to(contents).as_posix())
-        add(
-            "fail" if mismatched_paths else "pass",
-            f"flag:{kind}:case_consistency",
+            "fail",
+            "flags:unsupported_injection",
             (
-                "case-mismatched flag value found in: " + ", ".join(mismatched_paths)
-                if mismatched_paths
-                else "all flag occurrences preserve the persisted value's case"
+                "flag environment variables are not injected by the build platform; use the "
+                "typed server-managed placeholders in: "
+                + ", ".join(sorted(set(unsupported_injections)))
             ),
         )
-
-
-def _validate_exploit_acceptance_tests(
-    contents: Path, manifest: dict, scenario: ScenarioDraft, add
-) -> None:
-    direct_reads: list[str] = []
-    flag_path = re.compile(
-        r"(?:^|[/_.-])(?:user|system|root)?[_-]?(?:flag|user\.txt|system\.txt)(?:$|[\s'\"])",
-        re.IGNORECASE,
-    )
-    identity_switch = re.compile(r"\b(?:sudo\s+-u|runuser\s+-u|su\s+-s)\b", re.IGNORECASE)
-    direct_reader = re.compile(r"\b(?:cat|grep|head|tail|awk|sed)\b", re.IGNORECASE)
-    expected_flags = tuple(
-        value for value in (scenario.user_flag, scenario.system_flag) if value is not None
-    )
-    for index, test in enumerate(manifest.get("acceptance_tests", [])):
-        command = test.get("command") if isinstance(test, dict) else test
-        if not isinstance(command, str):
-            continue
-        targets_flag = any(flag in command for flag in expected_flags) or bool(
-            flag_path.search(command)
+    for kind, count in occurrences.items():
+        add(
+            "pass" if count else "fail",
+            f"flags:{kind}:materialized",
+            (
+                "server-managed flag was materialized"
+                if count
+                else "configured flag is absent from generated source"
+            ),
         )
-        if targets_flag and identity_switch.search(command) and direct_reader.search(command):
-            direct_reads.append(str(index))
+        if unmanaged[kind]:
+            add(
+                "fail",
+                f"flags:{kind}:server_owned",
+                "flag placement is server-managed; remove flag values or placeholders from: "
+                + ", ".join(unmanaged[kind]),
+            )
+
+
+def _validate_source_syntax(root: Path, add) -> None:
+    bash = shutil.which("bash")
+    for path, content in _text_files(root):
+        relative = path.relative_to(root).as_posix()
+        suffix = path.suffix.lower()
+        if suffix == ".py":
+            try:
+                ast.parse(content, filename=relative)
+            except SyntaxError as error:
+                add(
+                    "fail",
+                    f"preflight:python:{relative}",
+                    f"{error.msg} at line {error.lineno}",
+                )
+            else:
+                add("pass", f"preflight:python:{relative}", "valid Python syntax")
+        elif suffix == ".json" and path.name != "scenario_manifest.json":
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as error:
+                add(
+                    "fail",
+                    f"preflight:json:{relative}",
+                    f"{error.msg} at line {error.lineno} column {error.colno}",
+                )
+            else:
+                add("pass", f"preflight:json:{relative}", "valid JSON")
+        elif suffix == ".sh" and bash:
+            try:
+                result = subprocess.run(
+                    [bash, "--noprofile", "--norc", "-n", str(path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    env={"PATH": os.defpath, "LC_ALL": "C"},
+                )
+            except subprocess.TimeoutExpired:
+                add("fail", f"preflight:shell:{relative}", "bash -n timed out")
+            else:
+                message = (result.stderr or result.stdout).strip()
+                add(
+                    "pass" if result.returncode == 0 else "fail",
+                    f"preflight:shell:{relative}",
+                    message or "valid Bash syntax",
+                )
+
+
+def _validate_local_test_commands(manifest: dict, add) -> None:
+    external_urls: list[str] = []
+    for field in ("health_checks", "acceptance_tests"):
+        for check in manifest.get(field, []):
+            command = check.get("command", "") if isinstance(check, dict) else ""
+            for raw_url in URL_PATTERN.findall(command):
+                hostname = (urlsplit(raw_url).hostname or "").casefold()
+                if hostname not in LOCAL_TEST_HOSTS:
+                    external_urls.append(raw_url)
     add(
-        "fail" if direct_reads else "pass",
-        "exploit:no_direct_identity_flag_read",
+        "fail" if external_urls else "pass",
+        "manifest:test_network_scope",
         (
-            "acceptance tests bypass the attack path by switching identity and directly reading a "
-            "flag in entries: "
-            + ", ".join(direct_reads)
-            if direct_reads
-            else "acceptance tests do not switch identity to read flags directly"
+            "health and acceptance tests must not fetch external URLs: "
+            + ", ".join(sorted(set(external_urls)))
+            if external_urls
+            else "health and acceptance test URLs are local"
         ),
     )
 
@@ -191,24 +259,36 @@ def _load_manifest(path: Path, add) -> dict | None:
     return value
 
 
-def _validate_manifest(root: Path, manifest: dict, add) -> None:
+def _validate_manifest(root: Path, manifest: dict, scenario: ScenarioDraft, add) -> bool:
+    schema_valid = True
+    try:
+        ScenarioManifest.model_validate(manifest)
+    except ValidationError as error:
+        schema_valid = False
+        for detail in error.errors(include_url=False):
+            location = ".".join(str(part) for part in detail["loc"])
+            message = detail["msg"]
+            if detail["loc"] == ("expected_vulnerabilities",):
+                message = "at least one implemented vulnerability entry is required"
+            add("fail", f"manifest:schema:{location}", message)
+    else:
+        add("pass", "manifest:schema", "matches the declared JSON Schema")
+
     target_os = manifest.get("target_os")
     add(
-        "pass" if isinstance(target_os, str) and target_os.strip() else "fail",
+        "pass" if target_os == scenario.target_os else "fail",
         "manifest:target_os",
-        "non-empty target_os required",
+        f"target_os must exactly match {scenario.target_os}",
     )
-    for field in MANIFEST_LISTS:
-        value = manifest.get(field)
-        status = "pass" if isinstance(value, list) and value else "fail"
-        add(status, f"manifest:{field}", "non-empty list required")
-    objectives = manifest.get("objectives")
-    add(
-        "pass" if isinstance(objectives, list) else "fail",
-        "manifest:objectives",
-        "objectives must be a list",
-    )
-    for item in manifest.get("required_files", []):
+    required_files = manifest.get("required_files")
+    declared_files = set(required_files) if isinstance(required_files, list) else set()
+    for required in sorted(REQUIRED_FILES):
+        add(
+            "pass" if required in declared_files else "fail",
+            f"manifest:required_file:{required}",
+            "required_files must declare every mandatory source file",
+        )
+    for item in required_files if isinstance(required_files, list) else []:
         if not isinstance(item, str):
             add("fail", "manifest:file", "path must be a string")
             continue
@@ -219,135 +299,150 @@ def _validate_manifest(root: Path, manifest: dict, add) -> None:
         normalized = path if path.parts[:1] == ("contents",) else PurePosixPath("contents") / path
         exists = root.joinpath(*normalized.parts).is_file()
         add("pass" if exists else "fail", f"manifest:file:{normalized}", "exists")
-    for index, service in enumerate(manifest.get("services", [])):
-        valid = isinstance(service, dict) and "name" in service and "port" in service
-        add("pass" if valid else "fail", f"manifest:service:{index}", "name and port required")
+    return schema_valid
 
 
-def _validate_build(path: Path, add) -> None:
-    if not path.is_file():
+def _validate_flag_placements(manifest: dict, scenario: ScenarioDraft, add) -> None:
+    placements = manifest.get("flag_placements", [])
+    indexed = {
+        item.get("kind"): item
+        for item in placements
+        if isinstance(item, dict) and item.get("kind") in {"user", "system"}
+    }
+    configured = {
+        "user": scenario.user_flag is not None,
+        "system": scenario.system_flag is not None,
+    }
+    for kind, required in configured.items():
+        placement = indexed.get(kind)
+        add(
+            "pass" if (placement is not None) == required else "fail",
+            f"flags:{kind}:placement",
+            (
+                "configured flag has exactly one structured placement"
+                if required
+                else "unconfigured flag must not have a placement"
+            ),
+        )
+        if placement is None:
+            continue
+        owner = placement.get("owner")
+        group = placement.get("group")
+        privileged_identity = owner == "root" and group == "root"
+        identity_valid = privileged_identity if kind == "system" else owner != "root"
+        add(
+            "pass" if identity_valid else "fail",
+            f"flags:{kind}:placement_identity",
+            (
+                "system flag must be root-owned"
+                if kind == "system"
+                else "user flag must be owned by the intended non-root account"
+            ),
+        )
+
+
+def _validate_password_selection(attack_graph: AttackGraph, add) -> None:
+    cracking_steps = [step for step in attack_graph.steps if step.password_cracking is not None]
+    if not cracking_steps:
         return
-    text = path.read_text(encoding="utf-8", errors="replace")
-    add(
-        "pass" if "set -euo pipefail" in text else "fail",
-        "build:strict_mode",
-        "set -euo pipefail required",
-        required_commands=["set -euo pipefail"],
-    )
-    add(
-        "pass" if "scripts/provision.sh" in text else "fail",
-        "build:provision",
-        "scripts/provision.sh reference required",
-        required_commands=["bash ./scripts/provision.sh"],
-    )
+
+    for step in cracking_steps:
+        spec = step.password_cracking
+        assert spec is not None
+        selection_bound = spec.selection_bound
+        add(
+            "pass" if selection_bound else "fail",
+            f"password_cracking:{step.step_id}:selection_bound",
+            (
+                "rockyou password was selected after source generation"
+                if selection_bound
+                else "rockyou password must be selected after source generation"
+            ),
+        )
+    selected_passwords = [
+        spec.password
+        for step in cracking_steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    ]
+    if len(selected_passwords) == len(cracking_steps):
+        unique = len(selected_passwords) == len(set(selected_passwords))
+        add(
+            "pass" if unique else "fail",
+            "password_cracking:selection_unique",
+            "each password cracking step must have a distinct server-selected password",
+        )
 
 
-def _validate_source_modes(contents: Path, add) -> None:
-    if not contents.is_dir():
+def _validate_materialized_password_usage(root: Path, attack_graph: AttackGraph, add) -> None:
+    passwords = {
+        spec.password
+        for step in attack_graph.steps
+        if (spec := step.password_cracking) is not None and spec.password is not None
+    }
+    if not passwords:
         return
-    for path in sorted(contents.rglob("*")):
+
+    invalid_comparisons: list[str] = []
+    unsupported_injections: list[str] = []
+    for path in sorted((root / "contents").rglob("*")):
         if not path.is_file():
             continue
-        relative = path.relative_to(contents).as_posix()
-        mode = stat.S_IMODE(path.stat().st_mode)
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if path.suffix.lower() == ".sh":
-            add(
-                "pass" if mode & 0o111 and text.startswith("#!") else "fail",
-                f"permissions:executable:{relative}",
-                f"shell scripts must have a shebang and executable mode; mode is {mode:04o}",
-            )
-        elif text.startswith("#!"):
-            add(
-                "pass" if mode & 0o111 else "fail",
-                f"permissions:shebang:{relative}",
-                f"files with a shebang must be executable; mode is {mode:04o}",
-            )
-        if path.suffix.lower() == ".php":
-            is_cgi_path = "cgi-bin" in {part.lower() for part in path.parts}
-            has_shebang = text.startswith("#!")
-            if is_cgi_path or has_shebang:
-                add(
-                    "pass" if has_shebang and mode & 0o111 else "fail",
-                    f"permissions:php_cgi:{relative}",
-                    f"CGI PHP must have a shebang and executable mode; mode is {mode:04o}",
-                )
-            else:
-                add(
-                    "fail" if mode & 0o111 else "pass",
-                    f"permissions:php_source:{relative}",
-                    f"non-CGI PHP should be readable but not executable; mode is {mode:04o}",
-                )
-
-
-def _validate_web_delivery(contents: Path, manifest: dict, add) -> None:
-    if not _has_web_service(manifest):
-        return
-    manifest_checks = json.dumps(
-        {
-            "health_checks": manifest.get("health_checks", []),
-            "acceptance_tests": manifest.get("acceptance_tests", []),
-        },
-        ensure_ascii=False,
-    )
-    shell_checks = "\n".join(
-        path.read_text(encoding="utf-8", errors="replace")
-        for path in sorted(contents.rglob("*.sh"))
-    )
-    _validate_web_check_text(manifest_checks, "manifest", add)
-    _validate_web_check_text(shell_checks, "build", add)
-
-
-def _has_web_service(manifest: dict) -> bool:
-    for service in manifest.get("services", []):
-        if not isinstance(service, dict):
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
             continue
-        protocol = str(service.get("protocol", "")).lower()
-        if protocol in {"http", "https"}:
-            return True
-    return False
+        relative = path.relative_to(root).as_posix()
+        if "SLSG_ROCKYOU_PASSWORD" in content:
+            unsupported_injections.append(relative)
+        for line_number, line in enumerate(content.splitlines(), start=1):
+            if any(
+                password in line and _looks_like_password_comparison(line, password)
+                for password in passwords
+            ):
+                invalid_comparisons.append(f"{relative}:{line_number}")
 
-
-def _validate_web_check_text(text: str, location: str, add) -> None:
-    lowered = text.lower()
-    root_request = bool(
-        re.search(
-            r"curl\b[^\n]*https?://(?:127\.0\.0\.1|localhost)(?::\d+)?/?(?:[\s'\";|)]|$)",
-            text,
-            re.IGNORECASE,
+    if unsupported_injections:
+        add(
+            "fail",
+            "password_cracking:unsupported_password_injection",
+            (
+                "SLSG_ROCKYOU_PASSWORD is not injected by the build platform; use only the "
+                "server-managed placeholder as credential or hash input in: "
+                + ", ".join(unsupported_injections)
+            ),
         )
-    )
-    add(
-        "pass" if root_request else "fail",
-        f"web:{location}:ip_root_entrypoint",
-        "numeric/localhost root URL must be requested",
-        required_commands=["curl -fsSL http://127.0.0.1/"],
-    )
-    add(
-        "pass" if root_request and "grep" in lowered else "fail",
-        f"web:{location}:application_identity",
-        "root response must be checked for a scenario-specific marker",
-        required_commands=[
-            "curl -fsSL http://127.0.0.1/ | grep -F -- '<scenario-specific marker>'"
-        ],
-    )
-    permission_tool = any(token in lowered for token in ("namei ", "stat ", "test -r", "test -x"))
-    runtime_identity = any(token in lowered for token in ("runuser ", "sudo -u ", "su -s "))
-    add(
-        "pass" if permission_tool and runtime_identity else "fail",
-        f"permissions:{location}:web_runtime_access",
-        (
-            "web runtime access requires both deployed owner/mode/path inspection and an "
-            "effective-user readability/traversal check; stat alone is insufficient"
-        ),
-        required_commands=[
-            "namei -l <deployed-web-file>",
-            "runuser -u <actual-web-runtime-user> -- test -r <deployed-web-file>",
-        ],
+    if invalid_comparisons:
+        add(
+            "fail",
+            "password_cracking:materialized_secret_comparison",
+            (
+                "the server-selected password must not be used in a comparison, placeholder "
+                "guard, grep, case, or assertion; use it only as credential or hash input in: "
+                + ", ".join(invalid_comparisons)
+            ),
+        )
+    if not unsupported_injections and not invalid_comparisons:
+        add(
+            "pass",
+            "password_cracking:materialized_secret_usage",
+            "server-selected password is not used as a placeholder guard or injected variable",
+        )
+
+
+def _looks_like_password_comparison(line: str, password: str) -> bool:
+    if any(operator in line for operator in ("==", "!=", "=~")):
+        return True
+    prefix = line[: line.find(password)]
+    return bool(
+        re.search(
+            r"(?:^|[;&\s])(?:if|elif|while|until|test|case|grep|assert)\b",
+            prefix,
+        )
+        or re.search(r"(?:^|\s)\[\[?(?:\s|$)", prefix)
     )
 
 
-def _validate_cve_grounding(contents: Path, manifest: dict, attack_graph: AttackGraph, add) -> None:
+def _validate_cve_grounding(manifest: dict, attack_graph: AttackGraph, add) -> None:
     cve_steps = [step for step in attack_graph.steps if step.cve_id]
     if not cve_steps:
         return
@@ -387,6 +482,7 @@ def _validate_cve_grounding(contents: Path, manifest: dict, attack_graph: Attack
                 "artifact_source, and source_build_reason from the verified attack graph"
             ),
         )
+
 
 def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> None:
     expected_steps = {
@@ -428,63 +524,6 @@ def _validate_attack_graph(manifest: dict, attack_graph: AttackGraph, add) -> No
         "pass" if actual_objectives == expected_objectives else "fail",
         "manifest:attack_graph_objectives",
         "objectives must match the verified attack graph",
-    )
-
-
-def _validate_base_image_compatibility(contents: Path, repair_history: list[dict], add) -> None:
-    if not contents.is_dir():
-        return
-    scripts = list(contents.rglob("*.sh"))
-    combined = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in scripts)
-    shell_lines = combined.replace("\\\n", " ")
-    install_commands = "\n".join(
-        match.group(0)
-        for match in re.finditer(r"\bapt(?:-get)?\s+(?:-\S+\s+)*install\b[^\n]*", shell_lines)
-    )
-    systemctl_commands = "\n".join(
-        match.group(0) for match in re.finditer(r"\bsystemctl\b[^\n]*", shell_lines)
-    )
-    unavailable_packages = _extract_unavailable_packages(repair_history)
-    repeated_packages = [
-        package
-        for package in sorted(unavailable_packages)
-        if re.search(
-            rf"(?<![a-z0-9+.-]){re.escape(package)}(?![a-z0-9+.-])",
-            install_commands,
-            re.IGNORECASE,
-        )
-    ]
-    add(
-        "fail" if repeated_packages else "pass",
-        "base_image:previously_unavailable_apt_packages",
-        f"previously unavailable APT packages are requested: {', '.join(repeated_packages)}"
-        if repeated_packages
-        else "no package previously reported as unavailable is requested",
-    )
-    missing_units = _extract_missing_systemd_units(repair_history)
-    repeated_units = [
-        unit
-        for unit in sorted(missing_units)
-        if re.search(
-            rf"(?<![a-z0-9@_.:-]){re.escape(unit)}(?![a-z0-9@_.:-])",
-            systemctl_commands,
-            re.IGNORECASE,
-        )
-    ]
-    add(
-        "fail" if repeated_units else "pass",
-        "base_image:previously_missing_systemd_units",
-        f"previously missing systemd units are requested: {', '.join(repeated_units)}"
-        if repeated_units
-        else "no systemd unit previously reported as missing is requested",
-    )
-    full_upgrade = re.search(r"\bapt(?:-get)?\s+(?:-\S+\s+)*upgrade\b", combined)
-    add(
-        "fail" if full_upgrade else "pass",
-        "base_image:full_upgrade",
-        "full OS upgrades are not allowed during image provisioning"
-        if full_upgrade
-        else "no full OS upgrade is requested",
     )
 
 

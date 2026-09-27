@@ -1,5 +1,6 @@
 import process from "node:process"
 import { Pool } from "pg"
+import { SEED_MACHINES, SEED_SOLUTIONS, SEED_USERS } from "./seed/data"
 
 const DEVELOPMENT_DATABASE_NAME = "frontend_service"
 const DEVELOPMENT_DATABASE_HOSTS = new Set([
@@ -29,111 +30,6 @@ function developmentDatabaseUrl(): string {
   return value
 }
 
-const users = [
-  {
-    id: "seed-user-alice",
-    name: "アリス",
-    bio: "Webセキュリティを学習中です。",
-    theme: "dark",
-    createdAt: "2026-08-01T00:00:00.000Z",
-  },
-  {
-    id: "seed-user-bob",
-    name: "ボブ",
-    bio: "コンテナとネットワークが好きです。",
-    theme: "light",
-    createdAt: "2026-08-02T00:00:00.000Z",
-  },
-  {
-    id: "seed-user-carol",
-    name: "キャロル",
-    bio: "ログ分析とインシデント対応を勉強しています。",
-    theme: "light",
-    createdAt: "2026-08-03T00:00:00.000Z",
-  },
-] as const
-
-const machines = [
-  {
-    id: "seed-machine-web-auth",
-    createdBy: "seed-user-alice",
-    name: "Web認証ラボ",
-    summary: "ログイン処理を調査し、認証回避の基本を学びます。",
-    description:
-      "Webアプリケーションのログイン処理に潜む問題を調査し、適切な認証設計を学ぶ公開マシンです。",
-    level: "easy",
-    systemFlag: "FLAG{seed-web-auth-system}",
-    userFlag: "FLAG{seed-web-auth-user}",
-    tags: ["Web セキュリティ", "認証・認可"],
-    createdAt: "2026-08-04T00:00:00.000Z",
-  },
-  {
-    id: "seed-machine-container-network",
-    createdBy: "seed-user-bob",
-    name: "コンテナネットワーク調査",
-    summary: "コンテナ間通信と公開ポートの設定を調査します。",
-    description:
-      "コンテナのネットワーク設定を確認し、意図しない通信経路や公開ポートを見つける公開マシンです。",
-    level: "medium",
-    systemFlag: "FLAG{seed-container-system}",
-    userFlag: "",
-    tags: ["コンテナ", "ネットワーク"],
-    createdAt: "2026-08-08T00:00:00.000Z",
-  },
-  {
-    id: "seed-machine-linux-permissions",
-    createdBy: "seed-user-alice",
-    name: "Linux権限管理",
-    summary: "ファイル所有者と権限設定の不備を調査します。",
-    description:
-      "Linuxのファイル所有者、グループ、実行権限を確認し、過剰な権限を特定する公開マシンです。",
-    level: "easy",
-    systemFlag: "FLAG{seed-linux-permissions}",
-    userFlag: "",
-    tags: ["Linux", "権限管理"],
-    createdAt: "2026-08-12T00:00:00.000Z",
-  },
-  {
-    id: "seed-machine-log-trail",
-    createdBy: "seed-user-carol",
-    name: "ログ追跡演習",
-    summary: "複数のログから不審な操作の痕跡を追跡します。",
-    description:
-      "認証ログとアクセスログを時系列で照合し、インシデントの起点と影響範囲を調査する公開マシンです。",
-    level: "medium",
-    systemFlag: "",
-    userFlag: "FLAG{seed-log-trail}",
-    tags: ["ログ分析", "インシデント対応"],
-    createdAt: "2026-08-16T00:00:00.000Z",
-  },
-  {
-    id: "seed-machine-api-authorization",
-    createdBy: "seed-user-bob",
-    name: "API認可チャレンジ",
-    summary: "APIの認可設定とリソースへのアクセス経路を検証します。",
-    description:
-      "利用者ごとのアクセス制御を確認し、認可検証の不足による情報露出を調査する公開マシンです。",
-    level: "hard",
-    systemFlag: "FLAG{seed-api-authorization-system}",
-    userFlag: "FLAG{seed-api-authorization-user}",
-    tags: ["API", "認証・認可"],
-    createdAt: "2026-08-20T00:00:00.000Z",
-  },
-  {
-    id: "seed-machine-sql-investigation",
-    createdBy: "seed-user-carol",
-    name: "SQL調査ラボ",
-    summary: "入力処理とデータベース権限の問題を調査します。",
-    description:
-      "アプリケーションの入力処理とデータベース権限を確認し、安全なSQL操作を学ぶ公開マシンです。",
-    level: "hard",
-    systemFlag: "FLAG{seed-sql-investigation}",
-    userFlag: "",
-    tags: ["データベース", "入力値検証"],
-    createdAt: "2026-08-24T00:00:00.000Z",
-  },
-] as const
-
 async function main() {
   const pool = new Pool({ connectionString: developmentDatabaseUrl(), max: 1 })
   const client = await pool.connect()
@@ -141,7 +37,7 @@ async function main() {
   try {
     await client.query("BEGIN")
 
-    for (const user of users) {
+    for (const user of SEED_USERS) {
       await client.query(
         `INSERT INTO users
           (id, name, bio, icon_url, theme, profile_completed, created_at, updated_at)
@@ -158,7 +54,7 @@ async function main() {
       )
     }
 
-    for (const machine of machines) {
+    for (const machine of SEED_MACHINES) {
       await client.query(
         `INSERT INTO machines
           (id, created_by, ai_session_id, name, summary, description, file_path, level,
@@ -196,8 +92,27 @@ async function main() {
       )
     }
 
+    for (const solution of SEED_SOLUTIONS) {
+      await client.query(
+        `INSERT INTO machine_solutions (user_id, machine_id, solved_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, machine_id) DO UPDATE SET
+           solved_at = EXCLUDED.solved_at`,
+        [solution.userId, solution.machineId, solution.solvedAt],
+      )
+      await client.query(
+        `INSERT INTO machine_flag_solutions (user_id, machine_id, flag_kind, solved_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, machine_id, flag_kind) DO UPDATE SET
+           solved_at = EXCLUDED.solved_at`,
+        [solution.userId, solution.machineId, solution.flagKind, solution.solvedAt],
+      )
+    }
+
     await client.query("COMMIT")
-    console.log(`Seed data applied: ${users.length} users and ${machines.length} machines.`)
+    console.log(
+      `Seed data applied: ${SEED_USERS.length} users, ${SEED_MACHINES.length} machines, and ${SEED_SOLUTIONS.length} solutions.`,
+    )
   } catch (error) {
     await client.query("ROLLBACK")
     throw error

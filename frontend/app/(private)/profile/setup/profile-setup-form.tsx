@@ -1,14 +1,91 @@
 "use client"
 
+import { ArrowRight } from "lucide-react"
 import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { type FormEvent, useState } from "react"
 import { logoutAction } from "@/app/actions/auth"
 import { completeProfileAction } from "@/app/actions/profile"
+import { DesignArtwork } from "@/components/design-artwork"
+import { UnsafeBrandSymbol } from "@/components/slsg-brand"
 
 type ProfileSetupFormProps = {
   initialName: string
   initialIconUrl: string
+}
+
+function SetupBrand() {
+  return (
+    <div className="slsg-profile-setup-brand">
+      <span aria-hidden="true">
+        <UnsafeBrandSymbol />
+      </span>
+      <strong>UNSAFE</strong>
+    </div>
+  )
+}
+
+type AvatarPreviewProps = {
+  iconMode: "google" | "initial"
+  initial: string
+  initialIconUrl: string
+  name: string
+}
+
+function AvatarPreview({ iconMode, initial, initialIconUrl, name }: AvatarPreviewProps) {
+  return (
+    <div aria-label="アイコンのプレビュー" className="slsg-setup-avatar" role="img">
+      <svg aria-hidden="true" viewBox="0 0 286 286">
+        <defs>
+          <linearGradient id="setup-avatar-fill" x1="0" x2="1" y1="0" y2="1">
+            <stop stopColor="#4f8af0" />
+            <stop offset="1" stopColor="#3e70dc" />
+          </linearGradient>
+          <linearGradient id="setup-avatar-line" x1="0" x2="1" y1="0" y2="1">
+            <stop stopColor="#55e4ee" />
+            <stop offset="0.56" stopColor="#5795ef" />
+            <stop offset="1" stopColor="#55e4ee" />
+          </linearGradient>
+          <filter id="setup-avatar-glow" height="180%" width="180%" x="-40%" y="-40%">
+            <feGaussianBlur result="blur" stdDeviation="6" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <clipPath id="setup-avatar-content-clip" clipPathUnits="objectBoundingBox">
+            <path d="M.526.015.907.235Q.933.25.933.28V.72Q.933.75.907.765L.526.985Q.5 1 .474.985L.093.765Q.067.75.067.72V.28Q.067.25.093.235L.474.015Q.5 0 .526.015Z" />
+          </clipPath>
+        </defs>
+        <path
+          d="M150.02 12.05 252.9 71.45Q259.91 75.5 259.91 83.6v118.8q0 8.1-7.01 12.15l-102.88 59.4Q143 278 135.98 273.95L33.1 214.55q-7.01-4.05-7.01-12.15V83.6q0-8.1 7.01-12.15l102.88-59.4Q143 8 150.02 12.05Z"
+          fill="none"
+          filter="url(#setup-avatar-glow)"
+          stroke="url(#setup-avatar-line)"
+          strokeLinejoin="round"
+          strokeWidth="6"
+        />
+        <path
+          d="M149.5 21.75 244.76 76.75Q251.25 80.5 251.25 88v110q0 7.5-6.49 11.25l-95.26 55Q143 268 136.5 264.25l-95.26-55q-6.49-3.75-6.49-11.25V88q0-7.5 6.49-11.25l95.26-55Q143 18 149.5 21.75Z"
+          fill="url(#setup-avatar-fill)"
+        />
+      </svg>
+      <span className="slsg-setup-avatar-content">
+        {iconMode === "google" && initialIconUrl ? (
+          <Image
+            alt={`${name || "ユーザー"}のGoogleプロフィール画像`}
+            fill
+            className="object-cover"
+            sizes="240px"
+            src={initialIconUrl}
+            unoptimized
+          />
+        ) : (
+          initial
+        )}
+      </span>
+    </div>
+  )
 }
 
 export function ProfileSetupForm({ initialName, initialIconUrl }: ProfileSetupFormProps) {
@@ -49,74 +126,64 @@ export function ProfileSetupForm({ initialName, initialIconUrl }: ProfileSetupFo
     }
   }
 
+  function switchGoogleAccount() {
+    void logoutAction()
+  }
+
   return (
-    <main className="min-h-screen bg-[#f7f7f5] px-6 py-12">
-      <div className="mx-auto grid w-full max-w-[960px] overflow-hidden rounded-[32px] border border-[#deded9] bg-white shadow-sm md:grid-cols-[0.8fr_1.2fr]">
-        <section className="flex flex-col justify-between bg-[#20201e] p-10 text-white">
-          <div>
-            <div className="inline-flex items-center gap-2.5 text-[1.35rem] font-extrabold tracking-[-0.06em]">
-              <span className="grid size-[34px] place-items-center rounded-xl bg-white text-[1rem] tracking-normal text-[#20201e]">
-                S
-              </span>
-              SLSG
-            </div>
-            <p className="mt-16 text-sm font-bold text-[#aaa9a3]">STEP 1 / 1</p>
-            <h1 className="mt-4 text-[clamp(2rem,4vw,3.3rem)] leading-[1.08] font-bold tracking-[-0.045em]">
-              あなたらしいプロフィールを作りましょう。
-            </h1>
-          </div>
-          <div className="mt-12 grid gap-5">
-            <p className="text-sm leading-7 text-[#cbc9c2]">
-              名前とアイコンの表示方法は、あとからユーザー情報画面で変更できます。
-            </p>
-            <form action={logoutAction}>
-              <button
-                className="text-sm font-bold text-[#cbc9c2] underline decoration-[#77766f] underline-offset-4 transition hover:text-white"
-                type="submit"
-              >
-                別のGoogleアカウントでログイン
-              </button>
-            </form>
-          </div>
-        </section>
+    <main className="slsg-profile-setup-page">
+      <DesignArtwork variant="machines" />
+      <SetupBrand />
 
-        <form
-          className="grid content-center gap-7 p-[clamp(32px,6vw,72px)]"
-          onSubmit={submitProfile}
-        >
-          <div>
-            <h2 className="text-3xl font-bold tracking-[-0.035em]">プロフィール登録</h2>
-            <p className="mt-2 leading-7 text-[#61605b]">
-              他のユーザーに表示される名前を設定します。
-            </p>
-          </div>
+      <section className="slsg-profile-setup-intro">
+        <p className="slsg-profile-setup-kicker">Account Setup</p>
+        <span aria-hidden="true" className="slsg-profile-setup-rule" />
+        <h1>
+          あなたらしい
+          <br />
+          プロフィールを
+          <br />
+          作りましょう。
+        </h1>
+        <p className="slsg-profile-setup-description">
+          名前とアイコンの表示方法は、
+          <br />
+          あとから変更できます。
+        </p>
+        <button className="slsg-profile-setup-switch" onClick={switchGoogleAccount} type="button">
+          別のGoogleアカウントでログイン
+          <ArrowRight aria-hidden="true" size={21} strokeWidth={1.7} />
+        </button>
+      </section>
 
-          <div className="flex items-center gap-5">
-            <div className="relative grid size-24 shrink-0 place-items-center overflow-hidden rounded-full bg-[#20201e] text-3xl font-bold text-white">
-              {iconMode === "google" && initialIconUrl ? (
-                <Image
-                  alt={`${name || "ユーザー"}のGoogleプロフィール画像`}
-                  fill
-                  className="object-cover"
-                  sizes="96px"
-                  src={initialIconUrl}
-                  unoptimized
-                />
-              ) : (
-                initial
-              )}
-            </div>
-            <p className="text-sm leading-6 text-[#61605b]">
-              {iconMode === "google"
-                ? "Googleアカウントのアイコンを表示します。"
-                : "画像を使わず、名前のイニシャルを表示します。"}
-            </p>
-          </div>
+      <section aria-labelledby="profile-setup-heading" className="slsg-profile-setup-card">
+        <i aria-hidden="true" className="slsg-setup-corner slsg-setup-corner-tl" />
+        <i aria-hidden="true" className="slsg-setup-corner slsg-setup-corner-tr" />
+        <i aria-hidden="true" className="slsg-setup-corner slsg-setup-corner-bl" />
+        <i aria-hidden="true" className="slsg-setup-corner slsg-setup-corner-br" />
+        <i aria-hidden="true" className="slsg-setup-side-glow slsg-setup-side-glow-left" />
+        <i aria-hidden="true" className="slsg-setup-side-glow slsg-setup-side-glow-right" />
 
-          <fieldset className="grid gap-3">
-            <legend className="text-sm font-extrabold">アイコンの表示</legend>
-            <div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-              <label className="flex cursor-pointer items-center gap-3 rounded-[14px] border border-[#d6d6d2] p-4 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1] has-disabled:cursor-not-allowed has-disabled:opacity-45">
+        <header className="slsg-profile-setup-card-header">
+          <h2 id="profile-setup-heading">プロフィール登録</h2>
+          <p>他のユーザーに表示される名前を設定します。</p>
+        </header>
+
+        <form className="slsg-profile-setup-form" onSubmit={submitProfile}>
+          <div className="slsg-profile-setup-options">
+            <section className="slsg-profile-setup-preview">
+              <h3>アイコンのプレビュー</h3>
+              <AvatarPreview
+                iconMode={iconMode}
+                initial={initial}
+                initialIconUrl={initialIconUrl}
+                name={name}
+              />
+            </section>
+
+            <fieldset className="slsg-profile-setup-modes">
+              <legend>アイコンの表示方法</legend>
+              <label className={iconMode === "google" ? "is-selected" : ""}>
                 <input
                   checked={iconMode === "google"}
                   disabled={!initialIconUrl}
@@ -124,48 +191,58 @@ export function ProfileSetupForm({ initialName, initialIconUrl }: ProfileSetupFo
                   onChange={() => setIconMode("google")}
                   type="radio"
                 />
-                <span className="text-sm font-bold">Googleアイコン</span>
+                <span aria-hidden="true" className="slsg-setup-radio" />
+                <span className="slsg-setup-mode-copy">
+                  <strong>Googleアイコン</strong>
+                  <small>Googleアカウントのプロフィール画像を使用します。</small>
+                </span>
               </label>
-              <label className="flex cursor-pointer items-center gap-3 rounded-[14px] border border-[#d6d6d2] p-4 has-checked:border-[#20201e] has-checked:bg-[#f4f4f1]">
+              <label className={iconMode === "initial" ? "is-selected" : ""}>
                 <input
                   checked={iconMode === "initial"}
                   name="icon-mode"
                   onChange={() => setIconMode("initial")}
                   type="radio"
                 />
-                <span className="text-sm font-bold">イニシャル</span>
+                <span aria-hidden="true" className="slsg-setup-radio" />
+                <span className="slsg-setup-mode-copy">
+                  <strong>イニシャル</strong>
+                  <small>名前のイニシャルを表示します。</small>
+                </span>
               </label>
-            </div>
-          </fieldset>
+            </fieldset>
+          </div>
 
-          <label className="grid gap-2 text-sm font-extrabold">
-            <span>ユーザー名</span>
-            <input
-              autoComplete="nickname"
-              className="w-full rounded-[14px] border border-[#d6d6d2] bg-white px-[14px] py-[13px] text-[#20201e] outline-none focus:border-[#20201e] focus:ring-3 focus:ring-[#20201e]/15"
-              maxLength={30}
-              onChange={(event) => setName(event.target.value)}
-              required
-              value={name}
-            />
-            <span className="text-right text-xs font-normal text-[#74736e]">{name.length}/30</span>
-          </label>
+          <div className="slsg-profile-setup-controls">
+            <label className="slsg-profile-setup-name">
+              <span>ユーザー名</span>
+              <span className="slsg-profile-setup-input-wrap">
+                <input
+                  aria-describedby={error ? "profile-setup-error" : undefined}
+                  aria-invalid={error ? true : undefined}
+                  autoComplete="nickname"
+                  maxLength={30}
+                  onChange={(event) => setName(event.target.value)}
+                  required
+                  value={name}
+                />
+                <small>{name.length} / 30</small>
+              </span>
+            </label>
 
-          {error ? (
-            <p className="text-sm font-bold text-[#b14334]" role="alert">
-              {error}
-            </p>
-          ) : null}
+            {error ? (
+              <p className="slsg-profile-setup-error" id="profile-setup-error" role="alert">
+                {error}
+              </p>
+            ) : null}
 
-          <button
-            className="inline-flex min-h-[50px] items-center justify-center rounded-[15px] bg-[#20201e] px-5 text-sm font-extrabold text-white shadow-sm transition hover:-translate-y-px hover:bg-[#3a3a37] disabled:cursor-not-allowed disabled:opacity-55"
-            disabled={isSaving}
-            type="submit"
-          >
-            {isSaving ? "登録しています…" : "このプロフィールではじめる"}
-          </button>
+            <button className="slsg-profile-setup-submit" disabled={isSaving} type="submit">
+              <span>{isSaving ? "登録しています…" : "このプロフィールではじめる"}</span>
+              {!isSaving ? <ArrowRight aria-hidden="true" size={22} strokeWidth={1.8} /> : null}
+            </button>
+          </div>
         </form>
-      </div>
+      </section>
     </main>
   )
 }

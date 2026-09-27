@@ -15,9 +15,10 @@ from ..models import (
 from ..repository import SessionRepository
 from ..skills.models import ScenarioSkillContexts, SkillPhase
 from ..skills.service import NoopSkillService, SkillResolver
-from .ai import AIGenerator
+from .ai import AIGenerator, begin_token_usage_session, end_token_usage_session
 from .errors import ScenarioInputRevisionRequiredError, exception_detail
 from .events import EventBroker, ServerEvent
+from .rockyou import strip_rockyou_selections
 from .scenario_archive import ScenarioDraftArchive
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,7 @@ class ScenarioCoordinator:
             pass
 
     async def _run(self, session_id: str) -> None:
+        usage_token = begin_token_usage_session(session_id)
         try:
             state = await self.repository.get(session_id)
             if state.scenario:
@@ -143,7 +145,12 @@ class ScenarioCoordinator:
                     await self.broker.publish(
                         session_id,
                         ServerEvent(
-                            "scenario.completed", {"scenario": state.scenario.model_dump()}
+                            "scenario.completed",
+                            {
+                                "scenario": strip_rockyou_selections(
+                                    state.scenario
+                                ).model_dump()
+                            },
                         ),
                     )
                     return
@@ -164,6 +171,24 @@ class ScenarioCoordinator:
             await self.broker.publish(
                 session_id, ServerEvent("scenario.started", {"session_id": session_id})
             )
+            if (
+                state.machine_information.needs_user_flag is None
+                and state.machine_information.needs_system_flag is None
+            ):
+                flag_plan = await self.generator.plan_automatic_flags(
+                    state.machine_information
+                )
+                state.machine_information = (
+                    state.machine_information.with_automatic_flag_plan(flag_plan)
+                )
+                await self.repository.save(state)
+                await self.broker.publish(
+                    session_id,
+                    ServerEvent(
+                        "scenario.flags_planned",
+                        flag_plan.model_dump(mode="json"),
+                    ),
+                )
             attack_graph_skills = await self.skill_service.resolve(
                 session_id,
                 SkillPhase.ATTACK_GRAPH,
@@ -216,7 +241,10 @@ class ScenarioCoordinator:
                 await asyncio.sleep(0)
             await self.broker.publish(
                 session_id,
-                ServerEvent("scenario.completed", {"scenario": scenario.model_dump()}),
+                ServerEvent(
+                    "scenario.completed",
+                    {"scenario": strip_rockyou_selections(scenario).model_dump()},
+                ),
             )
         except ScenarioInputRevisionRequiredError as error:
             logger.warning(
@@ -240,4 +268,5 @@ class ScenarioCoordinator:
             await self.repository.save(state)
             await self.broker.publish(session_id, ServerEvent("scenario.error", {"detail": detail}))
         finally:
+            end_token_usage_session(usage_token)
             await self.broker.close(session_id)

@@ -7,7 +7,9 @@ from ai_server.models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    AutomaticFlagPlan,
     MachineInformation,
+    PasswordCrackingSpec,
     ScenarioDraft,
 )
 
@@ -87,6 +89,64 @@ def test_non_cve_step_rejects_cve_id() -> None:
         )
 
 
+def test_password_cracking_step_requires_structured_metadata() -> None:
+    with pytest.raises(ValidationError, match="requires password_cracking metadata"):
+        AttackStep(
+            step_id="crack-password",
+            title="Crack password",
+            kind="password_cracking",
+            phase="initial_access",
+            description="Crack the stored credential.",
+            implementation_steps=["Provision the hash"],
+        )
+
+    spec = PasswordCrackingSpec(
+        wordlist="rockyou.txt",
+        password="password01",
+        line_number=123_456,
+        search_space_lines=200_000,
+        hash_algorithm="bcrypt",
+        hash_runtime="php",
+        hash_api="password_hash",
+        hashcat_mode=3200,
+        target_crack_seconds=150,
+    )
+    parsed = AttackStep(
+        step_id="crack-password",
+        title="Crack password",
+        kind="password_cracking",
+        phase="initial_access",
+        description="Crack the stored credential.",
+        implementation_steps=["Provision the hash"],
+        password_cracking=spec,
+    )
+    assert parsed.password_cracking == spec
+
+    unbound = spec.model_copy(
+        update={"password": None, "line_number": None, "search_space_lines": None}
+    )
+    assert PasswordCrackingSpec.model_validate(unbound.model_dump()).selection_bound is False
+
+    with pytest.raises(ValidationError, match="all unset or all populated"):
+        PasswordCrackingSpec.model_validate(
+            {
+                **unbound.model_dump(),
+                "password": "password01",
+            }
+        )
+
+    with pytest.raises(ValidationError, match="only valid when kind is password_cracking"):
+        AttackStep(
+            step_id="web-entry",
+            title="Web entry",
+            kind="web_vulnerability",
+            phase="initial_access",
+            description="Enter through the web app.",
+            implementation_steps=["Provision the app"],
+            password_cracking=spec,
+        )
+
+
 def test_scenario_rejects_noncanonical_flag_case() -> None:
     with pytest.raises(ValidationError, match="user_flag"):
         ScenarioDraft(
@@ -95,6 +155,46 @@ def test_scenario_rejects_noncanonical_flag_case() -> None:
             definition="# Invalid flag",
             attack_graph=AttackGraph(steps=[step("entry")]),
             user_flag="FLAG{USER_A1D51D7F803F51F0356F3E547C842A0B}",
+        )
+
+
+@pytest.mark.parametrize(
+    ("selection", "needs_user", "needs_system"),
+    [
+        ("user", True, False),
+        ("system", False, True),
+        ("both", True, True),
+    ],
+)
+def test_automatic_flag_plan_applies_all_supported_selections(
+    selection: str,
+    needs_user: bool,
+    needs_system: bool,
+) -> None:
+    plan = AutomaticFlagPlan(
+        selection=selection,
+        user_flag_details="Obtain /home/student/user.txt" if needs_user else "",
+        system_flag_details="Obtain /root/system.txt" if needs_system else "",
+    )
+    machine = MachineInformation(
+        name="Automatic flags",
+        visibility="private",
+        theme="Web security",
+        difficulty="Medium",
+    ).with_automatic_flag_plan(plan)
+
+    assert machine.needs_user_flag is needs_user
+    assert machine.needs_system_flag is needs_system
+    assert bool(machine.user_flag_details) is needs_user
+    assert bool(machine.system_flag_details) is needs_system
+
+
+def test_automatic_flag_plan_rejects_missing_selected_details() -> None:
+    with pytest.raises(ValidationError, match="system_flag_details"):
+        AutomaticFlagPlan(
+            selection="both",
+            user_flag_details="Obtain /home/student/user.txt",
+            system_flag_details="",
         )
 
 

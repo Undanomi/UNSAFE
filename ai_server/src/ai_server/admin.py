@@ -54,6 +54,13 @@ RUNTIME_LIMITS = (
         "Maximum output tokens requested from Gemini.",
     ),
     RuntimeLimit(
+        "openai_max_output_tokens",
+        "OPENAI_MAX_OUTPUT_TOKENS",
+        "OpenAI output tokens",
+        "1,024–128,000",
+        "Maximum reasoning and visible output tokens requested from OpenAI.",
+    ),
+    RuntimeLimit(
         "generation_retries",
         "GENERATION_RETRIES",
         "AI structured-output retries",
@@ -103,11 +110,60 @@ RUNTIME_LIMITS = (
         "HTTP timeout used for build server requests.",
     ),
     RuntimeLimit(
+        "ai_max_concurrent_requests",
+        "AI_MAX_CONCURRENT_REQUESTS",
+        "Concurrent AI requests",
+        "1–20",
+        "Shared provider request concurrency across all machine workflows.",
+    ),
+    RuntimeLimit(
+        "ai_request_min_interval_seconds",
+        "AI_REQUEST_MIN_INTERVAL_SECONDS",
+        "AI request interval",
+        "0–60 seconds",
+        "Minimum interval between starts of shared AI provider requests.",
+    ),
+    RuntimeLimit(
+        "ai_transient_retry_attempts",
+        "AI_TRANSIENT_RETRY_ATTEMPTS",
+        "Transient AI retries",
+        "1–20",
+        "Transport attempts for temporary rate limits and provider overload.",
+    ),
+    RuntimeLimit(
+        "ai_transient_retry_max_seconds",
+        "AI_TRANSIENT_RETRY_MAX_SECONDS",
+        "Transient AI retry window",
+        "> 0–3,600 seconds",
+        "Maximum elapsed retry window for one logical provider request.",
+    ),
+    RuntimeLimit(
+        "ai_transient_retry_jitter_seconds",
+        "AI_TRANSIENT_RETRY_JITTER_SECONDS",
+        "AI retry jitter",
+        "0–10 seconds",
+        "Random delay added to temporary provider retry intervals.",
+    ),
+    RuntimeLimit(
         "build_repair_max_attempts",
         "BUILD_REPAIR_MAX_ATTEMPTS",
         "Build repair attempts",
         "0–10",
         "Automatic repair builds added to each explicitly started cycle.",
+    ),
+    RuntimeLimit(
+        "source_workbench_action_limit",
+        "SOURCE_WORKBENCH_ACTION_LIMIT",
+        "Source workbench actions",
+        "1–60",
+        "Maximum isolated command actions selected for one source candidate.",
+    ),
+    RuntimeLimit(
+        "source_sandbox_timeout_seconds",
+        "SOURCE_SANDBOX_TIMEOUT_SECONDS",
+        "Source sandbox API timeout",
+        "> 0–3,600 seconds",
+        "HTTP timeout for one isolated workbench operation.",
     ),
     RuntimeLimit(
         "download_url_ttl_seconds",
@@ -272,6 +328,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_status,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
@@ -291,6 +350,9 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
         AISessionRecord.source_generation_attempt_limit,
         AISessionRecord.scenario_sync_attempts,
         AISessionRecord.scenario_sync_attempt_limit,
+        AISessionRecord.ai_total_tokens,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
         AISessionRecord.build_progress,
         AISessionRecord.build_repair_attempts,
         AISessionRecord.build_repair_attempt_limit,
@@ -299,7 +361,12 @@ class AISessionAdmin(EditableModelView, model=AISessionRecord):
     )
     column_default_sort = (AISessionRecord.updated_at, True)
     column_details_list = "__all__"
-    form_excluded_columns = (AISessionRecord.created_at,)
+    form_excluded_columns = (
+        AISessionRecord.created_at,
+        AISessionRecord.ai_input_tokens,
+        AISessionRecord.ai_output_tokens,
+        AISessionRecord.ai_total_tokens,
+    )
     form_overrides: ClassVar = {"status": SelectField}
     form_args: ClassVar = {
         "status": {"choices": _choices(SessionStatus)},

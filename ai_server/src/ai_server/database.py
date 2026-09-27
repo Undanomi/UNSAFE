@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     CHAR,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -52,6 +53,7 @@ class ScenarioVersionRecord(Base):
     scenario_definition: Mapped[str] = mapped_column(Text, nullable=False)
     target_os: Mapped[str] = mapped_column(Text, nullable=False, default="Debian 13.7.0")
     attack_graph: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     user_flag: Mapped[str | None] = mapped_column(Text)
     system_flag: Mapped[str | None] = mapped_column(Text)
     generated_code_path: Mapped[str | None] = mapped_column(Text)
@@ -82,6 +84,9 @@ class AISessionRecord(Base):
     source_generation_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scenario_sync_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     scenario_sync_attempt_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ai_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ai_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ai_total_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     build_id: Mapped[UUID | None] = mapped_column(PostgresUUID(as_uuid=True))
     build_status: Mapped[str | None] = mapped_column(Text)
     build_progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

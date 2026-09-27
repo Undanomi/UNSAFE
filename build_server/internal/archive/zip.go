@@ -17,6 +17,15 @@ const (
 	MaxFiles            = 10_000
 )
 
+var requiredScenarioFiles = [...]string{
+	"contents/README.md",
+	"contents/scenario_manifest.json",
+	"contents/build.sh",
+	"contents/scripts/provision.sh",
+	"contents/scripts/install-flags.sh",
+	"contents/scripts/verify.sh",
+}
+
 // ExtractZIP extracts a scenario archive into destination. The destination
 // must not exist. Archive paths and file types are validated before any build
 // can consume the result.
@@ -52,6 +61,31 @@ func ExtractZIP(source io.ReaderAt, compressedSize int64, destination string) er
 	for _, file := range reader.File {
 		if err := extractEntry(file, destination); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// ValidateScenarioSource verifies the deterministic source contract before a
+// build record is created or a worker claims the build.
+func ValidateScenarioSource(root string) error {
+	info, err := os.Stat(root)
+	if err != nil {
+		return fmt.Errorf("scenario source unavailable: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("scenario source is not a directory")
+	}
+	for _, relative := range requiredScenarioFiles {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("scenario source is missing required file %s", relative)
+			}
+			return fmt.Errorf("inspect required scenario file %s: %w", relative, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("required scenario path is not a regular file: %s", relative)
 		}
 	}
 	return nil

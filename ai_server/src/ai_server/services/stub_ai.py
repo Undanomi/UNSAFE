@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 from collections.abc import Awaitable, Callable
 from uuid import uuid4
 
@@ -9,6 +8,7 @@ from ..models import (
     AttackGraph,
     AttackObjective,
     AttackStep,
+    AutomaticFlagPlan,
     GeneratedSource,
     GuidanceItem,
     GuidancePlan,
@@ -19,6 +19,8 @@ from ..models import (
     SourceFile,
     SourcePatch,
     SourceReview,
+    SourceWorkbenchCommand,
+    SourceWorkbenchDecision,
 )
 from ..skills.models import ScenarioSkillContexts, SkillContext
 from .ai import _record_scenario_draft
@@ -26,6 +28,45 @@ from .ai import _record_scenario_draft
 
 class StubGenerator:
     """Deterministic generator for local integration tests without an API key."""
+
+    async def plan_automatic_flags(
+        self,
+        machine: MachineInformation,
+    ) -> AutomaticFlagPlan:
+        theme = machine.theme.casefold()
+        system_markers = ("system", "root", "kernel", "sudo", "権限昇格", "システム")
+        initial_markers = ("web", "認証", "initial", "初期侵入", "ユーザー")
+        focuses_on_system = any(marker in theme for marker in system_markers)
+        includes_initial_access = any(marker in theme for marker in initial_markers)
+        if focuses_on_system and not includes_initial_access:
+            return AutomaticFlagPlan(
+                selection="system",
+                user_flag_details="",
+                system_flag_details=(
+                    "ユーザーフラグを前提にせず、管理者権限で動作する対象を攻略してroot権限を取得し、"
+                    "/root/system.txtを読み取る。"
+                ),
+            )
+        if machine.difficulty in {"Medium", "High"}:
+            return AutomaticFlagPlan(
+                selection="both",
+                user_flag_details=(
+                    "公開サービスを調査して一般ユーザーstudentの権限を取得し、"
+                    "/home/student/user.txtを読み取る。"
+                ),
+                system_flag_details=(
+                    "userフラグ取得後の足場からローカル権限設定を調査してroot権限を取得し、"
+                    "/root/system.txtを読み取る。"
+                ),
+            )
+        return AutomaticFlagPlan(
+            selection="user",
+            user_flag_details=(
+                "公開サービスを調査して一般ユーザーstudentの権限を取得し、"
+                "/home/student/user.txtを読み取る。"
+            ),
+            system_flag_details="",
+        )
 
     async def generate_scenario(
         self,
@@ -161,6 +202,7 @@ class StubGenerator:
             definition=definition,
             target_os=machine.operating_system,
             attack_graph=attack_graph,
+            tags=["セキュリティ演習", "設定不備"],
         )
         await _record_scenario_draft(on_attempt, scenario)
         review = await self.review_scenario(machine, scenario)
@@ -249,28 +291,26 @@ set -euo pipefail
 id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-student
 """
         acceptance_tests = [{"command": "test -f /opt/slsg-scenario/README.md"}]
+        flag_placements = []
         if scenario.user_flag:
-            quoted_user_flag = shlex.quote(scenario.user_flag)
-            provision += (
-                f"printf '%s\\n' {quoted_user_flag} > /home/slsg-student/user.txt\n"
-                "chown slsg-student:slsg-student /home/slsg-student/user.txt\n"
-                "chmod 0400 /home/slsg-student/user.txt\n"
-            )
-            acceptance_tests.append(
+            flag_placements.append(
                 {
-                    "command": (
-                        f"test \"$(cat /home/slsg-student/user.txt)\" = {quoted_user_flag}"
-                    )
+                    "kind": "user",
+                    "path": "/home/slsg-student/user.txt",
+                    "owner": "slsg-student",
+                    "group": "slsg-student",
+                    "mode": "0400",
                 }
             )
         if scenario.system_flag:
-            quoted_system_flag = shlex.quote(scenario.system_flag)
-            provision += (
-                f"printf '%s\\n' {quoted_system_flag} > /root/system.txt\n"
-                "chmod 0400 /root/system.txt\n"
-            )
-            acceptance_tests.append(
-                {"command": f"test \"$(cat /root/system.txt)\" = {quoted_system_flag}"}
+            flag_placements.append(
+                {
+                    "kind": "system",
+                    "path": "/root/system.txt",
+                    "owner": "root",
+                    "group": "root",
+                    "mode": "0400",
+                }
             )
         readme = (
             f"# {machine.name}\n\nTheme: {machine.theme}; difficulty: {machine.difficulty}.\n\n"
@@ -280,19 +320,24 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
         )
         manifest = json.dumps(
             {
-                "title": machine.name,
-                "difficulty": machine.difficulty,
                 "target_os": machine.operating_system,
                 "required_files": [
                     "contents/README.md",
                     "contents/scenario_manifest.json",
                     "contents/build.sh",
                     "contents/scripts/provision.sh",
+                    "contents/scripts/install-flags.sh",
+                    "contents/scripts/verify.sh",
                 ],
-                "services": [{"name": "ssh", "port": 22}],
+                "services": [{"name": "ssh", "protocol": "tcp", "port": 22}],
                 "acceptance_tests": acceptance_tests,
                 "expected_vulnerabilities": [
-                    {"name": "local demonstration setting"},
+                    {
+                        "name": "local demonstration setting",
+                        "description": (
+                            "The generated training service intentionally exposes the attack path."
+                        ),
+                    },
                     *[
                         {
                             "cve_id": step.cve_id,
@@ -321,6 +366,7 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     objective.model_dump(mode="json")
                     for objective in scenario.attack_graph.objectives
                 ],
+                "flag_placements": flag_placements,
             },
             ensure_ascii=False,
             indent=2,
@@ -352,6 +398,33 @@ id slsg-student >/dev/null 2>&1 || useradd --create-home --shell /bin/bash slsg-
                     + "\nRepair applied for local integration testing.\n",
                 )
             ]
+        )
+
+    async def next_source_workbench_action(
+        self,
+        machine: MachineInformation,
+        scenario: ScenarioDraft,
+        current: GeneratedSource,
+        observations: list[dict],
+        commands_remaining: int,
+    ) -> SourceWorkbenchDecision:
+        del machine, scenario, current, commands_remaining
+        if not observations:
+            return SourceWorkbenchDecision(
+                action="run",
+                command=SourceWorkbenchCommand(
+                    argv=["apt-get", "update"],
+                    cwd="contents",
+                    purpose="Validate package repository availability in a fresh target container.",
+                    intent="verify",
+                    network_access=True,
+                    run_as_root=True,
+                ),
+                summary="Validate the fresh target container package repository.",
+            )
+        return SourceWorkbenchDecision(
+            action="finish",
+            summary="The deterministic stub syntax check completed.",
         )
 
     async def synchronize_scenario(

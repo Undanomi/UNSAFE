@@ -23,6 +23,7 @@ def scenario(definition: str = "# First draft") -> ScenarioDraft:
         title="Test scenario",
         scenario_description="Player-facing description",
         definition=definition,
+        tags=["Web", "設定不備"],
         attack_graph=AttackGraph(
             steps=[
                 AttackStep(
@@ -79,12 +80,47 @@ def test_records_versioned_scenario_attempts_beside_source_tree(tmp_path) -> Non
     assert review["approved"] is True
     assert metadata["attempt"] == 4
     assert metadata["review_approved"] is True
+    assert metadata["tags"] == ["Web", "設定不備"]
     assert graph["steps"][0]["step_id"] == "entry"
     resumed = archive.load_latest("session-1", machine())
     assert resumed is not None
     assert resumed[0].definition == "# Revised draft"
+    assert resumed[0].tags == ["Web", "設定不備"]
     assert resumed[1] is not None and resumed[1].approved is True
     assert archive.load_latest("session-1", machine("Changed theme")) is None
+
+
+def test_promote_latest_updates_root_artifacts_without_rewriting_attempt(tmp_path) -> None:
+    archive = ScenarioDraftArchive(tmp_path)
+    original = scenario()
+    original_review = ScenarioReview(approved=True, summary="Initial approval")
+    archive.record("session-1", 2, original, original_review, machine())
+    synchronized = original.model_copy(
+        update={
+            "scenario_description": "Synchronized description",
+            "definition": "# Synchronized scenario",
+        }
+    )
+    synchronized_review = ScenarioReview(
+        approved=True,
+        summary="Approved after source synchronization",
+    )
+
+    archive.promote_latest(
+        "session-1", 2, synchronized, synchronized_review, machine()
+    )
+
+    version_root = tmp_path / "session-1" / "v1"
+    assert (version_root / "scenario.md").read_text() == "# Synchronized scenario\n"
+    assert (version_root / "scenario_description.txt").read_text() == (
+        "Synchronized description\n"
+    )
+    assert json.loads((version_root / "scenario_review.json").read_text())["summary"] == (
+        "Approved after source synchronization"
+    )
+    assert (version_root / "attempts/000002/scenario.md").read_text() == "# First draft\n"
+    metadata = json.loads((version_root / "scenario_metadata.json").read_text())
+    assert metadata["promoted_after_source_sync"] is True
 
 
 def test_records_pending_draft_before_review_finishes(tmp_path) -> None:

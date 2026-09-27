@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/Undanomi/SLSG/build_server/internal/archive"
 	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
 	"github.com/Undanomi/SLSG/build_server/internal/config"
 	"github.com/Undanomi/SLSG/build_server/internal/domain"
@@ -286,7 +287,7 @@ func (w *Worker) execute(parent context.Context, build domain.Build, logger *slo
 	go w.watchCancellation(ctx, build.ID, cancelOnRequest)
 
 	sourceDir := filepath.Join(w.cfg.ScenarioRoot, "uploads", build.ID, "source")
-	if err := validateSourceDir(sourceDir); err != nil {
+	if err := archive.ValidateScenarioSource(sourceDir); err != nil {
 		return err
 	}
 	if err := w.store.SetStatus(ctx, build.ID, domain.StatusPreparing, 10, "preparing isolated workspace"); err != nil {
@@ -498,17 +499,6 @@ func (w *Worker) watchCancellation(ctx context.Context, buildID string, cancel c
 func (w *Worker) isCancellationRequested(ctx context.Context, buildID string) bool {
 	requested, err := w.store.CancelRequested(ctx, buildID)
 	return err == nil && requested
-}
-
-func validateSourceDir(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("scenario source unavailable: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("scenario source is not a directory")
-	}
-	return nil
 }
 
 func copyTree(source, destination string) error {

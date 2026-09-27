@@ -2,11 +2,32 @@ import "server-only"
 
 import { queryDatabase } from "@/lib/database/client"
 import { buildInitialUserDocument, type UserIdentity } from "@/lib/users/user-document"
-import type { UserRecord } from "@/types/postgres"
+import type { MachineRecord, UserRecord } from "@/types/postgres"
+import type { UserProfile } from "@/types/profile"
 
 export type UserProfileUpdate = Partial<
   Pick<UserRecord, "bio" | "icon_url" | "name" | "profile_completed">
 >
+
+type ProfileMachineRow = {
+  id: string
+  name: string
+  level: MachineRecord["level"]
+  author_id: string
+  author_name: string
+  created_at: Date
+}
+
+type SolvedProfileMachineRow = ProfileMachineRow & {
+  solved_at: Date
+}
+
+function formatProfileDate(value: Date): string {
+  return new Intl.DateTimeFormat("ja-JP", {
+    dateStyle: "medium",
+    timeZone: "Asia/Tokyo",
+  }).format(value)
+}
 
 export async function ensureUserDocumentService(identity: UserIdentity): Promise<void> {
   const user = buildInitialUserDocument(identity)
@@ -31,6 +52,85 @@ export async function ensureUserDocumentService(identity: UserIdentity): Promise
 export async function getUserDocumentService(uid: string): Promise<UserRecord | null> {
   const result = await queryDatabase<UserRecord>("SELECT * FROM users WHERE id = $1", [uid])
   return result.rows[0] ?? null
+}
+
+export async function getUserProfileService(
+  viewerUserId: string,
+  targetUserId: string,
+): Promise<UserProfile | null> {
+  const user = await getUserDocumentService(targetUserId)
+
+  if (!user) return null
+
+  const createdResult = await queryDatabase<ProfileMachineRow>(
+    `SELECT
+       m.id,
+       m.name,
+       m.level,
+       author.id AS author_id,
+       author.name AS author_name,
+       m.created_at
+     FROM machines m
+     JOIN users author
+       ON author.id = m.created_by
+     WHERE m.created_by = $2
+       AND m.status <> 'deleted'
+       AND (
+         m.published = true
+         OR m.created_by = $1
+       )
+     ORDER BY m.created_at DESC, m.id ASC`,
+    [viewerUserId, targetUserId],
+  )
+
+  const solvedResult = await queryDatabase<SolvedProfileMachineRow>(
+    `SELECT
+       m.id,
+       m.name,
+       m.level,
+       author.id AS author_id,
+       author.name AS author_name,
+       m.created_at,
+       s.solved_at
+     FROM machine_solutions s
+     JOIN machines m
+       ON m.id = s.machine_id
+     JOIN users author
+       ON author.id = m.created_by
+     WHERE s.user_id = $2
+       AND m.status <> 'deleted'
+       AND (
+         m.published = true
+         OR m.created_by = $1
+       )
+     ORDER BY s.solved_at DESC, m.id ASC`,
+    [viewerUserId, targetUserId],
+  )
+
+  return {
+    id: user.id,
+    name: user.name,
+    initial: user.name.trim().charAt(0).toUpperCase() || "U",
+    bio: user.bio,
+    avatarUrl: user.icon_url,
+    createdMachines: createdResult.rows.map((machine) => ({
+      id: machine.id,
+      name: machine.name,
+      level: machine.level,
+      authorId: machine.author_id,
+      authorName: machine.author_name || "ユーザー",
+      createdAt: formatProfileDate(machine.created_at),
+    })),
+    solvedMachines: solvedResult.rows.map((machine) => ({
+      id: machine.id,
+      name: machine.name,
+      level: machine.level,
+      authorId: machine.author_id,
+      authorName: machine.author_name || "ユーザー",
+      createdAt: formatProfileDate(machine.created_at),
+      solvedAt: formatProfileDate(machine.solved_at),
+    })),
+  }
 }
 
 export async function getOrCreateUserDocumentService(identity: UserIdentity): Promise<UserRecord> {

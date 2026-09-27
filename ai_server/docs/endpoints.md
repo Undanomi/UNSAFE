@@ -70,6 +70,7 @@ X-Authenticated-User-ID: user-123
   "build_progress": 0,
   "build_repair_attempts": 0,
   "machine_access": null,
+  "source_workbench": null,
   "artifact": null,
   "error_message": null,
   "created_at": "2026-08-27T11:26:46.058333Z",
@@ -88,8 +89,12 @@ ai_serverのPostgreSQLへ保存されます。パスワードは秘密情報と�
 これらは正解値を保存するBFF向けの秘密情報です。ブラウザへ転送せず、フロントエンド用PostgreSQLへの保存と
 サーバー側での回答判定にだけ使用してください。正解値は `scenario` およびSSEイベントには
 含まれません。自動生成値は `flag{user_<32桁hex>}` または `flag{system_<32桁hex>}` 形式です。
-VMソースのプロビジョニング処理とacceptance testには、PostgreSQLへ保存した値が大文字小文字を
-含めて完全一致することを静的検証します。
+VMへの配置とacceptance testは、ソース内の文字列一致ではなくPacker中の実行結果と敵対的AIレビューで
+確認します。
+
+`source_workbench` はソース検証中のサンドボックス実行状況です。実行中は現在のコマンドを、各コマンドの
+完了後はstdout、stderr、終了コードを返します。内容は各観測のたびに `source/repair_report.json` へ
+atomicに更新され、最終状態は `source.zip` にも収録されます。
 
 ### セッション状態
 
@@ -148,10 +153,14 @@ build_serverへ依頼済みの場合は変更できません。
 | `theme` | 必須 | 学習テーマ。1〜500文字 |
 | `difficulty` | 必須 | `Very Easy`、`Easy`、`Medium`、`High` |
 | `operating_system` | 任意 | 対象OS。省略時は `Debian 13.7.0` |
-| `needs_user_flag` | 任意 | ユーザーフラグを用意するか |
+| `needs_user_flag` | 任意 | ユーザーフラグを用意するか。両フラグを未指定にするとAIが自動決定する |
 | `user_flag_details` | 条件付き | `needs_user_flag=true` の場合は空にできない。最大4000文字 |
-| `needs_system_flag` | 任意 | システムフラグを用意するか |
+| `needs_system_flag` | 任意 | システムフラグを用意するか。両フラグを未指定にするとAIが自動決定する |
 | `system_flag_details` | 条件付き | `needs_system_flag=true` の場合は空にできない。最大4000文字 |
+
+`needs_user_flag`と`needs_system_flag`が両方とも省略または`null`の場合、シナリオ生成前にAIが
+`user`、`system`、`both`から構成を選び、選択したフラグの取得条件とともにマシン情報へ保存します。
+明示した真偽値はAIによって上書きされません。
 
 成功時は `200 OK` と、状態が `ready` のセッションを返します。
 
@@ -183,7 +192,8 @@ remediationは次の設計書生成へ直接渡され、通常は同じ攻撃グ
 `broken_chain`の場合だけ攻撃グラフも再生成します。`SCENARIO_GENERATION_ATTEMPTS`の範囲で再試行し、
 レビューを通過したシナリオだけが保存されます。
 
-完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph` が含まれます。
+完成した `scenario` には、対象OS、人間向けMarkdown、構造化された `attack_graph`、完成内容から
+AIが生成した1〜5個の検索・分類用 `tags` が含まれます。
 VMコード生成と修復はMarkdownだけを再解釈せず、検証済み攻撃グラフも入力として使用します。
 必要なフラグの正解値はこの時点で生成してPostgreSQLへ保存しますが、SSEでは配信しません。
 
@@ -197,6 +207,7 @@ curl -N http://localhost:8000/v1/sessions/{session_id}/scenarios/events \
 | SSEイベント | 意味 | `data` の主な内容 |
 | --- | --- | --- |
 | `scenario.started` | シナリオ生成を開始した | `session_id` |
+| `scenario.flags_planned` | 未指定だったフラグ構成をAIが確定した | `selection`、各フラグの取得条件 |
 | `scenario.delta` | Markdown本文の一部分を生成した | `content` |
 | `scenario.completed` | シナリオを保存し、生成が完了した | `scenario` |
 | `scenario.error` | AI呼び出しや検証に失敗した | `detail` |
@@ -236,10 +247,13 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 バックグラウンド処理の流れ:
 
 1. シナリオから `contents/` 以下のVMソースを生成
-2. 必須ファイル、manifest、Bash、XML、実行ファイルmodeなどを静的検証
-   - WebサービスではIP直アクセスの`/`とアプリ固有マーカーの検査を必須化
+2. 必須ファイル、manifestのJSON Schema、パス安全性、XML構文、攻撃グラフとの構造的一致を検証
+   - flagの配置情報はmanifestの`flag_placements`で構造化し、AIサーバーが
+     `contents/scripts/install-flags.sh`と必須検査を生成する。AI生成コードにはflag実値を配置しない
+   - Shellやアプリコードの語句から実行時の挙動、権限、HTTP応答を推測する検査は行わない
+   - Web到達性、アプリ固有の応答、実効権限、フラグの正解・不正解は、Packerが必ず実行する
+     `contents/scripts/verify.sh`の結果と敵対的AIレビューで確認する
    - ディレクトリリスティングは一律禁止せず、攻撃グラフで意図した場合だけ限定的に構成するよう指示
-   - Web実行ユーザーでの読み取り・探索権限と、`namei`/`stat`による配置mode検査を必須化
 3. 検証失敗時は既存ファイルと検証レポートをAIへ渡し、問題ファイルだけを差分修正
 4. 差分修正後の実装からシナリオ本文と攻撃グラフを再同期し、シナリオレビューを再実行
 5. 同期後のシナリオ本文・攻撃グラフと実装をコードレビューで再照合
@@ -250,6 +264,9 @@ build_serverの `POST /v1/builds` へビルドを依頼します。時間のか�
 ソース修復によってパス、実行主体、owner、group、mode、ACL、sudoers、capability、脆弱性、
 前提関係、検証方法が変わった場合、修復前の説明を残さず、同期・再審査を通過したシナリオだけを
 同じセッションへ保存します。
+このときバージョン直下の `scenario.md`、`scenario_description.txt`、`attack_graph.json`、
+`scenario_review.json`、`scenario_metadata.json` も最終内容へ更新します。`attempts/` 以下は生成時点の
+監査履歴として変更しません。
 
 コード生成後にbuild_serverへの接続だけが失敗したセッションは、同じエンドポイントで再試行できます。
 保存済みの `source.zip` とチェックサムが有効な場合、AIによるコード生成は繰り返さず、そのZIPを
@@ -400,7 +417,7 @@ build_serverにはアクセスしません。
 ### `GET /v1/health/ready`
 
 PostgreSQLへ `SELECT 1` を実行し、セッションを扱える状態か確認します。コンテナの
-readiness checkや内部ロードバランサーからの確認に使用します。build_serverやGeminiの
+readiness checkや内部ロードバランサーからの確認に使用します。build_serverやAIプロバイダーの
 可用性までは確認しません。
 
 ## 主なエラー

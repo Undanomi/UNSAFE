@@ -32,8 +32,17 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-65536}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.6-luna}
+      OPENAI_REASONING_EFFORT: ${OPENAI_REASONING_EFFORT:-medium}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-65536}
       GENERATION_RETRIES: ${GENERATION_RETRIES:-3}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-600}
+      AI_MAX_CONCURRENT_REQUESTS: ${AI_MAX_CONCURRENT_REQUESTS:-1}
+      AI_REQUEST_MIN_INTERVAL_SECONDS: ${AI_REQUEST_MIN_INTERVAL_SECONDS:-1}
+      AI_TRANSIENT_RETRY_ATTEMPTS: ${AI_TRANSIENT_RETRY_ATTEMPTS:-8}
+      AI_TRANSIENT_RETRY_MAX_SECONDS: ${AI_TRANSIENT_RETRY_MAX_SECONDS:-600}
+      AI_TRANSIENT_RETRY_JITTER_SECONDS: ${AI_TRANSIENT_RETRY_JITTER_SECONDS:-0.5}
       BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-30}
       CVE_MIN_YEAR: ${CVE_MIN_YEAR:-2024}
       SCENARIO_GENERATION_ATTEMPTS: ${SCENARIO_GENERATION_ATTEMPTS:-5}
@@ -41,6 +50,9 @@ services:
       SOURCE_GENERATION_ATTEMPTS: ${SOURCE_GENERATION_ATTEMPTS:-3}
       SCENARIO_SYNC_ATTEMPTS: ${SCENARIO_SYNC_ATTEMPTS:-3}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      ROCKYOU_PATH: ${ROCKYOU_PATH:-/app/data/rockyou.txt}
+      ROCKYOU_MIN_LINE: ${ROCKYOU_MIN_LINE:-100000}
+      ROCKYOU_MAX_LINE: ${ROCKYOU_MAX_LINE:-200000}
       DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
       SOURCE_ROOT: /var/lib/slsg/scenarios
       SKILLS_ENABLED: ${SKILLS_ENABLED:-true}
@@ -55,6 +67,11 @@ services:
       BUILD_SERVER_URL: ${AI_BUILD_SERVER_URL:-http://server:8080}
       BUILD_SERVER_TOKEN: ${BUILD_SERVER_TOKEN:?BUILD_SERVER_TOKEN must be set}
       BUILD_REPAIR_MAX_ATTEMPTS: ${BUILD_REPAIR_MAX_ATTEMPTS:-3}
+      SOURCE_SANDBOX_ENABLED: ${SOURCE_SANDBOX_ENABLED:-true}
+      SOURCE_SANDBOX_URL: ${SOURCE_SANDBOX_URL:-http://source-sandbox:8090}
+      SOURCE_SANDBOX_TOKEN: ${SOURCE_SANDBOX_TOKEN:-local-development-source-sandbox-token-change-me}
+      SOURCE_WORKBENCH_ACTION_LIMIT: ${SOURCE_WORKBENCH_ACTION_LIMIT:-20}
+      SOURCE_SANDBOX_TIMEOUT_SECONDS: ${SOURCE_SANDBOX_TIMEOUT_SECONDS:-660}
       DOWNLOAD_SIGNING_SECRET: ${DOWNLOAD_SIGNING_SECRET:-local-development-download-signing-secret-change-me}
       DOWNLOAD_URL_TTL_SECONDS: ${DOWNLOAD_URL_TTL_SECONDS:-1800}
     depends_on:
@@ -62,6 +79,8 @@ services:
         condition: service_healthy
       ai-volume-init:
         condition: service_completed_successfully
+      source-sandbox:
+        condition: service_healthy
     ports:
       - "8000:8000"
     healthcheck:
@@ -83,6 +102,49 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  source-sandbox:
+    image: slsg-source-sandbox:local
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    command:
+      - uvicorn
+      - ai_server.sandbox_app:create_sandbox_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+    environment:
+      SOURCE_SANDBOX_TOKEN: ${SOURCE_SANDBOX_TOKEN:-local-development-source-sandbox-token-change-me}
+      SOURCE_SANDBOX_EXECUTION_IMAGE: ${SOURCE_SANDBOX_EXECUTION_IMAGE:-debian:13-slim}
+      SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS: ${SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS:-600}
+      SOURCE_SANDBOX_MAX_CONCURRENT: ${SOURCE_SANDBOX_MAX_CONCURRENT:-2}
+      SOURCE_SANDBOX_QUEUE_CAPACITY: ${SOURCE_SANDBOX_QUEUE_CAPACITY:-100}
+      SOURCE_SANDBOX_SESSION_TTL_SECONDS: ${SOURCE_SANDBOX_SESSION_TTL_SECONDS:-900}
+    expose:
+      - "8090"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 180s
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   ai-admin:
     build:
       context: .
@@ -98,8 +160,14 @@ services:
     environment:
       DATABASE_URL: postgresql://ai_service:${AI_POSTGRES_PASSWORD:?AI_POSTGRES_PASSWORD must be set}@ai-postgres:5432/ai_service
       GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-65536}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-65536}
       GENERATION_RETRIES: ${GENERATION_RETRIES:-3}
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-600}
+      AI_MAX_CONCURRENT_REQUESTS: ${AI_MAX_CONCURRENT_REQUESTS:-1}
+      AI_REQUEST_MIN_INTERVAL_SECONDS: ${AI_REQUEST_MIN_INTERVAL_SECONDS:-1}
+      AI_TRANSIENT_RETRY_ATTEMPTS: ${AI_TRANSIENT_RETRY_ATTEMPTS:-8}
+      AI_TRANSIENT_RETRY_MAX_SECONDS: ${AI_TRANSIENT_RETRY_MAX_SECONDS:-600}
+      AI_TRANSIENT_RETRY_JITTER_SECONDS: ${AI_TRANSIENT_RETRY_JITTER_SECONDS:-0.5}
       BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-30}
       CVE_MIN_YEAR: ${CVE_MIN_YEAR:-2024}
       SCENARIO_GENERATION_ATTEMPTS: ${SCENARIO_GENERATION_ATTEMPTS:-5}

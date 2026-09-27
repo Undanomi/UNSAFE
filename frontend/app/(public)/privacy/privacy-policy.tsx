@@ -1,6 +1,11 @@
-import { ArrowLeft, ShieldCheck } from "lucide-react"
+"use client"
+
+import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import type { ReactNode } from "react"
+import { useEffect, useState } from "react"
+import { DesignArtwork, MachineListHud } from "@/components/design-artwork"
+import { SlsgBrand } from "@/components/slsg-brand"
 
 type PrivacySection = {
   title: string
@@ -76,8 +81,7 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
           本項は、Googleログインで取得した情報の取り扱いを定めるものです。これらの情報は、2に記載した範囲でのみ使用し、広告配信やAIモデルの学習には使用しません。
         </p>
         <p>
-          Gemini
-          APIによるマシンの生成・検証・修復に利用する情報と、Google側での取り扱いについては、4および7に記載します。
+          AIによるマシンの生成・検証・修復に利用する情報と、選択されたAIプロバイダー側での取り扱いについては、4および7に記載します。
         </p>
         <p>
           運営担当者および委託先の担当者がGoogleユーザーデータを閲覧するのは、利用者から対象情報の閲覧について明示的な同意を得たサポート対応、セキュリティ上必要な調査、または法令上必要な場合に限ります。閲覧できる担当者と情報の範囲は、それぞれの対応に必要な最小限に限定します。
@@ -114,11 +118,12 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
           をご確認ください。
         </p>
         <p>
-          本サービスは、セキュリティ学習用マシンの生成、検証および修復にGoogleのGemini
-          APIを利用します。この処理のため、チャットなどで入力されたマシン名、学習テーマ、難易度、対象OS、フラグの設定・取得条件をGoogleへ送信します。また、生成したシナリオや攻撃手順、ソースコードおよび設定ファイル、検証結果、ビルド時のエラーメッセージ・ログ、修復履歴、処理対象を識別するシナリオIDを、各処理に応じて送信します。
+          本サービスは、セキュリティ学習用マシンの生成、検証および修復に、運用設定に応じてGoogleのGemini
+          APIまたはOpenAIのAPI（GPT-5.6
+          Lunaを含みます）のいずれかを利用します。1回の処理で送信する先は、選択されたAIプロバイダーです。この処理のため、チャットなどで入力されたマシン名、学習テーマ、難易度、対象OS、フラグの設定・取得条件を、選択されたAIプロバイダーへ送信します。また、生成したシナリオや攻撃手順、ソースコードおよび設定ファイル、検証結果、ビルド時のエラーメッセージ・ログ、修復履歴、処理対象を識別するシナリオIDを、各処理に応じて送信します。
         </p>
         <p>
-          Googleログインで取得したメールアドレス、表示名、プロフィール画像や利用者の認証用トークンを、マシン生成用の入力情報として付加する処理は行いません。ただし、マシンの作成条件に入力された情報や、生成ファイル・ログに含まれた情報は、上記の処理でGoogleへの送信対象になります。入力時には、実在する個人の情報や、本番環境のパスワード・APIキーなどの機密情報を含めないでください。
+          Googleログインで取得したメールアドレス、表示名、プロフィール画像や利用者の認証用トークンを、マシン生成用の入力情報として付加する処理は行いません。ただし、マシンの作成条件に入力された情報や、生成ファイル・ログに含まれた情報は、上記の処理で選択されたAIプロバイダーへの送信対象になります。入力時には、実在する個人の情報や、本番環境のパスワード・APIキーなどの機密情報を含めないでください。
         </p>
         <p>
           Google側の取り扱いについては、
@@ -134,6 +139,21 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
             不正利用監視に関する説明
           </a>
           もご確認ください。保存については7に記載します。
+        </p>
+        <p>
+          OpenAI側の取り扱いについては、
+          <a href="https://openai.com/policies/services-agreement/" target="_blank" rel="noopener">
+            OpenAI Services Agreement
+          </a>
+          および
+          <a
+            href="https://developers.openai.com/api/docs/guides/your-data"
+            target="_blank"
+            rel="noopener"
+          >
+            OpenAI APIのデータ管理に関する説明
+          </a>
+          もご確認ください。OpenAIの公式説明では、明示的にデータ共有へオプトインしない限り、APIへ送信されたデータはOpenAIのモデルの学習または改善には使用されません。本サービスは、当該データ共有にオプトインしません。保存については7に記載します。
         </p>
         <p>
           利用者がプロフィール、マシンまたは学習履歴の公開を選択した場合は、公開前に対象情報と公開範囲を示し、同意を得た範囲でのみ他の利用者に表示します。
@@ -227,6 +247,22 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
           をご確認ください。
         </p>
         <p>
+          OpenAI APIへ送信するリクエストには、生成結果をResponses
+          APIのアプリケーション状態として保存しない設定（
+          <code>store: false</code>
+          ）を使用します。ただし、通常のAPI利用では、入力情報、生成結果およびこれらから得られるメタデータが、不正利用の検知・防止および必要な法令対応のための監視ログに含まれ、最大30日間保存される場合があります。また、暗号化されたプロンプトキャッシュが最大24時間保持される場合があります。OpenAIとの契約またはプロジェクトにZero
+          Data RetentionもしくはModified Abuse
+          Monitoringが適用される場合は、保存条件が異なることがあります。本サービスでのデータ削除が、OpenAI側の監視用記録またはキャッシュの即時削除を意味するものではありません。詳細は
+          <a
+            href="https://developers.openai.com/api/docs/guides/your-data"
+            target="_blank"
+            rel="noopener"
+          >
+            OpenAI APIのデータ管理に関する説明
+          </a>
+          をご確認ください。
+        </p>
+        <p>
           削除を完了した場合はその旨を通知します。対応できない場合や一部の情報を保存する必要がある場合は、法令上可能な範囲で、その理由、対象情報および保存期間または保存終了の条件をお知らせします。
         </p>
       </>
@@ -273,51 +309,152 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
   },
 ]
 
-export function PrivacyPolicy() {
+const PRIVACY_TOC_LABELS = [
+  "取得する情報",
+  "利用目的",
+  "Googleユーザーデータ",
+  "第三者への提供",
+  "保存と安全管理",
+  "連携解除",
+  "確認・修正・削除",
+  "Cookie",
+  "ポリシーの変更",
+  "お問い合わせ",
+]
+
+function sectionId(index: number) {
+  return `privacy-section-${index + 1}`
+}
+
+function sectionTitle(title: string) {
+  return title.replace(/^\d+\.\s*/, "")
+}
+
+function PrivacySectionIndex({ index }: { index: number }) {
   return (
-    <main className="min-h-screen bg-[#151513] px-5 py-8 text-[#e7e5df] sm:px-8 sm:py-12">
-      <div className="mx-auto max-w-3xl">
-        <Link
-          className="inline-flex items-center gap-2 text-[0.86rem] font-bold text-[#bdbbb3] transition hover:text-white"
-          href="/login"
-        >
-          <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          ログインへ戻る
+    <span aria-hidden="true" className="slsg-privacy-section-index">
+      <svg fill="none" viewBox="0 0 92 100">
+        <title>{`セクション${index}`}</title>
+        <path className="slsg-privacy-section-index-halo" d="M46 2 85 25v50L46 98 7 75V25Z" />
+        <path className="slsg-privacy-section-index-frame" d="M46 4 83 26v48L46 96 9 74V26Z" />
+      </svg>
+      <strong>{index}</strong>
+    </span>
+  )
+}
+
+export function PrivacyPolicy() {
+  const [activeSection, setActiveSection] = useState(1)
+
+  useEffect(() => {
+    const sections = PRIVACY_SECTIONS.map((_, index) =>
+      document.getElementById(sectionId(index)),
+    ).filter((section): section is HTMLElement => section instanceof HTMLElement)
+    let frameId: number | null = null
+
+    const updateActiveSection = () => {
+      frameId = null
+
+      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) {
+        setActiveSection(sections.length)
+        return
+      }
+
+      const readingLine = Math.min(window.innerHeight * 0.28, 240)
+      let nextActiveSection = 1
+
+      for (const [index, section] of sections.entries()) {
+        if (section.getBoundingClientRect().top > readingLine) break
+        nextActiveSection = index + 1
+      }
+
+      setActiveSection((current) => (current === nextActiveSection ? current : nextActiveSection))
+    }
+
+    const scheduleActiveSectionUpdate = () => {
+      if (frameId !== null) return
+      frameId = window.requestAnimationFrame(updateActiveSection)
+    }
+
+    updateActiveSection()
+    window.addEventListener("scroll", scheduleActiveSectionUpdate, { passive: true })
+    window.addEventListener("resize", scheduleActiveSectionUpdate)
+
+    return () => {
+      window.removeEventListener("scroll", scheduleActiveSectionUpdate)
+      window.removeEventListener("resize", scheduleActiveSectionUpdate)
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+    }
+  }, [])
+
+  return (
+    <div className="slsg-shell slsg-shell-machines slsg-privacy-page">
+      <aside className="slsg-sidebar slsg-privacy-sidebar">
+        <SlsgBrand className="slsg-privacy-brand" href="/login" />
+        <div className="slsg-privacy-sidebar-divider" />
+        <Link className="slsg-privacy-login-back" href="/login">
+          <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.8} />
+          ログイン画面に戻る
         </Link>
+        <p className="slsg-privacy-toc-heading">このページの内容</p>
+        <nav aria-label="プライバシーポリシーの目次" className="slsg-privacy-toc">
+          {PRIVACY_TOC_LABELS.map((label, index) => {
+            const itemIndex = index + 1
+            const isActive = activeSection === itemIndex
+            return (
+              <a
+                aria-current={isActive ? "location" : undefined}
+                className={isActive ? "is-active" : ""}
+                href={`#${sectionId(index)}`}
+                key={label}
+                onClick={() => setActiveSection(itemIndex)}
+              >
+                <span>{String(itemIndex).padStart(2, "0")}</span>
+                <strong>{label}</strong>
+              </a>
+            )
+          })}
+        </nav>
+      </aside>
 
-        <article className="mt-14">
-          <div className="flex items-start gap-4 border-b border-[#3a3934] pb-9">
-            <span className="grid size-12 shrink-0 place-items-center rounded-2xl border border-[#4b4a43] bg-[#20201e] text-[#e7e5df]">
-              <ShieldCheck aria-hidden="true" size={23} strokeWidth={1.8} />
-            </span>
-            <div>
-              <p className="text-[0.78rem] font-bold tracking-[0.08em] text-[#aaa89f]">SLSG</p>
-              <h1 className="mt-2 text-[clamp(2.2rem,7vw,4.5rem)] leading-[1.02] font-semibold tracking-[-0.05em]">
-                プライバシーポリシー
-              </h1>
-              <p className="mt-4 text-[0.9rem] text-[#aaa89f]">最終更新日：2026年9月21日</p>
-            </div>
-          </div>
+      <MachineListHud />
+      <DesignArtwork variant="machines" />
 
-          <div className="mt-10 grid gap-10 text-[1rem] leading-8 text-[#d3d1ca]">
-            <p>
-              Security Learning Scenario
-              Generator（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
-            </p>
+      <main className="slsg-main slsg-privacy-main">
+        <header className="slsg-privacy-header">
+          <Link className="slsg-detail-back-link slsg-privacy-header-back" href="/login">
+            <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
+            ログインへ戻る
+          </Link>
+          <h1 className="slsg-machine-page-title font-bold">プライバシーポリシー</h1>
+          <p className="slsg-privacy-updated">最終更新日：2026年9月10日</p>
+          <p className="slsg-machine-page-description slsg-muted slsg-privacy-lead">
+            UNSAFE（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
+          </p>
+        </header>
 
-            {PRIVACY_SECTIONS.map((section) => (
-              <section key={section.title}>
-                <h2 className="text-[1.3rem] leading-7 font-semibold tracking-[-0.025em] text-[#f3f1ea]">
-                  {section.title}
-                </h2>
-                <div className="mt-3 space-y-5 [&_a]:underline [&_a]:underline-offset-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
-                  {section.body}
-                </div>
-              </section>
-            ))}
-          </div>
+        <article className="slsg-privacy-sections">
+          {PRIVACY_SECTIONS.map((section, index) => (
+            <section
+              className="slsg-privacy-section"
+              data-section-index={index + 1}
+              id={sectionId(index)}
+              key={section.title}
+            >
+              <PrivacySectionIndex index={index + 1} />
+              <div className="slsg-privacy-section-content">
+                <h2>{sectionTitle(section.title)}</h2>
+                <div className="slsg-privacy-section-body">{section.body}</div>
+              </div>
+            </section>
+          ))}
+
+          <section className="slsg-privacy-history">
+            <h2>変更履歴</h2>
+            <p>2026年9月5日：［変更内容］</p>
+          </section>
         </article>
-      </div>
-    </main>
+      </main>
+    </div>
   )
 }

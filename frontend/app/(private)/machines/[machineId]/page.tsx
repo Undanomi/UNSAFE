@@ -1,4 +1,5 @@
 import { cookies } from "next/headers"
+import { redirect } from "next/navigation"
 import {
   MachineDetailView,
   MissingMachine,
@@ -10,15 +11,34 @@ import { getMachineDetailService } from "@/lib/machines/service"
 
 type MachineDetailPageProps = {
   params: Promise<{ machineId: string }>
+  searchParams: Promise<{ from?: string; profileId?: string }>
 }
 
-export default async function MachineDetailPage({ params }: MachineDetailPageProps) {
+export default async function MachineDetailPage({ params, searchParams }: MachineDetailPageProps) {
   const { machineId } = await params
+  const { from, profileId } = await searchParams
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const user = await verifySessionCookieService(sessionCookie)
-  const machine = user ? await getMachineDetailService(user.uid, machineId) : null
+
+  if (!user) redirect("/login")
+
+  const machine = await getMachineDetailService(user.uid, machineId)
+  const cameFromProfile = from === "profile"
+  const backHref =
+    cameFromProfile && profileId && profileId !== user.uid
+      ? `/users/${encodeURIComponent(profileId)}`
+      : cameFromProfile
+        ? "/profile"
+        : "/machines"
+  const backLabel = cameFromProfile ? "プロフィールに戻る" : "マシン一覧へ戻る"
 
   return (
-    <AppShell>{machine ? <MachineDetailView machine={machine} /> : <MissingMachine />}</AppShell>
+    <AppShell artworkVariant="machines" layoutVariant="machine-detail">
+      {machine ? (
+        <MachineDetailView backHref={backHref} backLabel={backLabel} machine={machine} />
+      ) : (
+        <MissingMachine backHref={backHref} backLabel={backLabel} />
+      )}
+    </AppShell>
   )
 }

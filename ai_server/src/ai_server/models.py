@@ -10,6 +10,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 USER_FLAG_VALUE_PATTERN = re.compile(r"^flag\{user_[0-9a-f]{32}\}$")
 SYSTEM_FLAG_VALUE_PATTERN = re.compile(r"^flag\{system_[0-9a-f]{32}\}$")
 SCENARIO_DEFINITION_MAX_CHARS = 12_000
+ROCKYOU_PASSWORD_PLACEHOLDER = "__SLSG_ROCKYOU_PASSWORD__"
+ScenarioTag = Annotated[str, Field(min_length=1, max_length=30)]
+
+
+def rockyou_password_placeholder(step_id: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", step_id):
+        raise ValueError(f"invalid attack step ID for rockyou placeholder: {step_id}")
+    return f"__SLSG_ROCKYOU_PASSWORD_{step_id}__"
 
 
 def utcnow() -> datetime:
@@ -27,6 +35,26 @@ class SessionStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class AutomaticFlagPlan(BaseModel):
+    selection: Literal["user", "system", "both"]
+    user_flag_details: str = Field(default="", max_length=4000)
+    system_flag_details: str = Field(default="", max_length=4000)
+
+    @model_validator(mode="after")
+    def selected_flags_require_details(self) -> AutomaticFlagPlan:
+        needs_user = self.selection in {"user", "both"}
+        needs_system = self.selection in {"system", "both"}
+        if needs_user and not self.user_flag_details.strip():
+            raise ValueError("user_flag_details is required for the selected flag plan")
+        if needs_system and not self.system_flag_details.strip():
+            raise ValueError("system_flag_details is required for the selected flag plan")
+        if not needs_user and self.user_flag_details.strip():
+            raise ValueError("user_flag_details must be empty when user flag is not selected")
+        if not needs_system and self.system_flag_details.strip():
+            raise ValueError("system_flag_details must be empty when system flag is not selected")
+        return self
 
 
 class MachineInformation(BaseModel):
@@ -100,11 +128,60 @@ class MachineInformation(BaseModel):
                 )
         return self
 
+    def with_automatic_flag_plan(self, plan: AutomaticFlagPlan) -> MachineInformation:
+        return type(self).model_validate(
+            {
+                **self.model_dump(),
+                "needs_user_flag": plan.selection in {"user", "both"},
+                "user_flag_details": plan.user_flag_details.strip(),
+                "needs_system_flag": plan.selection in {"system", "both"},
+                "system_flag_details": plan.system_flag_details.strip(),
+            }
+        )
+
 
 class AttackObjective(BaseModel):
     objective_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     objective_type: Literal["user_flag", "system_flag"]
     description: str = Field(min_length=1, max_length=4000)
+
+
+class PasswordCrackingSpec(BaseModel):
+    wordlist: Literal["rockyou.txt"]
+    password: str | None = Field(
+        default=None, min_length=8, max_length=32, pattern=r"^[A-Za-z0-9]+$"
+    )
+    line_number: int | None = Field(default=None, ge=1)
+    search_space_lines: int | None = Field(default=None, ge=1)
+    hash_algorithm: str = Field(min_length=1, max_length=100)
+    hash_runtime: str = Field(min_length=1, max_length=100)
+    hash_api: str = Field(min_length=1, max_length=200)
+    hashcat_mode: int | None = Field(default=None, ge=0)
+    john_format: str | None = Field(default=None, min_length=1, max_length=100)
+    target_crack_seconds: int = Field(ge=120, le=180)
+
+    @model_validator(mode="after")
+    def validate_cracking_parameters(self) -> PasswordCrackingSpec:
+        selection = (self.password, self.line_number, self.search_space_lines)
+        if any(value is None for value in selection) and any(
+            value is not None for value in selection
+        ):
+            raise ValueError(
+                "rockyou selection fields must be all unset or all populated"
+            )
+        if (
+            self.line_number is not None
+            and self.search_space_lines is not None
+            and self.line_number > self.search_space_lines
+        ):
+            raise ValueError("password line must be within the declared search space")
+        if self.hashcat_mode is None and self.john_format is None:
+            raise ValueError("password cracking requires a Hashcat mode or John format")
+        return self
+
+    @property
+    def selection_bound(self) -> bool:
+        return self.password is not None
 
 
 class AttackStep(BaseModel):
@@ -138,6 +215,7 @@ class AttackStep(BaseModel):
     installation_method: str | None = Field(default=None, max_length=500)
     implementation_steps: list[str] = Field(min_length=1, max_length=50)
     references: list[str] = Field(default_factory=list, max_length=30)
+    password_cracking: PasswordCrackingSpec | None = None
 
     @model_validator(mode="after")
     def validate_cve_fields(self) -> AttackStep:
@@ -153,6 +231,12 @@ class AttackStep(BaseModel):
             raise ValueError("CVE installation evidence is only valid when kind is cve")
         if self.installation_artifact == "source_build" and not self.source_build_reason:
             raise ValueError("source-built CVE software requires a source_build_reason")
+        if self.kind == "password_cracking" and self.password_cracking is None:
+            raise ValueError("a password_cracking step requires password_cracking metadata")
+        if self.kind != "password_cracking" and self.password_cracking is not None:
+            raise ValueError(
+                "password_cracking metadata is only valid when kind is password_cracking"
+            )
         return self
 
 
@@ -228,6 +312,7 @@ class ScenarioDraft(BaseModel):
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
     target_os: str = "Debian 13.7.0"
     attack_graph: AttackGraph
+    tags: list[ScenarioTag] = Field(default_factory=list, max_length=5)
     user_flag: str | None = Field(
         default=None,
         min_length=22,
@@ -248,6 +333,16 @@ class ScenarioDraft(BaseModel):
         if self.user_flag and self.system_flag and self.user_flag == self.system_flag:
             raise ValueError("user_flag and system_flag must be different")
         return self
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("scenario tags must not be blank")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("scenario tags must not contain duplicates")
+        return normalized
 
 
 def scenario_is_valid_for_machine(machine: MachineInformation, scenario: ScenarioDraft) -> bool:
@@ -286,6 +381,7 @@ class ScenarioReviewFinding(BaseModel):
         "acceptance_test_gap",
         "unsupported_assumption",
         "description_spoiler",
+        "input_contradiction",
     ]
     repair_target: Literal[
         "scenario_text",
@@ -297,6 +393,57 @@ class ScenarioReviewFinding(BaseModel):
     repair_fields: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def repair_fields_match_target(self) -> ScenarioReviewFinding:
+        allowed_graph_fields = {"title", "description", "implementation_steps"}
+        allowed_regeneration_fields = {
+            "step_id",
+            "kind",
+            "phase",
+            "requires",
+            "achieves",
+            "cve_id",
+            "password_cracking",
+        }
+        allowed_input_fields = {
+            "theme",
+            "user_flag_details",
+            "system_flag_details",
+            "skill_names",
+            "cve_ids",
+        }
+        fields = set(self.repair_fields)
+        if self.repair_target == "attack_graph":
+            if not fields or not fields <= allowed_graph_fields:
+                raise ValueError(
+                    "attack_graph repair_fields must only contain title, description, "
+                    "or implementation_steps"
+                )
+        elif self.repair_target == "attack_graph_regeneration":
+            if not fields or not fields <= allowed_regeneration_fields:
+                raise ValueError(
+                    "attack_graph_regeneration repair_fields must contain structural fields"
+                )
+        elif self.repair_target == "user_input":
+            if not fields or not fields <= allowed_input_fields:
+                raise ValueError(
+                    "user_input repair_fields must identify contradictory machine input fields"
+                )
+        elif fields:
+            raise ValueError(
+                f"repair_fields must be empty for repair_target={self.repair_target}"
+            )
+        if self.repair_target == "user_input" and (
+            self.category != "input_contradiction" or self.step_id is not None
+        ):
+            raise ValueError(
+                "user_input is only valid for an explicit input_contradiction without "
+                "a generated attack-graph step_id"
+            )
+        if self.category == "input_contradiction" and self.repair_target != "user_input":
+            raise ValueError("input_contradiction findings must target user_input")
+        return self
 
 
 class ScenarioReview(BaseModel):
@@ -319,9 +466,26 @@ class ScenarioRevision(BaseModel):
     summary: str = Field(min_length=1, max_length=4000)
 
 
+class ScenarioTextRevision(BaseModel):
+    scenario_description: str = Field(min_length=1, max_length=1000)
+    definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
+    summary: str = Field(min_length=1, max_length=4000)
+
+
 class ScenarioGeneration(BaseModel):
     scenario_description: str = Field(min_length=1, max_length=1000)
     definition: str = Field(min_length=1, max_length=SCENARIO_DEFINITION_MAX_CHARS)
+    tags: list[ScenarioTag] = Field(min_length=1, max_length=5)
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("scenario tags must not be blank")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("scenario tags must not contain duplicates")
+        return normalized
 
 
 class ScenarioTextReplacement(BaseModel):
@@ -355,6 +519,7 @@ class SourceReviewFinding(BaseModel):
         "acceptance_test_gap",
         "implementation_mismatch",
     ]
+    affected_files: list[str] = Field(default_factory=list, max_length=30)
     evidence: str = Field(min_length=1, max_length=4000)
     remediation: str = Field(min_length=1, max_length=4000)
 
@@ -406,8 +571,54 @@ class GuidanceRequest(BaseModel):
 
 
 class SourcePatch(BaseModel):
-    files: list[SourceFile] = Field(min_length=1, max_length=50)
+    files: list[SourceFile] = Field(default_factory=list, max_length=50)
     delete_paths: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> SourcePatch:
+        if not self.files and not self.delete_paths:
+            raise ValueError("source patch must change or delete at least one file")
+        return self
+
+
+class SourceWorkbenchCommand(BaseModel):
+    argv: list[str] = Field(min_length=1, max_length=32)
+    cwd: str = Field(default="contents", min_length=1, max_length=500)
+    purpose: str = Field(min_length=1, max_length=1000)
+    intent: Literal["inspect", "verify"] = "inspect"
+    network_access: bool = False
+    run_as_root: bool = False
+    allowed_exit_codes: list[int] = Field(default_factory=lambda: [0], min_length=1, max_length=8)
+
+    @field_validator("argv")
+    @classmethod
+    def command_arguments_are_bounded(cls, values: list[str]) -> list[str]:
+        if any(not value or len(value) > 1000 or "\x00" in value for value in values):
+            raise ValueError("workbench command arguments must be non-empty bounded strings")
+        return values
+
+    @field_validator("allowed_exit_codes")
+    @classmethod
+    def exit_codes_are_unique_bytes(cls, values: list[int]) -> list[int]:
+        if len(values) != len(set(values)) or any(value < 0 or value > 255 for value in values):
+            raise ValueError("allowed exit codes must be unique values from 0 through 255")
+        return sorted(values)
+
+
+class SourceWorkbenchDecision(BaseModel):
+    action: Literal["run", "patch", "finish"]
+    command: SourceWorkbenchCommand | None = None
+    patch: SourcePatch | None = None
+    finish_status: Literal["verified", "blocked", "deferred_to_vm"] = "verified"
+    summary: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def payload_matches_action(self) -> SourceWorkbenchDecision:
+        if (self.action == "run") != (self.command is not None):
+            raise ValueError("command is required exactly when action is run")
+        if (self.action == "patch") != (self.patch is not None):
+            raise ValueError("patch is required exactly when action is patch")
+        return self
 
 
 class Artifact(BaseModel):
@@ -458,11 +669,19 @@ class CreateMachineRequest(BaseModel):
     scenario_id: str | None = None
 
 
+class SessionFailureFeedback(BaseModel):
+    kind: Literal["ai_safety_refusal"]
+    summary: str = Field(min_length=1, max_length=2000)
+    retry_allowed: bool = False
+
+
 class SessionResponse(SessionState):
     scenario_events_url: str
     download_url: str | None = None
     user_flag: str | None = None
     system_flag: str | None = None
+    failure: SessionFailureFeedback | None = None
+    source_workbench: dict | None = None
 
 
 class DownloadURLResponse(BaseModel):

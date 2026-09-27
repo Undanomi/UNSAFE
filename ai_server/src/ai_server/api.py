@@ -22,8 +22,10 @@ from .models import (
     scenario_is_valid_for_machine,
 )
 from .repository import SessionRepository
+from .services.ai import begin_token_usage_session, end_token_usage_session
 from .services.download_signing import DownloadSigner, InvalidDownloadSignatureError
 from .services.events import ServerEvent
+from .services.rockyou import strip_rockyou_selections
 from .services.scenarios import ScenarioCoordinator
 from .services.workflow import (
     DISTRIBUTION_ARTIFACT_TYPE,
@@ -71,12 +73,39 @@ def _urls(request: Request, state) -> tuple[str, str | None]:
 
 def _response(request: Request, state) -> SessionResponse:
     events, download = _urls(request, state)
+    payload = state.model_dump()
+    if state.scenario is not None:
+        payload["scenario"] = strip_rockyou_selections(state.scenario).model_dump(mode="json")
+    failure = None
+    failure_report = state.repair_failure_report
+    if (
+        isinstance(failure_report, dict)
+        and failure_report.get("kind") == "ai_safety_refusal"
+        and isinstance(failure_report.get("summary"), str)
+        and failure_report["summary"].strip()
+    ):
+        failure = {
+            "kind": "ai_safety_refusal",
+            "summary": failure_report["summary"].strip(),
+            "retry_allowed": False,
+        }
+        payload["error_message"] = failure["summary"]
+    source_workbench = (
+        request.app.state.workflow.source_archive.load_workbench_progress(
+            state.session_id,
+            state.scenario.scenario_version_id,
+        )
+        if state.scenario is not None
+        else None
+    )
     return SessionResponse(
-        **state.model_dump(),
+        **payload,
         scenario_events_url=events,
         download_url=download,
         user_flag=state.scenario.user_flag if state.scenario else None,
         system_flag=state.scenario.system_flag if state.scenario else None,
+        failure=failure,
+        source_workbench=source_workbench,
     )
 
 
@@ -257,7 +286,12 @@ async def scenario_events(
                 current.machine_information, current.scenario
             ):
                 yield ServerEvent(
-                    "scenario.completed", {"scenario": current.scenario.model_dump(mode="json")}
+                    "scenario.completed",
+                    {
+                        "scenario": strip_rockyou_selections(current.scenario).model_dump(
+                            mode="json"
+                        )
+                    },
                 ).encode()
                 return
             current.scenario = None
@@ -358,12 +392,16 @@ async def create_guidance(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="machine source is unavailable"
         )
-    guidance = await workflow.generator.generate_guidance(
-        state.machine_information,
-        state.scenario,
-        generated,
-        body.acquired_flags,
-    )
+    usage_token = begin_token_usage_session(session_id)
+    try:
+        guidance = await workflow.generator.generate_guidance(
+            state.machine_information,
+            workflow.bind_construction_passwords(session_id, state.scenario),
+            generated,
+            body.acquired_flags,
+        )
+    finally:
+        end_token_usage_session(usage_token)
     response.headers["Cache-Control"] = "private, no-store"
     return guidance
 

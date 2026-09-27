@@ -13,6 +13,7 @@
     "db:migrate": "tsx db/migrate.ts",
     "db:seed": "tsx db/seed.ts",
     "start": "next start",
+    "test": "tsx --test",
     "lint": "biome check && biome format && tsc --noEmit",
     "format": "biome check --write && biome format --write"
   },
@@ -20,7 +21,7 @@
     "firebase": "12.18.0",
     "firebase-admin": "14.3.0",
     "lucide-react": "1.31.0",
-    "next": "16.2.10",
+    "next": "16.3.5",
     "pg": "8.23.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",

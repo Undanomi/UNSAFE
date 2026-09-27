@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm"
 const components: Components = {
   a: ({ children, href }) => (
     <a
-      className="font-bold text-[#3f5f89] underline decoration-[#9eb3cc] underline-offset-3"
+      className="font-bold text-[#86d9f0] underline decoration-[#4e849f] underline-offset-3 transition-colors hover:text-[#b8f2ff]"
       href={href}
       rel="noreferrer noopener"
       target="_blank"
@@ -13,25 +13,31 @@ const components: Components = {
     </a>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="my-3 border-l-3 border-[#c9bd7b] pl-4 text-[#61605b]">
+    <blockquote className="my-3 border-l-3 border-[#5f9fb4] bg-[#14243a]/55 py-2 pr-3 pl-4 text-[#b9c8d8]">
       {children}
     </blockquote>
   ),
   code: ({ children, className }) => (
     <code
-      className={`${className ?? ""} rounded bg-[#efeee9] px-1.5 py-0.5 font-mono text-[0.9em]`}
+      className={`${className ?? ""} rounded border border-[#304865] bg-[#14243a] px-1.5 py-0.5 font-mono text-[0.9em] text-[#bfe8f5]`}
     >
       {children}
     </code>
   ),
-  h1: ({ children }) => <h3 className="mt-5 mb-2 text-[1.08rem] font-extrabold">{children}</h3>,
-  h2: ({ children }) => <h4 className="mt-5 mb-2 text-[1.02rem] font-extrabold">{children}</h4>,
-  h3: ({ children }) => <h5 className="mt-4 mb-2 font-extrabold">{children}</h5>,
+  h1: ({ children }) => (
+    <h1 className="mt-5 mb-2 text-[1.25rem] leading-[1.4] font-bold">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-5 mb-2 text-[1.125rem] leading-[1.45] font-bold">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mt-4 mb-2 text-[1rem] leading-[1.5] font-bold">{children}</h3>
+  ),
   li: ({ children }) => <li className="my-1 pl-1">{children}</li>,
   ol: ({ children }) => <ol className="my-3 list-decimal pl-6">{children}</ol>,
   p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
   pre: ({ children }) => (
-    <pre className="my-3 overflow-x-auto rounded-xl bg-[#292925] p-4 text-[0.84rem] leading-[1.65] text-[#f7f7f2] [&_code]:bg-transparent [&_code]:p-0">
+    <pre className="my-3 overflow-x-auto rounded-xl border border-[#344b68] bg-[#0d1625] p-4 text-[0.84rem] leading-[1.65] text-[#dceaf7] shadow-inner shadow-black/25 [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0">
       {children}
     </pre>
   ),
@@ -40,9 +46,9 @@ const components: Components = {
       <table className="w-full border-collapse text-left text-[0.9rem]">{children}</table>
     </div>
   ),
-  td: ({ children }) => <td className="border border-[#deddd7] px-3 py-2">{children}</td>,
+  td: ({ children }) => <td className="border border-[#34445b] px-3 py-2">{children}</td>,
   th: ({ children }) => (
-    <th className="border border-[#deddd7] bg-[#f6f5f1] px-3 py-2">{children}</th>
+    <th className="border border-[#425873] bg-[#1e304a] px-3 py-2 text-[#e3effa]">{children}</th>
   ),
   ul: ({ children }) => <ul className="my-3 list-disc pl-6">{children}</ul>,
 }

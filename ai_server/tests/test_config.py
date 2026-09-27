@@ -42,3 +42,20 @@ def test_admin_settings_do_not_require_build_server_token(
     )
 
     assert settings.sqladmin_username == "admin-user"
+
+
+def test_settings_normalize_supported_ai_provider() -> None:
+    settings = Settings(ai_provider=" OpenAI ", _env_file=None)
+
+    assert settings.ai_provider == "openai"
+    assert settings.openai_model == "gpt-5.6-luna"
+
+
+def test_settings_reject_unknown_ai_provider() -> None:
+    with pytest.raises(ValidationError, match="AI_PROVIDER must be one of"):
+        Settings(ai_provider="unknown", _env_file=None)
+
+
+def test_settings_reject_invalid_rockyou_window() -> None:
+    with pytest.raises(ValidationError, match="ROCKYOU_MIN_LINE"):
+        Settings(rockyou_min_line=200, rockyou_max_line=100, _env_file=None)

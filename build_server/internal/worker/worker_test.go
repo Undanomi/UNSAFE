@@ -76,16 +76,22 @@ func TestPackerChangesProvisionerPasswordAfterScenarioBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(template)
-	buildIndex := strings.Index(text, `"./build.sh"`)
+	buildIndex := strings.Index(text, `"bash ./build.sh"`)
+	flagsIndex := strings.Index(text, `"bash ./scripts/install-flags.sh"`)
+	verifyIndex := strings.Index(text, `"bash ./scripts/verify.sh"`)
+	cleanupIndex := strings.Index(text, `"rm -rf /tmp/scenario"`)
 	bannerIndex := strings.Index(text, `"bash /tmp/slsg-configure-login-ip.sh"`)
 	passwordIndex := strings.Index(text, `provisioner '${var.machine_password}' | chpasswd`)
-	if buildIndex < 0 || bannerIndex <= buildIndex || passwordIndex <= bannerIndex {
-		t.Fatal("Packer must configure the login banner and change the password after build.sh succeeds")
+	if buildIndex < 0 || flagsIndex <= buildIndex || verifyIndex <= flagsIndex || cleanupIndex <= verifyIndex || bannerIndex <= cleanupIndex || passwordIndex <= bannerIndex {
+		t.Fatal("Packer must verify the scenario before configuring login and changing the password")
 	}
 	for _, required := range []string{
 		`variable "machine_password"`,
 		`sensitive   = true`,
 		`shutdown_command = "echo '${var.machine_password}' | sudo -S shutdown -P now"`,
+		`destination = "/tmp/slsg-bash-env.sh"`,
+		`"export SLSG_PHASE=provision"`,
+		`"export SLSG_PHASE=verification"`,
 	} {
 		if !strings.Contains(text, required) {
 			t.Fatalf("Packer template is missing %q", required)

@@ -13,7 +13,7 @@ import {
   BUILDING_MACHINE_DESCRIPTION,
   completedMachineDescription,
 } from "@/lib/machines/description"
-import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/stores/machine-detail"
+import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/types/machine-detail"
 import type { MachineRecord } from "@/types/postgres"
 
 function formatCreatedAt(value: Date | string) {
@@ -32,24 +32,34 @@ function toDifficulty(level: MachineRecord["level"]): MachineDetail["difficulty"
 }
 
 function toMachineBuildState(session: AiSessionResponse): MachineBuildState {
+  const shared = {
+    progress: Math.max(0, Math.min(100, session.build_progress)),
+  }
   if (session.status === "completed") {
-    return { status: "ready", progress: 100 }
+    return { ...shared, status: "ready", progress: 100 }
   }
   if (session.status === "failed") {
     return {
+      ...shared,
       status: "failed",
-      progress: Math.max(0, Math.min(100, session.build_progress)),
+      failure: session.failure
+        ? {
+            kind: session.failure.kind,
+            summary: session.failure.summary,
+            retryAllowed: session.failure.retry_allowed,
+          }
+        : null,
     }
   }
   if (session.status === "cancelled") {
     return {
+      ...shared,
       status: "cancelled",
-      progress: Math.max(0, Math.min(100, session.build_progress)),
     }
   }
   return {
+    ...shared,
     status: session.status === "generating_code" ? "preparing" : "building",
-    progress: Math.max(0, Math.min(100, session.build_progress)),
   }
 }
 
@@ -70,16 +80,22 @@ async function saveMachineBuildState(
   await withDatabaseTransaction(async (client) => {
     const machineUpdate = await client.query(
       `UPDATE machines SET
-         status = $2, build_progress = $3, error_message = NULL,
+         status = $2, build_progress = $3, error_message = $5,
          description = COALESCE($4, description), updated_at = now()
        WHERE id = $1`,
-      [machineId, state.status, state.progress, state.description ?? null],
+      [
+        machineId,
+        state.status,
+        state.progress,
+        state.description ?? null,
+        state.failure?.summary ?? null,
+      ],
     )
     const chatUpdate = await client.query(
       `UPDATE chat_sessions SET
-         creation_status = $2, error_message = NULL, updated_at = now()
+         creation_status = $2, error_message = $3, updated_at = now()
        WHERE ai_session_id = $1`,
-      [aiSessionId, chatStatus],
+      [aiSessionId, chatStatus, state.failure?.summary ?? null],
     )
     if (machineUpdate.rowCount !== 1 || chatUpdate.rowCount !== 1) {
       throw new Error("Machine build state could not be persisted.")
@@ -125,6 +141,15 @@ export async function getMachineDetailService(
   const acquiredFlags = new Set(acquiredResult.rows.map((row) => row.flag_kind))
 
   let description = machine.description
+  let buildFailure: MachineBuildState["failure"] = null
+  if (machine.status === "failed" && machine.ai_session_id) {
+    try {
+      const aiSession = await getAiSessionService(ownerUserId, machine.ai_session_id)
+      buildFailure = toMachineBuildState(aiSession).failure ?? null
+    } catch (error) {
+      console.error("Failed to refresh the machine build failure.", error)
+    }
+  }
   if (
     machine.status === "ready" &&
     description === BUILDING_MACHINE_DESCRIPTION &&
@@ -158,7 +183,8 @@ export async function getMachineDetailService(
     summary: machine.summary,
     description,
     buildProgress: machine.build_progress ?? 0,
-    canRetry: isOwner,
+    buildFailure,
+    canRetry: isOwner && buildFailure?.retryAllowed !== false,
     status: machine.status,
     guidance: guidanceResult.rows[0]?.content ?? null,
     userFlag: machine.user_flag
@@ -267,6 +293,9 @@ export async function retryMachineBuildService(
   if (!machine?.ai_session_id || machine.created_by !== ownerUserId) return null
 
   const current = await getAiSessionService(ownerUserId, machine.ai_session_id)
+  if (current.failure?.retry_allowed === false) {
+    return toMachineBuildState(current)
+  }
   if (current.status !== "failed" && current.status !== "cancelled") {
     const buildState = toMachineBuildState(current)
     const description =

@@ -198,6 +198,7 @@ export async function startMachineBuildAction(
     const machineId = await createMachineDocumentService(user.uid, sessionId, {
       userFlag: started.user_flag,
       systemFlag: started.system_flag,
+      tags: started.scenario?.tags ?? [],
     })
     return machineId
       ? { success: true, sessionId, machineId }
@@ -215,7 +216,12 @@ export async function markMachineCreationFailedAction(
   const user = await getAuthenticatedUser()
   if (!user) return
   const normalized: ChatCreationFailure = {
-    kind: failure.kind === "settings" ? "settings" : "system",
+    kind:
+      failure.kind === "settings"
+        ? "settings"
+        : failure.kind === "ai_safety_refusal"
+          ? "ai_safety_refusal"
+          : "system",
     summary: failure.summary.trim().slice(0, 4000),
     suggestions: failure.suggestions
       .filter((suggestion) => typeof suggestion === "string" && suggestion.trim())
