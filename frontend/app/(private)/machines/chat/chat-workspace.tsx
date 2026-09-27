@@ -196,7 +196,12 @@ async function waitForScenario(
 }
 
 function buildInitialAnswers(session: ChatSession): ChatAnswers {
-  return { ...EMPTY_CHAT_ANSWERS, ...session.initialAnswers }
+  const answers = { ...EMPTY_CHAT_ANSWERS, ...session.initialAnswers }
+  return {
+    ...answers,
+    name: answers.name.slice(0, CHAT_CONFIG.machineNameMaxLength),
+    theme: answers.theme.slice(0, CHAT_CONFIG.scenarioPromptMaxLength),
+  }
 }
 
 function isChatStepComplete(step: number, answers: ChatAnswers) {
@@ -1078,6 +1083,12 @@ function submitChatInputOnEnter(
   onSubmit()
 }
 
+function limitChatInputValue(input: HTMLInputElement | HTMLTextAreaElement, maxLength: number) {
+  const value = input.value.slice(0, maxLength)
+  if (input.value !== value) input.value = value
+  return value
+}
+
 function StepInput({
   answers,
   choicesDisabled = false,
@@ -1089,6 +1100,10 @@ function StepInput({
   submitting = false,
 }: StepInputProps) {
   const selectChoice = onChoiceSelect ?? onChange
+  const updateMachineName = (input: HTMLInputElement) => {
+    onChange({ name: limitChatInputValue(input, CHAT_CONFIG.machineNameMaxLength) })
+  }
+
   if (step === CHAT_STEPS.machineName) {
     return (
       <label className="slsg-chat-field">
@@ -1096,7 +1111,8 @@ function StepInput({
         <input
           className="slsg-input slsg-chat-input"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
-          onChange={(event) => onChange({ name: event.target.value })}
+          onChange={(event) => updateMachineName(event.currentTarget)}
+          onCompositionEnd={(event) => updateMachineName(event.currentTarget)}
           onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
           placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
@@ -1135,7 +1151,7 @@ function StepInput({
         <ChatTextareaField
           inlineSubmit={inlineSubmit}
           label={CHAT_COPY.fields.scenarioPrompt}
-          maxLength={500}
+          maxLength={CHAT_CONFIG.scenarioPromptMaxLength}
           onChange={(theme) => onChange({ theme })}
           onSubmit={onSubmit}
           placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
@@ -1252,6 +1268,9 @@ function ChatTextareaField({
   value: string
 }) {
   const textareaId = useId()
+  const updateValue = (textarea: HTMLTextAreaElement) => {
+    onChange(maxLength === undefined ? textarea.value : limitChatInputValue(textarea, maxLength))
+  }
 
   return (
     <div className="slsg-chat-field">
@@ -1261,7 +1280,10 @@ function ChatTextareaField({
           className="slsg-chat-textarea"
           id={textareaId}
           maxLength={maxLength}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => updateValue(event.currentTarget)}
+          onCompositionEnd={(event) => {
+            if (maxLength !== undefined) updateValue(event.currentTarget)
+          }}
           onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
           placeholder={placeholder}
           rows={rows}
