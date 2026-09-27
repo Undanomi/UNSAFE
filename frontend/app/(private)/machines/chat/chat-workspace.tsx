@@ -312,7 +312,6 @@ function formatFlagSetting(value: boolean | null) {
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const router = useRouter()
   const [answers, setAnswers] = useState<ChatAnswers>(() => buildInitialAnswers(session))
-  const [confirmedMachineName, setConfirmedMachineName] = useState(session.name)
   const [step, setStep] = useState(session.initialStep)
   const [basicReady, setBasicReady] = useState(() => session.status === "基本設定完了")
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -433,7 +432,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     }
     const nextStep = getNextChatStep(step, answers)
     if (!(await persistProgress(nextStep, false))) return
-    if (step === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     setStep(nextStep)
   }
 
@@ -644,7 +642,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setShowRebuildButton(true)
-    if (editingStep === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     editingAnswersSnapshotRef.current = null
     setEditingStep(null)
   }
@@ -652,38 +649,29 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   return (
     <div className="slsg-chat-workspace">
       <header className="slsg-chat-header">
-        <div className="slsg-chat-heading">
-          <p className="slsg-page-eyebrow">MACHINE CREATION</p>
-          <h1 className="slsg-heading-offset-up">{confirmedMachineName}</h1>
-          <p className="slsg-heading-offset-up">
-            対話形式で設定を進めて、学習用のマシンを作成します。
-          </p>
+        <h1 className="sr-only">マシン作成チャット</h1>
+        <div className="slsg-chat-panel-header">
+          <span className="slsg-chat-progress-copy">
+            {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
+          </span>
+          <ChatProgress progress={progress} />
+          <button
+            className="slsg-chat-cancel"
+            disabled={isCancelling || isConfirmingCancel || creationStatus === "completed"}
+            onClick={() => {
+              setCancelDialogError("")
+              cancelDialogRef.current?.showModal()
+            }}
+            type="button"
+          >
+            {isCancelling || isConfirmingCancel ? "中止しています…" : "中止する"}
+          </button>
         </div>
       </header>
 
       <div className="slsg-chat-layout">
         <section className="slsg-chat-conversation">
           <div className="slsg-chat-conversation-inner">
-            <header className="slsg-chat-panel-header">
-              <div>
-                <h2>マシン作成チャット</h2>
-              </div>
-              <div className="slsg-chat-panel-progress">
-                <ChatProgress progress={progress} />
-                <button
-                  className="slsg-chat-cancel"
-                  disabled={isCancelling || isConfirmingCancel || creationStatus === "completed"}
-                  onClick={() => {
-                    setCancelDialogError("")
-                    cancelDialogRef.current?.showModal()
-                  }}
-                  type="button"
-                >
-                  {isCancelling || isConfirmingCancel ? "中止しています…" : "中止する"}
-                </button>
-              </div>
-            </header>
-
             <div className="slsg-chat-panel-body">
               <div className="slsg-chat-message-list" ref={conversationRef}>
                 {transcript.map((message) => (
@@ -863,9 +851,6 @@ function ChatProgress({ progress }: { progress: number }) {
           </div>
         ),
       )}
-      <span className="slsg-chat-progress-copy">
-        {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
-      </span>
     </div>
   )
 }
