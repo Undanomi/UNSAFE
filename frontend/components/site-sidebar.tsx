@@ -19,6 +19,7 @@ import type { ChatSessionSummary } from "@/stores/chat"
 
 type SiteSidebarProps = {
   user: {
+    id: string
     name: string
     avatarUrl: string
   }
@@ -26,8 +27,7 @@ type SiteSidebarProps = {
 
 export function SiteSidebar({ user }: SiteSidebarProps) {
   const pathname = usePathname()
-  const isSavedChatActive = /^\/machines\/chat\/[^/]+$/.test(pathname)
-  const [isChatListOpen, setIsChatListOpen] = useState(isSavedChatActive)
+  const [isChatListOpen, setIsChatListOpen] = useState(false)
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false)
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([])
   const [isLoadingChats, setIsLoadingChats] = useState(false)
@@ -38,8 +38,24 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
     (!pathname.startsWith("/machines/chat") && /^\/machines\/[^/]+$/.test(pathname))
 
   useEffect(() => {
-    setIsChatListOpen(/^\/machines\/chat\/[^/]+$/.test(pathname))
-  }, [pathname])
+    if (!user.id) return
+    try {
+      setIsChatListOpen(localStorage.getItem(`slsg:chat-list-open:${user.id}`) === "true")
+    } catch {
+      setIsChatListOpen(false)
+    }
+  }, [user.id])
+
+  function toggleChatList() {
+    const nextIsOpen = !isChatListOpen
+    setIsChatListOpen(nextIsOpen)
+    if (!user.id) return
+    try {
+      localStorage.setItem(`slsg:chat-list-open:${user.id}`, String(nextIsOpen))
+    } catch {
+      // Keep the current page interactive when browser storage is unavailable.
+    }
+  }
 
   useEffect(() => {
     if (!isChatListOpen) return
@@ -69,7 +85,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
   }, [isChatListOpen])
 
   return (
-    <aside className="slsg-sidebar fixed inset-y-0 left-0 z-20 flex w-[240px] flex-col text-[#eef5ff] max-lg:static max-lg:w-full">
+    <aside className="slsg-sidebar slsg-app-sidebar fixed inset-y-0 left-0 z-20 flex flex-col text-[#eef5ff] max-lg:static">
       <SlsgBrand className="mx-6 mt-6 mb-9 shrink-0" />
 
       <nav
@@ -99,7 +115,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
           aria-controls="sidebar-chat-list"
           aria-expanded={isChatListOpen}
           className="slsg-sidebar-link w-full shrink-0 justify-between"
-          onClick={() => setIsChatListOpen((open) => !open)}
+          onClick={toggleChatList}
           type="button"
         >
           <span className="flex items-center gap-2.5">
@@ -185,7 +201,16 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
             id="sidebar-account-menu"
             role="menu"
           >
-            <form action={logoutAction}>
+            <form
+              action={logoutAction}
+              onSubmit={() => {
+                try {
+                  localStorage.removeItem(`slsg:chat-list-open:${user.id}`)
+                } catch {
+                  // Keep logout available when browser storage is unavailable.
+                }
+              }}
+            >
               <button
                 className="flex w-full items-center gap-2 rounded-[9px] px-3 py-2.5 text-sm font-bold text-[#eef5ff] transition-colors hover:bg-[#1b2c49]"
                 role="menuitem"
