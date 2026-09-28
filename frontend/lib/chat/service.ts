@@ -280,13 +280,12 @@ export async function createMachineDocumentService(
     const machineId = chat.machine_id ?? sessionId
     const machineResult = await client.query(
       `INSERT INTO machines
-        (id, ai_session_id, created_by, name, summary, description, file_path, level,
+        (id, ai_session_id, created_by, name, description, file_path, level,
          published, status, build_progress, system_flag, user_flag, tags)
-       VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8, 'building', 0, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, '', $6, $7, 'building', 0, $8, $9, $10)
        ON CONFLICT (id) DO UPDATE SET
          ai_session_id = EXCLUDED.ai_session_id,
          name = EXCLUDED.name,
-         summary = EXCLUDED.summary,
          level = EXCLUDED.level,
          published = EXCLUDED.published,
          status = 'building',
@@ -303,7 +302,6 @@ export async function createMachineDocumentService(
         chat.ai_session_id,
         ownerUserId,
         chat.answers.name,
-        `${tags.join("・")}を学べるセキュリティ演習マシンです。`,
         BUILDING_MACHINE_DESCRIPTION,
         difficultyToLevel(chat.answers.difficulty),
         chat.answers.visibility === "公開",

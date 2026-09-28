@@ -275,7 +275,7 @@ export function MachineListResults({
                         <ArrowUpRight className="mt-0.5 shrink-0" aria-hidden="true" size={16} />
                       </Link>
                       <p className="mt-2 line-clamp-2 text-[0.76rem] leading-relaxed text-[#a7b3c9] [overflow-wrap:anywhere]">
-                        {machine.description || machine.summary || "概要はまだ登録されていません。"}
+                        {machine.description || "説明はまだ登録されていません。"}
                       </p>
                     </th>
                     <td className="px-4 py-5">

@@ -11,15 +11,7 @@ import type { MachineRecord } from "@/types/postgres"
 
 type MachineListRow = Pick<
   MachineRecord,
-  | "created_at"
-  | "description"
-  | "id"
-  | "level"
-  | "name"
-  | "published"
-  | "status"
-  | "summary"
-  | "tags"
+  "created_at" | "description" | "id" | "level" | "name" | "published" | "status" | "tags"
 > & {
   author_id: string
   author: string
@@ -81,7 +73,7 @@ export async function getMachineListService(
 
   const result = await queryDatabase<MachineListRow>(
     `SELECT
-       m.id, m.name, m.summary, m.description, m.tags, m.level, m.created_at,
+       m.id, m.name, m.description, m.tags, m.level, m.created_at,
        m.published, m.status, m.created_by AS author_id, u.name AS author,
        u.icon_url AS author_icon_url,
        (m.created_by = $1) AS is_owned,
@@ -99,7 +91,6 @@ export async function getMachineListService(
   const machines: MachineListItem[] = result.rows.map((row) => ({
     id: row.id,
     name: row.name,
-    summary: row.summary,
     description: row.description,
     tags: row.tags,
     level: row.level,

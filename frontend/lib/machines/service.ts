@@ -178,9 +178,9 @@ export async function getMachineDetailService(
     author: machine.owner_name || "ユーザー",
     createdAt: formatCreatedAt(machine.created_at),
     visibility: machine.published ? "公開" : "非公開",
-    theme: machine.tags[0] ?? "セキュリティ",
+    tags: machine.tags,
     difficulty: toDifficulty(machine.level),
-    summary: machine.summary,
+    canEdit: isOwner && machine.status === "ready",
     description,
     buildProgress: machine.build_progress ?? 0,
     buildFailure,
@@ -204,6 +204,35 @@ export async function getMachineDetailService(
         }
       : null,
   }
+}
+
+export type MachineEditableFields = Pick<MachineRecord, "name" | "level" | "published">
+
+export async function updateMachineDetailsService(
+  ownerUserId: string,
+  machineId: string,
+  fields: MachineEditableFields,
+): Promise<(MachineEditableFields & { chatSessionId: string | null }) | null> {
+  return withDatabaseTransaction(async (client) => {
+    const updated = await client.query<MachineEditableFields>(
+      `UPDATE machines SET name = $3, level = $4, published = $5, updated_at = now()
+       WHERE id = $1 AND created_by = $2 AND status = 'ready'
+       RETURNING name, level, published`,
+      [machineId, ownerUserId, fields.name, fields.level, fields.published],
+    )
+    if (!updated.rows[0]) return null
+
+    const chat = await client.query<{ ai_session_id: string }>(
+      `UPDATE chat_sessions SET
+         name = $2::text,
+         answers = jsonb_set(answers, '{name}', to_jsonb($2::text), true),
+         updated_at = now()
+       WHERE machine_id = $1 AND owner_user_id = $3
+       RETURNING ai_session_id`,
+      [machineId, fields.name, ownerUserId],
+    )
+    return { ...updated.rows[0], chatSessionId: chat.rows[0]?.ai_session_id ?? null }
+  })
 }
 
 export async function generateMachineGuidanceService(

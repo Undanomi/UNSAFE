@@ -57,14 +57,13 @@ async function main() {
     for (const machine of SEED_MACHINES) {
       await client.query(
         `INSERT INTO machines
-          (id, created_by, ai_session_id, name, summary, description, file_path, level,
+          (id, created_by, ai_session_id, name, description, file_path, level,
            published, status, build_progress, system_flag, user_flag, tags, created_at, updated_at)
-         VALUES ($1, $2, NULL, $3, $4, $5, '', $6, true, 'ready', 100, $7, $8, $9, $10, $10)
+         VALUES ($1, $2, NULL, $3, $4, '', $5, true, 'ready', 100, $6, $7, $8, $9, $9)
          ON CONFLICT (id) DO UPDATE SET
            created_by = EXCLUDED.created_by,
            ai_session_id = EXCLUDED.ai_session_id,
            name = EXCLUDED.name,
-           summary = EXCLUDED.summary,
            description = EXCLUDED.description,
            file_path = EXCLUDED.file_path,
            level = EXCLUDED.level,
@@ -81,7 +80,6 @@ async function main() {
           machine.id,
           machine.createdBy,
           machine.name,
-          machine.summary,
           machine.description,
           machine.level,
           machine.systemFlag,
