@@ -1,336 +1,87 @@
-# SLSG AI Server
+# UNSAFE AI Server
 
-FastAPI で実装した、シナリオ生成・VM ソース生成・build_server 連携サービスです。
-セッション、シナリオ、バージョン、生成状態は専用の PostgreSQL に保存します。
+## 概要
 
-## 処理フロー
+AI Server は、学習用マシンのシナリオと VM 構築用ソースを生成するサービスです。生成条件と進捗をセッションごとに保存し、ソースを検証してから Build Server にビルドを依頼します。完成したマシンは、AI Server が発行する一時的な URL からダウンロードできます。
 
-```text
-セッション作成
-  -> マシン基本情報を保存
-  -> シナリオを生成して SSE 配信
-  -> 選択したシナリオでマシン作成を要求
-  -> VM ソースを生成・静的検証
-  -> 候補専用コンテナでruntime導入・ビルド・テスト
-  -> AI意味レビュー・ZIP 化
-  -> build_server に非同期ビルドを依頼
-  -> ai_server が発行した一時的な署名付き URL から成果物をダウンロード
-```
+## 起動方法
 
-マシン作成後の `生成・差分修正 -> build_server投入 -> ビルド監視 -> 必要なら再修正` は
-LangGraphの明示的なノードと条件分岐で実行します。セッションDBを永続状態として使うため、APIプロセスの
-メモリだけを正とせず、既存の再開・キャンセル契約を維持します。
+### AI Server と Build Server を一緒に起動する
 
-生成ソースは PoC と同じ契約を使います。
+リポジトリのルートにある Docker Compose を使います。この構成では AI Server、Build Server と、それぞれの PostgreSQL が起動します。フロントエンドは別のプロファイルなので、通常の `docker compose up` では起動しません。
+
+**1. ビルドに必要なものを確認する**
+
+VM のビルドには、Docker を実行する Linux ホストで `/dev/kvm` が使えることと、対象 OS のベースイメージが必要です。KVM は VM の実行を高速化する Linux の機能です。ベースイメージは VM の土台になるディスクファイルで、既定の `Debian 13.7.0` には次のファイルを用意します。
 
 ```text
-{SOURCE_ROOT}/{session_id}/{scenario_version_id}/source/
-├── contents/
-│   ├── README.md
-│   ├── scenario_manifest.json
-│   ├── build.sh
-│   ├── scripts/provision.sh
-│   ├── scripts/install-flags.sh # AIサーバーが配置情報から生成
-│   ├── scripts/verify.sh      # Packerがプロビジョニング後に必ず実行
-│   ├── app/                 # シナリオに応じて生成
-│   └── config/              # シナリオに応じて生成
-├── generation_manifest.json
-├── validation_report.json
-└── repair_report.json
+build_server/builder/base_images/debian-13.7.0-amd64.qcow2
 ```
 
-build_server へは、この生成ルートを `source.zip` として送ります。生成コードを
-ai_server ホスト上で実行することはありません。
-User/System flagの実値はモデルへ渡しません。モデルは`scenario_manifest.json`の
-`flag_placements`へ配置先、owner、group、modeだけを構造化して返し、AIサーバーが
-`install-flags.sh`と内容・所有者・権限を確認する必須検査を生成します。実値を含むサーバー生成
-スクリプトは修復用のモデル入力とWorkbenchから除外します。
+AI Server のイメージをビルドすると、パスワード解析を含む演習で使う `rockyou.txt` も取得されます。これはよく使われるパスワードの一覧です。手動で配置する必要はありません。
 
-Webサービスを含む生成物は、IPアドレスだけで`/`へアクセスしたときにシナリオ固有の
-入口へ到達することを必須とします。HTTP応答、アプリ固有の肯定検査、Web実行ユーザーの実効権限は、
-ソース文字列から推測せず、Packerが`contents/scripts/verify.sh`を実行した結果と敵対的AIレビューで
-確認します。フラグの配置・認証・誤った値の拒否も同じ実行検査で確認します。
-ディレクトリリスティングも静的validationで一律禁止せず、攻撃グラフで意図した攻略要素かどうかを
-生成・レビュー時に判断します。
+**2. 環境変数を設定する**
 
-シナリオは、攻略のネタバレを避けたプレイヤー向けの `scenario_description`、実装者向けの
-`scenario_definition`（Markdown）、ビルド・検証用の `attack_graph`（JSON）、完成内容からAIが生成した
-検索・分類用の `tags` を保存します。
-攻撃グラフは可変長のステップ、
-ステップ間の依存関係、user/system flagの到達目標を持ちます。CVEは攻撃ステップの任意の
-種類の1つであり、Web脆弱性、設定不備、認証情報、ロジック不備なども組み合わせられます。
-CVEを使うステップだけ、公式レコードと対象OSへの適合性を追加検証します。
-
-## uv で起動
-
-Python 3.13 と uv が必要です。最初に PostgreSQL を起動します。
-`.env.example` をコピーした後、空欄の `AI_POSTGRES_PASSWORD` と
-`BUILD_SERVER_TOKEN` にランダムな値を設定し、`DATABASE_URL` の
-`<password>` も同じDBパスワードで置き換えてください。
+リポジトリのルートでテンプレートをコピーし、`.env` を編集します。
 
 ```sh
-cd ai_server
 cp .env.example .env
-docker compose up -d ai-postgres
-uv sync --dev
-AI_PROVIDER=stub uv run uvicorn ai_server.main:app --reload --port 8000
+stat -c '%g' /dev/kvm
 ```
 
-実際のAIプロバイダーは `.env` の `AI_PROVIDER` で選択します。
+`stat` の出力は KVM デバイスのグループ ID です。次の表に従って `.env` の値を設定してください。パスワードやトークンには、それぞれ `openssl rand -hex 32` などで生成した値を使えます。
 
-- Gemini 2.5 Flash: `AI_PROVIDER=gemini` と `GEMINI_API_KEY` を設定
-- GPT-5.6 Luna: `AI_PROVIDER=openai` と `OPENAI_API_KEY` を設定
-- スタブ: `AI_PROVIDER=stub`（APIとbuild_serverの結合確認用）
+| 変数 | 設定する値 |
+| --- | --- |
+| `AI_POSTGRES_PASSWORD` | AI Server 用 PostgreSQL のパスワード。 |
+| `BUILD_POSTGRES_PASSWORD` | Build Server 用 PostgreSQL のパスワード。上とは別の値にする。 |
+| `FRONTEND_POSTGRES_PASSWORD` | フロントエンド用 PostgreSQL のパスワード。フロントエンドを起動しない場合も、Compose の設定を読み込むために値が必要。 |
+| `INTERNAL_API_TOKEN` / `BUILD_SERVER_TOKEN` | Build Server への内部リクエストを認証するトークン。**両方に同じ 32 文字以上の値**を設定する。 |
+| `KVM_GID` | 上の `stat` で表示された数値。Build Server の worker が `/dev/kvm` を使うために必要。 |
 
-OpenAIでは既定で `OPENAI_MODEL=gpt-5.6-luna`、
-`OPENAI_REASONING_EFFORT=medium` を使用します。APIキーはフロントエンドへ渡さず、
-ai_serverの環境変数またはデプロイ基盤のSecret Managerへ設定してください。
+AI による生成を使う場合は、選ぶプロバイダーに応じて次の値も `.env` に追加します。
 
-VMコード生成はシナリオ生成より応答が大きくなるため、AIプロバイダー用HTTPクライアントには
-`AI_TIMEOUT_SECONDS`（既定値600秒）を使用します。出力上限は
-Geminiでは`GEMINI_MAX_OUTPUT_TOKENS`（既定値65536）、OpenAIでは
-`OPENAI_MAX_OUTPUT_TOKENS`（既定値65536）で変更できます。OpenAIの値には
-推論トークンと表示される出力トークンの両方が含まれます。build_serverとの内部通信には
-別の `BUILD_TIMEOUT_SECONDS` を使用します。
-攻撃グラフの生成失敗またはシナリオの敵対的AIレビュー不合格時の再試行回数は
-`SCENARIO_GENERATION_ATTEMPTS`（既定値5）、
-CVE検証・生成・修復・レビューなど単一の構造化AI操作内で不正な応答を再試行する回数は
-`GENERATION_RETRIES`（既定値3）です。ソース修復で意味契約が変わった場合、またはレビューが
-シナリオ本文の修正を要求した場合に、実装と本文を同期して再レビューする回数は
-`SCENARIO_SYNC_ATTEMPTS`（既定値3）で、ソース生成回数とは別に記録されます。
-OpenAIへの通信は全ワークフローで共有するキューを通し、既定では同時1リクエスト、開始間隔1秒に
-抑えます。一時的な429・503・通信障害は`Retry-After`を優先し、指定がなければ指数バックオフと
-ジッターで最大8回・合計600秒まで再試行します。課金残高、組織・プロジェクトのspend limit、
-usage limitは待機しても回復しないため再試行しません。これらは`AI_MAX_CONCURRENT_REQUESTS`、
-`AI_REQUEST_MIN_INTERVAL_SECONDS`、`AI_TRANSIENT_RETRY_ATTEMPTS`、
-`AI_TRANSIENT_RETRY_MAX_SECONDS`、`AI_TRANSIENT_RETRY_JITTER_SECONDS`で変更できます。
-CVEステップを使う場合の公開年の下限は `CVE_MIN_YEAR`（既定値2024）で変更できます。
-完成したシナリオは保存前に独立したAI呼び出しで意味レビューされます。攻撃グラフとの一貫性、
-前提ステップを飛ばす近道、実装可能性、acceptance test計画に加え、実行主体、owner/group/mode、
-親ディレクトリの探索権限、ACL・sudo・setuid・capability、flagの攻略前後の可読性を重点確認します。
-不合格所見は次の生成試行へ渡され、レビューを通過したシナリオだけが保存されます。
-初回レビューは重大な問題をまとめて検出し、本文修正後は直前の未解決findingと直接の回帰だけを
-固定スコープで確認します。修正AIには解消済みの古いレビューを累積せず、現在の診断だけを渡します。
-具体的なフレームワーク内部の配線や完成コードはシナリオ本文で紙上証明させず、ソースレビューと
-Packer上の受入試験へ委ねます。攻撃グラフを修正・再生成した場合は固定スコープを破棄します。
-生成ソースは必須ファイル、JSON Schema、パス安全性、および生成物に存在するXML/JSON/Python/Bashの
-構文など、技術スタックに依存しない決定的preflight validationに加え、
-攻撃グラフと実コードを比較する
-敵対的AIレビューを通過する必要があります。意図した手法を使わない近道、通常機能による成果物の
-先出し、単なるエラーや接続成功だけのexploit判定、前提ステップを飛ばせる攻撃経路は修復対象です。
-初回は全体を監査しますが、その後は未解決findingと変更ファイルの回帰へ範囲を固定します。サービス、
-脆弱性、攻撃ステップ、目的などの契約が変わった場合だけ全体監査とシナリオ同期を開き直し、README、
-テスト、ビルド手順だけの修正では同期しません。不合格候補も捨てず、直前までに成立した修正を保ったまま
-次の最小差分を重ねます。
-この意味レビューの不合格と再修復はbuild_serverへ投入されないため、`build_repair_attempts`を増やしません。
+| `AI_PROVIDER` | あわせて設定する変数 | 用途 |
+| --- | --- | --- |
+| `gemini` | `GEMINI_API_KEY` | Gemini でシナリオとソースを生成する。 |
+| `openai` | `OPENAI_API_KEY` | OpenAI でシナリオとソースを生成する。 |
+| `stub` | なし | API の接続確認用。AI による生成の代わりに固定の応答を使う。 |
 
-意味レビューの前には、生成候補ごとの隔離ワークベンチを作ります。実行環境は既定で
-`debian:13-slim`から毎回新規作成し、Node.js、Pythonなどの言語runtimeはあらかじめ入れません。
-AIは生成済みの`provision.sh`を読み、そこに宣言されたOS packageを候補内で実際に導入してから、
-構文検査、依存解決、コンパイル、既存テスト、およびprovision固有の導入後検査を1コマンドずつ実行します。
-コマンドは調査と合否検証を区別し、`cat`や`stat`など調査上の失敗を修正完了のブロッカーにしません。
-合否検証が失敗した場合はコンテナを破棄せず、同じ候補内で実際の依存物を調査し、生成ソースへ限定パッチを
-適用します。完了時には失敗した検証をシステム側が同じ条件で再実行します。操作枠を使い切ってもSandboxの
-ソース差分を候補へ回収してからコンテナを破棄するため、package managerが生成したlockfileや有効な途中修正を
-次の修復ループへ引き継ぎます。これにより、runtimeのpackage名や導入手順そのものも検証対象になります。
-Workbenchの合格には少なくとも1件の合否検証成功を必須とし、調査だけでの完了、検証拒否、説明だけの
-`finish`を合格にはしません。明示的な検証拒否や、変更も検証証拠もないまま操作枠を使い切った場合は、
-根拠のないソース修正を繰り返さずワークフローを明確に失敗させます。候補内のREADMEやログは未信頼データとして
-扱い、そこに含まれる指示や作業拒否をエージェントへの命令として扱いません。
-`contents/scripts/install-flags.sh`と`contents/scripts/verify.sh`は後段のアーカイブ作成時にサーバーが
-生成するため、Workbench内の存在確認対象にはしません。共有されるのは読み取り元の不変なベースイメージだけで、
-コンテナ、書き込み可能なroot filesystem、`/workspace`、`/tmp`、導入済みpackage、生成物は候補ごとに
-独立し、検証終了時に破棄されます。実フラグとパスワードはワークベンチへ渡しません。
+`DOWNLOAD_SIGNING_SECRET` はダウンロード URL の署名鍵、`SOURCE_SANDBOX_TOKEN` は生成ソースの検証環境との通信に使うトークンです。Compose には開発用の既定値があります。共有環境で動かす場合は、どちらも 32 文字以上のランダムな値を `.env` に追加してください。
 
-ワークベンチ要求は単一の`source-sandbox`サービス内のFIFOキューで受け付け、既定では同時に2候補まで
-実行します。`SOURCE_SANDBOX_MAX_CONCURRENT`で同時実行数、`SOURCE_SANDBOX_QUEUE_CAPACITY`で待機上限、
-`SOURCE_SANDBOX_SESSION_TTL_SECONDS`で操作のない候補の保持時間を変更できます。キューはコンテナを共有する
-ためのものではなく、DockerホストのCPU・メモリ・package download負荷を制御するものです。
-キューは単一の`source-sandbox`プロセスが所有し、サービス再起動時は同じラベルを持つ孤立候補を
-先に削除してから受付を再開します。
-各候補コンテナには1GiB、2 CPU、256 processの上限を設定し、通常コマンドは非rootで実行します。
-調査、パッチ、再検証を含む操作枠は`SOURCE_WORKBENCH_ACTION_LIMIT`（既定値20）で変更できます。
-各コマンドの既定タイムアウトは`SOURCE_SANDBOX_COMMAND_TIMEOUT_SECONDS=600`（10分）です。API通信は
-終了処理の猶予を含めて`SOURCE_SANDBOX_TIMEOUT_SECONDS=660`とし、コマンドより先に切断しないようにします。
-root実行と一時的なnetwork接続はOS package導入コマンドだけに制限します。systemd、サービス起動、
-Packer固有処理、完全なプロビジョニングはこの軽量環境で代用せず、後段の使い捨てVMで検証します。
-networkも候補ごとに専用bridgeを作り、ソース投入前に切断し、package導入コマンドの間だけ再接続して
-終了時に削除するため、同時実行中の別候補と同じnetwork namespaceやbridgeを共有しません。
+**3. 起動して確認する**
 
-Packerビルド失敗後の自動差分修正回数は `BUILD_REPAIR_MAX_ATTEMPTS`（既定値3）で変更でき、
-`0` を指定すると自動修正を無効化できます。`build_repair_attempts`はbuild_serverへの投入に成功した
-修復ビルドの累積実行回数で、静的validationの再試行とbuild_serverへの接続失敗では増えません。
-各Build枠では `SOURCE_GENERATION_ATTEMPTS`（既定値3）までvalidationと差分修正を行います。
-その回数を使い切っても次のBuild枠が残っていれば自動的に次枠へ進むため、最初のBuildを含む
-1サイクルのvalidation上限は
-`(1 + BUILD_REPAIR_MAX_ATTEMPTS) * SOURCE_GENERATION_ATTEMPTS`です。
-失敗後に`POST /machines`を明示的に再実行すると、その時点の累積回数へ
-`BUILD_REPAIR_MAX_ATTEMPTS`を加えた値を新しいサイクルの上限とし、さらに設定回数分を自動修復できます。
-投入成功ごとに以前の回数へ1加算し、値を0や上限値へリセットしません。状態確認のGETだけでは
-修復サイクルを追加しません。
+```sh
+docker compose up --build -d
+docker compose ps
+curl http://localhost:8000/v1/health/ready
+```
 
-## Docker で起動
+正常ならヘルスチェックは `{"status":"ok"}` を返します。API は `http://localhost:8000`、対話的な API 画面は `http://localhost:8000/docs` です。Build Server の API は Compose 内部の `http://server:8080` にあり、ホストへは公開されません。
 
-既知の開発用シークレットへのフォールバックはありません。起動前に環境ファイルを作成し、
-空欄の値をランダムな値で埋めてください。ルートComposeでは
-`INTERNAL_API_TOKEN` と `BUILD_SERVER_TOKEN` に同じ値を設定します。
-APIトークンは32文字以上が必須です。DBパスワードとAPIトークンには、
-それぞれ `openssl rand -hex 32` などで生成した
-別の値を使用してください。
+### AI Server だけを起動する
 
-ai_server と専用 PostgreSQL だけを起動する場合:
+AI Server の API だけを確認する場合は、専用の Compose 設定を使えます。リポジトリのルートでテンプレートをコピーしてから、`ai_server/.env` の値を編集してください。
 
 ```sh
 cp ai_server/.env.example ai_server/.env
-docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build
 ```
 
-`ai_server`イメージのビルド時に、Kali Linux公式リポジトリの固定コミットから
-`rockyou.txt.gz`を取得し、SHA-256を検証して展開します。ハッシュクラックを含む場合もGeminiへ
-実際のパスワードは渡さず、ソース内では`__SLSG_ROCKYOU_PASSWORD__`だけを使用させます。最初の
-ソース生成後に、ai_serverが`ROCKYOU_MIN_LINE`〜`ROCKYOU_MAX_LINE`からランダムな平文を選び、
-アーカイブ作成時にプレースホルダーを置換します。既定の範囲は、ハッシュ方式とwork factorを調整して
-一般的な開発用PCで約2〜3分の辞書探索にするための目安です。固定長の16進文字列をパスワードハッシュ
-らしさだけで拒否する検査は行わないため、パッケージや配布物のchecksumを誤検知しません。
+| 変数 | 設定する値 |
+| --- | --- |
+| `AI_POSTGRES_PASSWORD` | AI Server 用 PostgreSQL のパスワード。 |
+| `BUILD_SERVER_TOKEN` | 32 文字以上のランダムな値。既定の例示値は必ず変更する。 |
+| `AI_PROVIDER` と対応する API キー | Gemini または OpenAI を使う場合に設定する。接続確認だけなら `AI_PROVIDER=stub`。 |
+| `AI_BUILD_SERVER_URL` | 別に起動した Build Server と連携するときに設定する、AI Server コンテナから到達可能な URL。 |
 
-build_server を含むバックエンドサービスをリポジトリルートから起動する場合:
-
-ルート Compose は Docker Compose v5.5.1 で検証しています。`include` 済みサービスへの
-設定追加を扱えない Compose v2 系では `conflicts with imported resource` が発生するため、
-Docker Desktop を更新してから実行してください。
+この Compose では Build Server は起動しません。マシンのビルドまで行う場合は、別の Build Server を用意し、その `INTERNAL_API_TOKEN` と `BUILD_SERVER_TOKEN` を同じ値にしてください。テンプレートの `DATABASE_URL` はホストから直接起動する場合の設定で、Compose では使用しません。共有環境では `DOWNLOAD_SIGNING_SECRET` と `SOURCE_SANDBOX_TOKEN` も変更してください。
 
 ```sh
-cp .env.example .env
-docker compose up --build
+docker compose --env-file ai_server/.env -f ai_server/compose.yml up --build -d
 ```
 
-frontend も production イメージで起動する場合は `frontend` profile を追加します。
+管理画面が必要な場合は、使用する `.env` に `SQLADMIN_USERNAME`、`SQLADMIN_PASSWORD`、`SQLADMIN_SESSION_SECRET` を設定します。ルートの Compose なら `docker compose --profile admin up --build -d`、AI Server 単体なら上の起動コマンドに `--profile admin` を追加してください。
 
-```sh
-docker compose --profile frontend up --build
-```
+## API仕様
 
-本番では `.env` を配布せず、デプロイ基盤のSecret Managerから
-`AI_POSTGRES_PASSWORD`、`BUILD_POSTGRES_PASSWORD`、`INTERNAL_API_TOKEN`、
-`BUILD_SERVER_TOKEN`、選択したプロバイダーの`GEMINI_API_KEY`または`OPENAI_API_KEY`を
-注入してください。既存のPostgreSQLボリュームがある場合、
-`POSTGRES_PASSWORD` の変更だけではDB内のパスワードは更新されません。先に対象ロールの
-パスワードを変更してから接続側の環境変数を切り替える必要があります。
-
-ルート Compose 起動では build worker が `/dev/kvm` とベースイメージを必要とします。
-詳細は `build_server/README.md` を参照してください。
-
-Compose内のai_serverは既定で `http://server:8080` へ接続します。build_serverの8080番ポートは
-ホストへ公開せず、利用者からの状態取得と成果物ダウンロードはai_serverが中継します。
-Composeから別のbuild serverを使う場合は `AI_BUILD_SERVER_URL` で上書きします。ai_serverだけを
-ホスト上でuv起動する場合は、build_serverへ到達できる内部URLを `BUILD_SERVER_URL` に指定します。
-
-## API の利用例
-
-署名付きURLからのダウンロードを除く操作では、同じ `X-Authenticated-User-ID` を指定します。
-開発時に省略した場合は`local-user`として扱います。
-
-```sh
-SESSION_ID=$(curl -s -X POST http://localhost:8000/v1/sessions \
-  -H 'X-Authenticated-User-ID: user-123' | jq -r .session_id)
-
-curl -X PUT "http://localhost:8000/v1/sessions/$SESSION_ID/machine-information" \
-  -H 'Content-Type: application/json' \
-  -H 'X-Authenticated-User-ID: user-123' \
-  -d '{
-    "name":"Nginx Engine",
-    "visibility":"private",
-    "theme":"Web security",
-    "difficulty":"Easy",
-    "operating_system":"Debian 13.7.0",
-    "needs_user_flag":true,
-    "user_flag_details":"/home/student/user.txt",
-    "needs_system_flag":false
-  }'
-
-curl -N "http://localhost:8000/v1/sessions/$SESSION_ID/scenarios/events" \
-  -H 'X-Authenticated-User-ID: user-123'
-
-curl -X POST "http://localhost:8000/v1/sessions/$SESSION_ID/machines" \
-  -H 'Content-Type: application/json' \
-  -H 'X-Authenticated-User-ID: user-123' \
-  -d '{}'
-
-curl "http://localhost:8000/v1/sessions/$SESSION_ID" \
-  -H 'X-Authenticated-User-ID: user-123'
-```
-
-build_serverへの接続だけが失敗した場合は、同じ `POST /machines` を再実行できます。生成済みの
-`source.zip` が残っていれば、AIコード生成を繰り返さずにビルド依頼から再開します。
-Packerビルド自体が失敗またはキャンセルされた場合は、ai_serverがバックグラウンドで失敗を
-検知し、ビルドエラーをAIへ渡して、失敗に関係するファイルだけを自動で差分修正します。
-Packerはフェーズ、失敗したスクリプト、行番号、終了コードを`SLSG_SCRIPT_FAIL`として記録し、
-コマンドトレースで秘密値を出力しません。検証完了後は生成ソースをVMの`/tmp`から削除します。
-新しいビルドも継続して監視するため、クライアントからの状態ポーリングが止まっても次の修正へ
-進みます。既定では3回まで行い、上限に達した場合は `failed` になります。修正履歴は
-`repair_report.json` で確認できます。
-上限到達後に同じ `POST /machines` を明示的に再実行すると、修正回数をリセットして新たな
-3回分の自動修正を開始します。ビルドの開始と失敗後の再開を要求できるのは
-`POST /machines` だけです。`GET /sessions/{session_id}` と `POST /download-url` は最新状態を
-同期するだけで、修復ビルドを開始しません。すでに `POST /machines` から開始済みの
-バックグラウンド監視と自動修復は、これらのエンドポイントへのアクセスに関係なく継続します。
-
-状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
-HMAC署名され、既定では30分だけ有効です。build_server の内部 URL をブラウザへ露出せず、
-`image.qcow2`、Windows/macOS用のPDFと起動スクリプトを含む`<artifact_id>.zip`をストリーミングします。
-Rangeリクエスト、`ETag`（成果物のSHA256）、`If-Range`にも対応するため、中断後に同じ成果物の
-ダウンロードを再開できます。期限切れの場合は、認証が必要な
-`POST /v1/sessions/{session_id}/download-url` で新しいURLを取得してください。同時に、ランダム化
-された `provisioner` ユーザーの認証情報を `machine_access` としてai_serverのセッションへ保存します。
-ダウンロード応答には`application/zip`と配信範囲に対応するサイズを設定します。
-
-署名鍵は本番環境で必ずランダムな32文字以上の`DOWNLOAD_SIGNING_SECRET`へ変更してください。
-有効期間は`DOWNLOAD_URL_TTL_SECONDS`で変更でき、既定値は1800秒です。署名付きURLは認証情報と
-同様に扱い、ログや第三者へ共有しないでください。
-
-OpenAPI UI は `http://localhost:8000/docs` で確認できます。
-
-## SQLAdmin 管理画面
-
-セッション、シナリオ、シナリオバージョン、およびSkillの状態・メタデータを確認・編集できる
-SQLAdminはAPIとは別の管理サービスとして用意しています。通常は起動しません。使用する場合は
-`.env` に次の値を設定します。
-
-```dotenv
-SQLADMIN_USERNAME=admin
-SQLADMIN_PASSWORD=<十分に長いランダムなパスワード>
-SQLADMIN_SESSION_SECRET=<32文字以上のランダム値>
-SQLADMIN_SECURE_COOKIES=false
-```
-
-Composeでは`admin`プロファイルを指定して起動します。
-
-```console
-docker compose --profile admin --env-file ai_server/.env -f ai_server/compose.yml up --build
-```
-
-起動後は `http://localhost:8001/admin` からログインできます。管理ポートは既定で
-`127.0.0.1`だけに公開され、APIの8000番ポートから管理画面へはアクセスできません。
-本番環境でリバースプロキシ経由で公開する場合はHTTPSを使用し、
-`SQLADMIN_SECURE_COOKIES=true` にしてください。認証値が不足している場合やセッション秘密鍵が
-32文字未満の場合、ai-adminは設定エラーで起動しません。管理画面から既存レコードを編集できますが、
-主キーと作成日時の変更、およびレコードの作成・削除は無効化しています。ステータスや外部IDの
-編集は実行中のワークフローへ影響するため、運用上必要な場合に限って変更してください。
-公開済みSkillバージョンとセッションごとのSkill選択結果は再現性を保つため読み取り専用です。
-新しいSkillバージョンは従来どおり`ai-server-skills publish`で発行してください。
-管理画面の「Runtime limits」では、ビルド修復回数に加えて生成、配信、Skill選択に関する
-現在の非機密な上限設定と許容範囲を確認できます。設定値は環境変数で変更し、サービスの再起動後に
-反映されます。AI sessionの詳細には、シナリオ生成とソース生成・検証についても、セッションごとの
-累積試行回数と割り当て済み上限を保存して表示します。シナリオ側は生成と意味レビューの1巡、
-ソース側は生成または修復から静的検証・意味レビューまでの1巡を、それぞれ1試行として数えます。
-
-各エンドポイントの役割、入出力、SSEイベント、状態遷移、エラー条件は
-[`docs/endpoints.md`](docs/endpoints.md) にまとめています。
-
-## テスト
-
-```sh
-cd ai_server
-uv run ruff check .
-uv run pytest
-```
+API の詳細な仕様は[こちら](docs/spec.md)を参照してください。機械可読な定義は [OpenAPI](api/openapi.yaml) にあります。
