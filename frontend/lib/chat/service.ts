@@ -132,6 +132,24 @@ export async function listChatSessionsService(ownerUserId: string): Promise<Chat
   })
 }
 
+export async function canModifyMachineCreationService(
+  ownerUserId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const result = await queryDatabase<{ allowed: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM chat_sessions c
+       WHERE c.ai_session_id = $1 AND c.owner_user_id = $2
+         AND c.creation_status <> 'completed'
+         AND NOT EXISTS (
+           SELECT 1 FROM machines m WHERE m.id = c.machine_id AND m.status = 'ready'
+         )
+     ) AS allowed`,
+    [sessionId, ownerUserId],
+  )
+  return result.rows[0]?.allowed ?? false
+}
+
 export async function saveChatProgressService(
   ownerUserId: string,
   sessionId: string,
@@ -143,6 +161,10 @@ export async function saveChatProgressService(
     `UPDATE chat_sessions SET
        name = $3, current_step = $4, basic_ready = $5, answers = $6, updated_at = now()
      WHERE ai_session_id = $1 AND owner_user_id = $2
+       AND creation_status <> 'completed'
+       AND NOT EXISTS (
+         SELECT 1 FROM machines m WHERE m.id = chat_sessions.machine_id AND m.status = 'ready'
+       )
      RETURNING *`,
     [sessionId, ownerUserId, answers.name.trim(), currentStep, basicReady, answers],
   )
@@ -158,7 +180,16 @@ export async function setChatCreationStatusService(
     `UPDATE chat_sessions SET
        creation_status = $3, creation_failure = NULL, error_message = NULL,
        updated_at = now()
-     WHERE ai_session_id = $1 AND owner_user_id = $2`,
+     WHERE ai_session_id = $1 AND owner_user_id = $2
+       AND (
+         $3 = 'completed'
+         OR (
+           creation_status <> 'completed'
+           AND NOT EXISTS (
+             SELECT 1 FROM machines m WHERE m.id = chat_sessions.machine_id AND m.status = 'ready'
+           )
+         )
+       )`,
     [sessionId, ownerUserId, creationStatus],
   )
   return result.rowCount === 1
@@ -173,7 +204,11 @@ export async function setChatCreationFailureService(
     `UPDATE chat_sessions SET
        creation_status = 'failed', creation_failure = $3::jsonb,
        error_message = $4, updated_at = now()
-     WHERE ai_session_id = $1 AND owner_user_id = $2`,
+     WHERE ai_session_id = $1 AND owner_user_id = $2
+       AND creation_status <> 'completed'
+       AND NOT EXISTS (
+         SELECT 1 FROM machines m WHERE m.id = chat_sessions.machine_id AND m.status = 'ready'
+       )`,
     [sessionId, ownerUserId, failure, failure.summary],
   )
   return result.rowCount === 1
@@ -185,7 +220,7 @@ export async function setChatCreationCancelledService(
 ): Promise<boolean> {
   return withDatabaseTransaction(async (client) => {
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
-    if (!chat) return false
+    if (!chat || (await isCompletedMachine(client, chat))) return false
 
     await client.query(
       `UPDATE chat_sessions SET
@@ -211,7 +246,7 @@ export async function setChatCreationReadyService(
 ): Promise<boolean> {
   return withDatabaseTransaction(async (client) => {
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
-    if (!chat) return false
+    if (!chat || (await isCompletedMachine(client, chat))) return false
 
     await client.query(
       `UPDATE chat_sessions SET
@@ -247,6 +282,16 @@ async function lockOwnedChat(client: PoolClient, ownerUserId: string, sessionId:
   return result.rows[0] ?? null
 }
 
+async function isCompletedMachine(client: PoolClient, chat: ChatSessionRow): Promise<boolean> {
+  if (chat.creation_status === "completed") return true
+  if (!chat.machine_id) return false
+  const result = await client.query<{ completed: boolean }>(
+    "SELECT EXISTS (SELECT 1 FROM machines WHERE id = $1 AND status = 'ready') AS completed",
+    [chat.machine_id],
+  )
+  return result.rows[0]?.completed ?? false
+}
+
 export async function createMachineDocumentService(
   ownerUserId: string,
   sessionId: string,
@@ -254,7 +299,7 @@ export async function createMachineDocumentService(
 ): Promise<string | null> {
   return withDatabaseTransaction(async (client) => {
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
-    if (!chat) return null
+    if (!chat || (await isCompletedMachine(client, chat))) return null
 
     const userFlag = resolveMachineFlag(chat.answers.needsUserFlag, generated.userFlag)
     const systemFlag = resolveMachineFlag(chat.answers.needsSystemFlag, generated.systemFlag)
@@ -296,7 +341,7 @@ export async function createMachineDocumentService(
          user_flag = EXCLUDED.user_flag,
          tags = EXCLUDED.tags,
          updated_at = now()
-       WHERE machines.created_by = EXCLUDED.created_by`,
+       WHERE machines.created_by = EXCLUDED.created_by AND machines.status <> 'ready'`,
       [
         machineId,
         chat.ai_session_id,
