@@ -8,20 +8,16 @@ export function ChatLoadingSkeleton() {
       </div>
       <div aria-hidden="true" className="slsg-chat-loading-content">
         <header className="slsg-chat-header">
-          <div className="slsg-chat-heading slsg-chat-loading-heading">
-            <span className="slsg-chat-loading-line is-eyebrow" />
-            <span className="slsg-chat-loading-line is-title" />
-            <span className="slsg-chat-loading-line is-description" />
+          <div className="slsg-chat-panel-header">
+            <span className="slsg-chat-loading-line is-panel-title" />
+            <span className="slsg-chat-loading-line is-panel-detail" />
+            <span className="slsg-chat-loading-button" />
           </div>
         </header>
 
         <div className="slsg-chat-layout">
           <div className="slsg-chat-conversation">
             <div className="slsg-chat-conversation-inner">
-              <div className="slsg-chat-panel-header">
-                <span className="slsg-chat-loading-line is-panel-title" />
-                <span className="slsg-chat-loading-line is-panel-detail" />
-              </div>
               <div className="slsg-chat-panel-body">
                 <div className="slsg-chat-message-list slsg-chat-loading-messages">
                   <div className="slsg-chat-loading-message">

@@ -235,11 +235,11 @@ export function MachineListResults({
         </div>
         {machines.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] table-fixed text-left text-[0.9rem]">
+            <table className="w-full min-w-[1000px] table-fixed text-left text-[0.9rem]">
               <caption className="sr-only">利用できるマシン一覧</caption>
               <thead className="slsg-machine-table-columns border-b text-[0.78rem] font-medium tracking-[0.02em] text-[#b8c3d6]">
                 <tr>
-                  <th scope="col" className="w-[28%] px-9 py-5">
+                  <th scope="col" className="w-[30%] px-9 py-5">
                     マシン名
                   </th>
                   <th scope="col" className="w-[20%] px-4 py-5">
@@ -251,7 +251,7 @@ export function MachineListResults({
                   <th scope="col" className="w-[12%] px-4 py-5">
                     回答状態
                   </th>
-                  <th scope="col" className="w-[17%] px-4 py-5">
+                  <th scope="col" className="w-[15%] px-4 py-5">
                     作成者
                   </th>
                   <th scope="col" className="w-[13%] px-4 py-5">
@@ -351,12 +351,15 @@ export function MachineListResults({
             <span>検索条件を変更して、もう一度お試しください。</span>
           </div>
         )}
-        <div className="slsg-machine-table-footer flex min-h-[87px] items-center justify-between gap-4 border-t px-9 max-sm:px-5">
+        <div className="slsg-machine-table-footer grid min-h-[87px] items-center gap-4 border-t px-9 max-sm:px-5">
           <span className="text-[0.8rem] text-[#a4b0cc]">
             全{total}件中 {firstVisible}–{lastVisible}件を表示
           </span>
           {total > 0 ? (
-            <nav aria-label="ページ切り替え" className="flex flex-wrap items-center gap-2">
+            <nav
+              aria-label="ページ切り替え"
+              className="flex max-w-full flex-wrap items-center justify-center gap-2"
+            >
               {page > 1 ? (
                 <Link
                   prefetch={false}
