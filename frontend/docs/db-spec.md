@@ -110,7 +110,7 @@ erDiagram
 | `created_by` | `varchar(128)` | — | `users.id` | 不可 | 作成者 |
 | `ai_session_id` | `varchar(128)` | — | — | 可 | AI セッション ID（一意） |
 | `name` | `varchar(40)` | — | — | 不可 | マシン名（1〜40文字） |
-| `summary` | `text` | — | — | 不可 | 一覧用の概要 |
+| `summary` | `text` | — | — | 不可 | 旧サマリー（現行アプリでは未使用） |
 | `description` | `text` | — | — | 不可 | 詳細説明 |
 | `file_path` | `text` | — | — | 不可 | 成果物のパス |
 | `level` | `varchar(6)` | — | — | 不可 | 難易度（easy / medium / hard） |
