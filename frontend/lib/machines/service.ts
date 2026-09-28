@@ -385,6 +385,8 @@ export async function verifyMachineFlagService(
   const correct = timingSafeEqual(expectedDigest, answerDigest)
   if (correct) {
     await withDatabaseTransaction(async (client) => {
+      // Serialize simultaneous flag submissions so the second one sees the first.
+      await client.query("SELECT id FROM machines WHERE id = $1 FOR UPDATE", [machineId])
       await client.query(
         `INSERT INTO machine_flag_solutions (user_id, machine_id, flag_kind)
          VALUES ($1, $2, $3)
@@ -392,9 +394,19 @@ export async function verifyMachineFlagService(
         [viewerUserId, machineId, kind],
       )
       await client.query(
-        `INSERT INTO machine_solutions (user_id, machine_id)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id, machine_id) DO NOTHING`,
+        `INSERT INTO machine_solutions (user_id, machine_id, solved_at)
+         SELECT $1, $2, MAX(fs.solved_at)
+         FROM machines m
+         JOIN machine_flag_solutions fs ON fs.machine_id = m.id AND fs.user_id = $1
+         WHERE m.id = $2 AND m.created_by <> $1
+           AND (
+             (fs.flag_kind = 'user' AND m.user_flag <> '')
+             OR (fs.flag_kind = 'system' AND m.system_flag <> '')
+           )
+         GROUP BY m.id, m.user_flag, m.system_flag
+         HAVING COUNT(*) = (m.user_flag <> '')::integer + (m.system_flag <> '')::integer
+         ON CONFLICT (user_id, machine_id) DO UPDATE SET
+           solved_at = EXCLUDED.solved_at`,
         [viewerUserId, machineId],
       )
     })

@@ -145,13 +145,13 @@ erDiagram
 
 ## machine_solutions
 
-利用者がマシンのいずれかのフラグを正解した事実を、利用者とマシンの組で記録する。解答済みマシン一覧にも使用する。
+利用者が他人のマシンに存在する全フラグを正解した事実を、利用者とマシンの組で記録する。解答済みマシン一覧にも使用する。
 
 | カラム名 | 型 | 主キー | 外部キー | nullable | 説明 |
 |---|---|---|---|---|---|
 | `user_id` | `varchar(128)` | ○ | `users.id` | 不可 | 解答者 |
 | `machine_id` | `varchar(128)` | ○ | `machines.id` | 不可 | 対象マシン |
-| `solved_at` | `timestamptz` | — | — | 不可 | 最初の正解日時 |
+| `solved_at` | `timestamptz` | — | — | 不可 | 最後のフラグの正解日時 |
 
 ## machine_flag_solutions
 
@@ -191,4 +191,4 @@ erDiagram
 
 - 外部キーの削除動作はすべて `ON DELETE RESTRICT`。参照されている行は削除できない。
 - `machines.ai_session_id` は一意だが外部キーではない。`chat_sessions.machine_id` は一意の外部キーであり、作成完了前は NULL にできる。
-- `machine_solutions` は「いずれかのフラグに正解したマシン」を 1 件で表し、`machine_flag_solutions` はフラグごとの正解履歴を表す。既存データの移行では、フラグが 1 種類だけのマシンに限り、前者から後者へ履歴を補完する。
+- `machine_solutions` は「存在する全フラグを正解した他人のマシン」を 1 件で表し、`machine_flag_solutions` はフラグごとの正解履歴を表す。既存の部分正解・自作マシンの完了履歴は移行時に除外する。旧データからフラグ別履歴を補完できるのは、フラグが 1 種類だけのマシンに限る。

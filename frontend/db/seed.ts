@@ -92,13 +92,6 @@ async function main() {
 
     for (const solution of SEED_SOLUTIONS) {
       await client.query(
-        `INSERT INTO machine_solutions (user_id, machine_id, solved_at)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id, machine_id) DO UPDATE SET
-           solved_at = EXCLUDED.solved_at`,
-        [solution.userId, solution.machineId, solution.solvedAt],
-      )
-      await client.query(
         `INSERT INTO machine_flag_solutions (user_id, machine_id, flag_kind, solved_at)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, machine_id, flag_kind) DO UPDATE SET
@@ -106,6 +99,23 @@ async function main() {
         [solution.userId, solution.machineId, solution.flagKind, solution.solvedAt],
       )
     }
+
+    await client.query(
+      `INSERT INTO machine_solutions (user_id, machine_id, solved_at)
+       SELECT fs.user_id, m.id, MAX(fs.solved_at)
+       FROM machine_flag_solutions fs
+       JOIN machines m ON m.id = fs.machine_id
+       WHERE m.id = ANY($1::varchar(128)[]) AND fs.user_id <> m.created_by
+         AND (
+           (fs.flag_kind = 'user' AND m.user_flag <> '')
+           OR (fs.flag_kind = 'system' AND m.system_flag <> '')
+         )
+       GROUP BY fs.user_id, m.id, m.user_flag, m.system_flag
+       HAVING COUNT(*) = (m.user_flag <> '')::integer + (m.system_flag <> '')::integer
+       ON CONFLICT (user_id, machine_id) DO UPDATE SET
+         solved_at = EXCLUDED.solved_at`,
+      [SEED_MACHINES.map((machine) => machine.id)],
+    )
 
     await client.query("COMMIT")
     console.log(
