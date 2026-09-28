@@ -277,7 +277,7 @@ Packerはフェーズ、失敗したスクリプト、行番号、終了コー�
 
 状態が `completed` になるとレスポンスの `download_url` が設定されます。この URL は
 HMAC署名され、既定では30分だけ有効です。build_server の内部 URL をブラウザへ露出せず、
-`image.qcow2`、OS別起動スクリプト、READMEを含む`<artifact_id>.zip`をストリーミングします。
+`image.qcow2`、Windows/macOS用のPDFと起動スクリプトを含む`<artifact_id>.zip`をストリーミングします。
 Rangeリクエスト、`ETag`（成果物のSHA256）、`If-Range`にも対応するため、中断後に同じ成果物の
 ダウンロードを再開できます。期限切れの場合は、認証が必要な
 `POST /v1/sessions/{session_id}/download-url` で新しいURLを取得してください。同時に、ランダム化
