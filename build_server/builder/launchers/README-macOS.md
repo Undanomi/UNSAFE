@@ -1,34 +1,77 @@
-# macOSでの起動とKaliからの接続
+# macOSでマシンを起動する
 
-このマシンはNATやポート転送を使用しません。QEMUの `vmnet-bridged` とKaliを同じL2セグメントへ接続するため、TCP/UDPを問わず、ターゲット上のすべてのポートをKaliから探索できます。
+macOS上のQEMUでマシンを起動し、攻撃マシンから接続するための手順です。NATやポート転送は使いません。QEMUの `vmnet-bridged` と攻撃マシンを同じ隔離有線LANへ接続します。
 
-ダウンロードした配布物を空の専用ディレクトリへ置き、展開します。
+このREADMEでは、攻撃マシンをVMware Fusion上で起動することを想定します。VirtualBox上で攻撃マシンを動かす場合は、「[その他の接続構成](#その他の接続構成)」を参照してください。
+
+## 注意事項
+
+このマシンには脆弱なサービスが含まれています。企業LAN、公衆Wi-Fi、インターネットへ接続しないでください。
+
+ブリッジ接続では、指定した物理インターフェースの接続先へマシンが公開されます。通常利用中のLANやWi-Fiは指定せず、外部ネットワークへ接続されていない専用の有線LANを使用してください。Macのインターネット共有も、このLANに対して有効にしないでください。
+
+## 必要なもの
+
+- HomebrewとHomebrew版QEMU
+- VMware Fusion上で動作する攻撃マシン
+- DHCPが動作する隔離有線LANと、それに接続するEthernetアダプタ
+- 4 GiB以上の空きメモリ
+- ダウンロードした `<ARTIFACT_ID>.zip`
+
+配布物を展開すると、次のファイルが同じディレクトリに配置されます。
+
+- `image.qcow2`
+- `start-macos.sh`
+
+## ネットワーク構成
+
+```mermaid
+flowchart TB
+    attacker["攻撃マシン<br/>VMware Fusion上の仮想マシン"] --- fusion["VMware Fusion<br/>ブリッジ接続"]
+    fusion --- interface["Macの専用Ethernetインターフェース<br/>例：en1"]
+    interface --- vmnet["QEMU vmnet-bridged"]
+    vmnet --- target["QEMUターゲット"]
+    interface --- lan["隔離有線LAN<br/>DHCPあり・外部接続なし"]
+```
+
+攻撃マシンとQEMUターゲットは同じL2セグメントへ接続されます。IPアドレスは、隔離有線LANで動作するDHCPから取得します。
+
+Mac版の起動スクリプトは、物理インターフェースへ接続する `vmnet-bridged` を使います。Windows版のHost-OnlyネットワークとTAPアダプタを使う構成とは異なります。[QEMUのネットワーク設定](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#object-netdevvmnetbridgedoptions)も参照してください。
+
+## セットアップ
+
+### 1. 配布物を展開する
+
+空の専用ディレクトリでターミナルを開き、ダウンロードしたZIPファイルを展開します。
 
 ```sh
-brew install qemu
 unzip <ARTIFACT_ID>.zip
 cd slsg-machine
 ```
 
-## 前提
+### 2. QEMUを準備する
 
-- Homebrew版QEMU
-- 4 GiB以上の空きメモリ
-- Kaliと共有する隔離ネットワーク
-- `image.qcow2`、このREADME、`start-macos.sh`を同じディレクトリへ配置
-
-## Apple Silicon上でx86_64マシンを起動
-
-起動スクリプトへ実行権限を付与し、macOSのネットワークインターフェースを確認します。
+HomebrewでQEMUをインストールします。Homebrewが未導入の場合は、先に[公式サイト](https://brew.sh/ja/)の手順に従ってインストールしてください。
 
 ```sh
-chmod +x start-macos.sh
-networksetup -listallhardwareports
+brew install qemu
 ```
 
-出力された情報から、Kaliと共有する隔離Ethernetインターフェースのデバイス名を確認します。
+ターミナルで次のコマンドを実行し、QEMUを起動できることを確認します。
 
-以降の `<BRIDGE_INTERFACE>` は、確認したインターフェース名に置き換えてください。
+```sh
+qemu-system-x86_64 --version
+```
+
+Apple Siliconではx86_64ゲストをハードウェア仮想化できないため、起動スクリプトはQEMU TCGでCPUをエミュレーションします。Intel MacではHVFを使用します。
+
+### 3. 隔離有線LANのインターフェースを確認する
+
+専用のEthernetアダプタを隔離有線LANへ接続し、macOSのネットワークインターフェースを確認します。
+
+```sh
+networksetup -listallhardwareports
+```
 
 出力例：
 
@@ -38,7 +81,33 @@ Device: en1
 Ethernet Address: xx:xx:xx:xx:xx:xx
 ```
 
-この場合、`<BRIDGE_INTERFACE>` には `en1` を指定します。インターフェース名は環境によって異なるため、出力例の値をそのまま使用しないでください。
+この場合、`<BRIDGE_INTERFACE>` には `Device` に表示された `en1` を指定します。インターフェース名は環境によって異なるため、出力例の値をそのまま使用しないでください。
+
+以降のプレースホルダは、実際の値へ置き換えてください。
+
+| プレースホルダ | 説明 | 例 |
+| --- | --- | --- |
+| `<ARTIFACT_ID>` | ダウンロードしたZIPファイルの拡張子を除いた名前 | ファイル名が `abc123.zip` なら `abc123` |
+| `<BRIDGE_INTERFACE>` | 隔離有線LANへ接続したMacのEthernetインターフェース名 | `en1` |
+| `<MACHINE_DIRECTORY>` | `image.qcow2` と `start-macos.sh` があるディレクトリのパス | `/Users/akira/labs/slsg-machine` |
+| `<TARGET_IP>` | 起動後にQEMUのコンソールへ表示されるターゲットのIPv4アドレス | `192.168.50.10` |
+
+### 4. 攻撃マシンを同じ隔離有線LANへ接続する
+
+VMware Fusionで攻撃マシンの仮想マシン設定を開き、ネットワークアダプタをブリッジ接続へ変更します。手順3で確認したEthernetアダプタを選択してください。
+
+「自動検出」は使わず、対象アダプタを明示します。自動検出では、通常利用中のLANやWi-Fiなど、別の接続先が選ばれるおそれがあります。[VMware Fusionのブリッジ接続設定](https://knowledge.broadcom.com/external/article?legacyId=1001875)も参照してください。
+
+隔離有線LANでDHCPが有効になっていることも確認します。スイッチやEthernetアダプタだけでは、IPアドレスは配布されません。
+
+## マシンを起動する
+
+ターミナルで、`start-macos.sh` があるディレクトリへ移動し、実行権限を付与します。
+
+```sh
+cd "<MACHINE_DIRECTORY>"
+chmod +x start-macos.sh
+```
 
 確認したインターフェースを指定して、マシンを起動します。
 
@@ -46,39 +115,27 @@ Ethernet Address: xx:xx:xx:xx:xx:xx
 ./start-macos.sh --bridge <BRIDGE_INTERFACE>
 ```
 
-誤って通常利用中のLANへ脆弱なマシンを公開しないよう、ブリッジ先は必須引数です。Kaliと共有する隔離Ethernetインターフェースを指定してください。
-
-vmnetの権限エラーになる環境では、QEMUのパスを維持して管理者権限で実行します。
+実行例：
 
 ```sh
-sudo env PATH="$PATH" ./start-macos.sh --bridge <BRIDGE_INTERFACE>
+./start-macos.sh --bridge en1
 ```
 
-Apple Siliconではx86_64ゲストをハードウェア仮想化できないため、QEMU TCGでCPUをエミュレーションします。Intel MacではHVFを使用します。
+誤って通常利用中のLANへ接続しないよう、`--bridge` は必須引数になっています。
 
-起動後、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。ログインユーザーは `provisioner`、パスワードはマシンのダウンロード画面に表示された値です。
+起動すると、ログインプロンプトの前にターゲットのIPv4アドレスが表示されます。このアドレスは、次の手順で `<TARGET_IP>` として使用します。
 
-## VMware Fusion上のKali
+## 攻撃マシンから接続を確認する
 
-Kaliのネットワークアダプターを「ブリッジ」にし、`start-macos.sh` の `--bridge` と同じ物理インターフェースを選択します。「自動検出」では異なるインターフェースが選ばれることがあるため、対象を明示することを推奨します。
+ここからは、攻撃マシンで操作します。以下のコマンドはKali Linuxでの実行例です。
 
-## VirtualBox上のKali
-
-Kaliの「ネットワーク」で「ブリッジアダプター」を選び、`start-macos.sh` の `--bridge` と同じインターフェースを指定します。
-
-## Kaliから探索・接続確認
-
-コンソールに表示されたIPアドレスを `<TARGET_IP>` に指定します。Mac側の転送ポートは使用しません。
-
-最初に、Kaliからターゲットへpingを実行します。
+QEMUのコンソールに表示されたIPアドレスを指定し、ターゲットへpingを実行します。
 
 ```sh
 ping <TARGET_IP>
 ```
 
-応答が返れば、Kaliからターゲットへの接続は成功です。
-
-pingを終了する場合は、`Ctrl + C` を押します。
+応答が返れば接続できています。pingを終了するには、`Ctrl + C` を押します。
 
 必要に応じて、ターゲットを探索します。
 
@@ -88,8 +145,49 @@ sudo nmap -Pn -sS -sV -p- <TARGET_IP>
 sudo nmap -Pn -sU --top-ports 100 <TARGET_IP>
 ```
 
-Wi-Fiアクセスポイントのクライアント分離や、無線NICのブリッジ制限により、VM同士が通信できない場合があります。その場合は専用の有線Ethernetアダプターを使用し、QEMUとKaliの両方をそのインターフェースへブリッジしてください。
+## マシンを終了する
 
-## 注意
+QEMUのコンソールから、ユーザー `provisioner` でログインします。パスワードは、マシンのダウンロード画面に表示された値です。
 
-脆弱なサービスを企業LAN、公衆Wi-Fi、インターネットへ接続しないでください。専用の隔離有線LANを推奨します。終了はゲスト内で `sudo poweroff` を実行します。
+ゲスト内で次のコマンドを実行し、マシンを終了します。
+
+```sh
+sudo poweroff
+```
+
+## その他の接続構成
+
+### VirtualBox上の攻撃マシン
+
+攻撃マシンの仮想マシン設定で「ネットワーク」を開き、ブリッジ接続を選択します。接続先には、`start-macos.sh` の `--bridge` と同じEthernetインターフェースを指定してください。
+
+## トラブルシューティング
+
+### 起動スクリプトを実行できない
+
+`start-macos.sh` があるディレクトリで、`chmod +x start-macos.sh` を実行したことを確認してください。
+
+### vmnetの権限エラーで起動できない
+
+QEMUのパスを維持して、管理者権限で実行します。
+
+```sh
+sudo env PATH="$PATH" ./start-macos.sh --bridge <BRIDGE_INTERFACE>
+```
+
+### Apple Siliconで起動に時間がかかる
+
+x86_64のCPUをTCGでエミュレーションするため、Intel MacのHVFを使う場合より遅くなります。起動スクリプトでの方式の切り替えは不要です。
+
+### ターゲットIPが表示されない、またはpingに応答しない
+
+次の項目を確認してください。
+
+- QEMU上でマシンが起動している
+- `--bridge` に指定したインターフェースが隔離有線LANへ接続されている
+- 攻撃マシンが同じEthernetインターフェースへブリッジ接続されている
+- 隔離有線LANでDHCPが有効になっている
+- `<TARGET_IP>` にQEMUのコンソールへ表示されたIPアドレスを指定している
+- 攻撃マシンとターゲットが同じサブネットのIPアドレスを取得している
+
+Wi-Fi経由では、アクセスポイントのクライアント分離や無線NICのブリッジ制限で通信できない場合があります。この手順では専用の有線Ethernetアダプタを使用してください。
