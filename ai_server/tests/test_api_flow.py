@@ -465,6 +465,24 @@ async def test_complete_session_scenario_build_and_download(client) -> None:
     assert unsatisfiable.status_code == 416
     assert unsatisfiable.headers["content-range"] == "bytes */7"
 
+    async def updated_artifacts(_build_id: str) -> list[Artifact]:
+        return [
+            Artifact(
+                artifact_id="3a3c16bd-6d41-49e1-98c3-927138f8a271",
+                artifact_type="zip",
+                file_name="3a3c16bd-6d41-49e1-98c3-927138f8a271.zip",
+                file_size=8,
+                checksum="updated-checksum",
+            )
+        ]
+
+    fake_build.artifacts = updated_artifacts
+    updated_download = await http.get(issued.json()["download_url"])
+    assert updated_download.status_code == 200
+    assert updated_download.headers["etag"] == '"updated-checksum"'
+    persisted = await app.state.repository.get(session_id)
+    assert persisted.artifact.checksum == "updated-checksum"
+
 
 @pytest.mark.asyncio
 async def test_unspecified_flags_are_planned_and_persisted_before_scenario(client) -> None:

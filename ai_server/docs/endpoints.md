@@ -392,7 +392,7 @@ DOWNLOAD_URL=$(curl -s -X POST \
 curl -L -C - -OJ "$DOWNLOAD_URL"
 ```
 
-配布物には`image.qcow2`、Windows/macOS/Linux用起動スクリプト、各OS用READMEが含まれます。
+配布物には `image.qcow2`、`README-Windows.pdf`、`README-macOS.pdf`、`Start-Windows.ps1`、`start-macos.sh` の5ファイルだけが含まれます。
 Linuxでは次のように展開できます。
 
 ```sh
