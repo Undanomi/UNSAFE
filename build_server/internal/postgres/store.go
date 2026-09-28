@@ -221,9 +221,9 @@ func (s *Store) AddArtifact(ctx context.Context, artifact domain.Artifact) error
 	return err
 }
 
-func (s *Store) LegacyDistributionArtifacts(ctx context.Context) ([]domain.Artifact, error) {
+func (s *Store) DistributionArtifacts(ctx context.Context) ([]domain.Artifact, error) {
 	rows, err := s.pool.Query(ctx, `SELECT artifact_id::text,build_id::text,artifact_type,file_name,file_size,checksum,created_at
-		FROM build_artifacts WHERE artifact_type='tar.zst' ORDER BY created_at`)
+		FROM build_artifacts WHERE artifact_type IN ('tar.zst', 'zip') ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}

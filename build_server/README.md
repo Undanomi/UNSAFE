@@ -109,12 +109,15 @@ field. Treat both fields as secrets and do not write them to logs.
 
 The worker also installs `slsg-login-banner.service` as the final guest
 customization. It waits for DHCP and writes every global IPv4 address to
-`/etc/issue`, so the target address is visible before console login. End-user
-launchers and their platform-specific connection guides are copied from
-`builder/launchers/` beside `image.qcow2`. The worker packages all of these files
-under a top-level `slsg-machine/` directory in the single
+`/etc/issue`, so the target address is visible before console login.
+
+The Windows and macOS launchers and their PDF connection guides are copied
+from `builder/launchers/` beside `image.qcow2`. The worker packages exactly
+these five files under a top-level `slsg-machine/` directory in the single
 `<artifact_id>.zip` distribution artifact, then removes the individual files
 from the public artifact directory.
-When the worker starts, it also converts registered legacy `tar.zst` artifacts
-to ZIP, keeps the existing artifact ID, updates the stored size and SHA-256,
-and removes the old file only after the metadata update succeeds.
+
+When the worker starts, it converts registered legacy `tar.zst` artifacts
+to ZIP and updates existing ZIP artifacts to the same five-file layout without
+rebuilding the machine image. It keeps each artifact ID and updates the stored
+size and SHA-256. Old `tar.zst` files are removed after metadata is updated.
