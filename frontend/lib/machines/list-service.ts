@@ -40,6 +40,10 @@ function buildFilters(viewerUserId: string, query: MachineListQuery) {
     values.push(query.level)
     conditions.push(`m.level = ANY($${values.length}::text[])`)
   }
+  if (query.tag) {
+    values.push(query.tag)
+    conditions.push(`$${values.length}::text = ANY(m.tags)`)
+  }
   if (query.q) {
     values.push(`%${escapeLike(query.q)}%`)
     conditions.push(`(

@@ -97,6 +97,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
         className="slsg-machine-filter-panel grid gap-4 rounded-[14px] border p-4 sm:p-5"
         aria-label="マシンの検索条件"
       >
+        {query.tag ? <input name="tag" type="hidden" value={query.tag} /> : null}
         <label className="flex min-w-0 flex-col gap-2 text-sm leading-5 font-bold">
           キーワード
           <input
@@ -108,6 +109,22 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
             placeholder="マシン名・タグで検索"
           />
         </label>
+        {query.tag ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[#a8b5cc]">
+            <span>タグで絞り込み中:</span>
+            <span className="max-w-full rounded-md border border-[#78bfd5] bg-[#23445c] px-2 py-1 text-[#d8f6ff] [overflow-wrap:anywhere]">
+              {query.tag}
+            </span>
+            <Link
+              aria-label={`タグ「${query.tag}」の絞り込みを解除`}
+              className="p-1 text-[#a8b5cc] underline underline-offset-4 hover:text-white"
+              href={machineListHref({ ...query, tag: "" }, 1)}
+              prefetch={false}
+            >
+              解除
+            </Link>
+          </div>
+        ) : null}
         <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr]">
           <fieldset className="min-w-0 sm:col-span-2 xl:col-span-1">
             <legend className="mb-2 p-0 text-sm leading-5 font-bold">難易度</legend>
@@ -283,11 +300,15 @@ export function MachineListResults({
                       ) : null}
                       <ul className="flex flex-wrap gap-1.5" aria-label="タグ">
                         {[...new Set(machine.tags)].map((tag) => (
-                          <li
-                            className="max-w-full rounded-md border border-[#3a4c69] bg-[#18243a] px-2 py-1 text-xs text-[#a8b5cc] [overflow-wrap:anywhere]"
-                            key={tag}
-                          >
-                            {tag}
+                          <li className="max-w-full" key={tag}>
+                            <Link
+                              aria-label={`タグ「${tag}」で絞り込む`}
+                              className={`inline-block max-w-full rounded-md border px-2 py-1 text-xs [overflow-wrap:anywhere] hover:border-[#78bfd5] hover:text-[#d8f6ff] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9cecfc] ${query.tag === tag ? "border-[#78bfd5] bg-[#23445c] text-[#d8f6ff]" : "border-[#3a4c69] bg-[#18243a] text-[#a8b5cc]"}`}
+                              href={machineListHref({ ...query, tag }, 1)}
+                              prefetch={false}
+                            >
+                              {tag}
+                            </Link>
                           </li>
                         ))}
                       </ul>
