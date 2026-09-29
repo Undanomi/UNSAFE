@@ -3415,6 +3415,14 @@
   .slsg-profile-page.is-public-profile {
     grid-template-rows: auto auto minmax(0, 1fr);
   }
+  .slsg-profile-shell .slsg-main:has(.slsg-profile-page.is-editing) {
+    overflow-y: auto;
+  }
+  .slsg-profile-page.is-editing {
+    height: auto;
+    min-height: 100%;
+    grid-template-rows: auto auto;
+  }
   .slsg-profile-history-grid {
     min-height: 0;
   }

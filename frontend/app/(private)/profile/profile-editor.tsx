@@ -90,7 +90,9 @@ export function ProfileEditor({
   }
 
   return (
-    <section className={`slsg-profile-page ${canEdit ? "is-own-profile" : "is-public-profile"}`}>
+    <section
+      className={`slsg-profile-page ${canEdit ? "is-own-profile" : "is-public-profile"} ${isEditing ? "is-editing" : ""}`}
+    >
       <header className="slsg-profile-header">
         {showBackLink ? (
           <Link className="slsg-profile-back" href="/machines">
