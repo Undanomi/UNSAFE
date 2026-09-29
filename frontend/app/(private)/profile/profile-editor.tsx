@@ -294,15 +294,9 @@ export function ProfileEditor({
             <MachineRecordList
               items={profile.createdMachines}
               kind="created"
-              profileId={profile.id}
               title="作成したマシン"
             />
-            <MachineRecordList
-              items={profile.solvedMachines}
-              kind="solved"
-              profileId={profile.id}
-              title="解いたマシン"
-            />
+            <MachineRecordList items={profile.solvedMachines} kind="solved" title="解いたマシン" />
           </div>
 
           <TerminalTelemetry />
@@ -315,7 +309,6 @@ export function ProfileEditor({
 type MachineRecordListProps = {
   items: ProfileMachine[]
   kind: "created" | "solved"
-  profileId: string
   title: string
 }
 
@@ -335,7 +328,7 @@ function formatProfileDate(value: string) {
   return value.replaceAll("/", ".").replaceAll("-", ".")
 }
 
-function MachineRecordList({ items, kind, profileId, title }: MachineRecordListProps) {
+function MachineRecordList({ items, kind, title }: MachineRecordListProps) {
   return (
     <section className={`slsg-profile-history-card is-${kind}`}>
       <ProfileCardGlow />
@@ -356,7 +349,7 @@ function MachineRecordList({ items, kind, profileId, title }: MachineRecordListP
                 <Link
                   aria-label={`${machine.name}の詳細を見る`}
                   className="slsg-profile-machine-row-hit-area"
-                  href={`/machines/${encodeURIComponent(machine.id)}?from=profile&profileId=${encodeURIComponent(profileId)}`}
+                  href={`/machines/${encodeURIComponent(machine.id)}`}
                 />
                 <span className="slsg-profile-machine-copy">
                   <strong>{machine.name}</strong>

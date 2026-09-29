@@ -32,8 +32,6 @@ import type {
 } from "@/types/machine-detail"
 
 type MachineDetailProps = {
-  backHref?: string
-  backLabel?: string
   machine: MachineDetail
 }
 
@@ -347,11 +345,7 @@ function GuidancePanel({
   )
 }
 
-export function MachineDetailView({
-  backHref = "/machines",
-  backLabel = "マシン一覧へ戻る",
-  machine,
-}: MachineDetailProps) {
+export function MachineDetailView({ machine }: MachineDetailProps) {
   const router = useRouter()
   const [savedFields, setSavedFields] = useState(() => ({
     name: machine.name,
@@ -513,9 +507,9 @@ export function MachineDetailView({
 
   return (
     <section className="slsg-machine-detail-page">
-      <Link className="slsg-detail-back-link" href={backHref}>
+      <Link className="slsg-detail-back-link" href="/machines">
         <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
-        {backLabel}
+        マシン一覧へ戻る
       </Link>
       <header className={`slsg-detail-hero${machine.canEdit ? " is-editable" : ""}`}>
         <div className="slsg-detail-heading">
@@ -875,13 +869,7 @@ function BuildStatusPanel({
   )
 }
 
-export function MissingMachine({
-  backHref = "/machines",
-  backLabel = "マシン一覧へ戻る",
-}: {
-  backHref?: string
-  backLabel?: string
-}) {
+export function MissingMachine() {
   return (
     <section className="slsg-panel slsg-state-card">
       <div className="slsg-state-card-content">
@@ -890,9 +878,9 @@ export function MissingMachine({
         </span>
         <h1>このマシンは見つかりませんでした。</h1>
         <p>一覧から別のマシンを選択してください。</p>
-        <Link className="slsg-state-card-action" href={backHref}>
+        <Link className="slsg-state-card-action" href="/machines">
           <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          {backLabel}
+          マシン一覧へ戻る
         </Link>
       </div>
     </section>
