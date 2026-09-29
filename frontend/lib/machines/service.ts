@@ -175,7 +175,6 @@ export async function getMachineDetailService(
     visibility: machine.published ? "公開" : "非公開",
     tags: machine.tags,
     difficulty: toMachineDifficulty(machine.level),
-    isOwner,
     canEdit: isOwner && machine.status === "ready",
     description,
     buildProgress: machine.build_progress ?? 0,

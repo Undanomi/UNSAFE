@@ -432,6 +432,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         const state = (await response.json()) as MachineBuildState
         setBuildState(state)
         if (state.description) setDescription(state.description)
+        if (state.status === "ready") router.refresh()
         if (state.status === "building" || state.status === "preparing") {
           timeoutId = setTimeout(poll, 5000)
         }
@@ -447,7 +448,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
       abortController.abort()
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [isBuilding, machine.id])
+  }, [isBuilding, machine.id, router])
 
   async function handleRetryBuild() {
     setIsRetrying(true)
@@ -649,7 +650,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         </div>
       ) : null}
 
-      {machine.status !== undefined && (buildState.status !== "ready" || machine.isOwner) ? (
+      {machine.status !== undefined && (buildState.status !== "ready" || machine.canEdit) ? (
         <BuildStatusPanel
           canRetry={machine.canRetry === true}
           error={retryError}

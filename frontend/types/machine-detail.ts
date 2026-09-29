@@ -38,7 +38,6 @@ export type MachineDetail = Pick<
   "id" | "name" | "author" | "createdAt" | "visibility" | "difficulty" | "description"
 > & {
   tags: string[]
-  isOwner: boolean
   canEdit: boolean
   buildProgress?: number
   buildFailure?: MachineBuildFailure | null
