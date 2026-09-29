@@ -243,10 +243,10 @@ export function MachineListResults({
                   <th scope="col" className="w-[30%] px-9 py-5">
                     マシン名
                   </th>
-                  <th scope="col" className="w-[20%] px-4 py-5">
+                  <th scope="col" className="w-[17%] px-4 py-5">
                     タグ
                   </th>
-                  <th scope="col" className="w-[10%] px-4 py-5">
+                  <th scope="col" className="w-[13%] px-4 py-5">
                     難易度
                   </th>
                   <th scope="col" className="w-[12%] px-4 py-5">
