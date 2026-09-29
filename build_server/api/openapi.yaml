@@ -2,17 +2,19 @@ openapi: 3.1.0
 info:
   title: SLSG Build Service
   version: 0.1.0
+  description: AI Server から受け取ったシナリオソースを非同期で VM にビルドする内部 API。
 servers:
-  - url: /v1
+- url: /
+  description: Build Server
 security:
-  - serviceToken: []
+- serviceToken: []
 paths:
-  /builds:
+  /v1/builds:
     post:
       summary: Queue a build
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-        - $ref: "#/components/parameters/UserID"
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/UserID'
       requestBody:
         required: true
         content:
@@ -20,120 +22,253 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [scenario_id, scenario_version_id, source]
+              required:
+              - scenario_id
+              - scenario_version_id
+              - source
               properties:
                 scenario_id:
-                  $ref: "#/components/schemas/ExternalID"
+                  $ref: '#/components/schemas/ExternalID'
                 scenario_version_id:
-                  $ref: "#/components/schemas/ExternalID"
+                  $ref: '#/components/schemas/ExternalID'
                 source:
                   type: string
                   format: binary
                   description: ZIP archive, at most 64 MiB compressed.
       responses:
-        "202":
+        '202':
           description: Build queued
           headers:
             Location:
-              schema: { type: string }
+              schema:
+                type: string
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Build" }
-        "200":
+              schema:
+                $ref: '#/components/schemas/Build'
+        '200':
           description: Existing build returned for the same idempotency key
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Build" }
-        "400":
-          $ref: "#/components/responses/Problem"
-        "401":
-          $ref: "#/components/responses/Problem"
-  /builds/{build_id}:
+              schema:
+                $ref: '#/components/schemas/Build'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '409':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}:
     parameters:
-      - $ref: "#/components/parameters/BuildID"
+    - $ref: '#/components/parameters/BuildID'
     get:
       summary: Get build status
       responses:
-        "200":
+        '200':
           description: Current state
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Build" }
-        "404":
-          $ref: "#/components/responses/Problem"
-  /builds/{build_id}/cancel:
+              schema:
+                $ref: '#/components/schemas/Build'
+        '404':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/cancel:
     parameters:
-      - $ref: "#/components/parameters/BuildID"
+    - $ref: '#/components/parameters/BuildID'
     post:
       summary: Request build cancellation
       responses:
-        "202": { description: Cancellation accepted }
-        "409":
-          $ref: "#/components/responses/Problem"
-  /builds/{build_id}/retry:
+        '202':
+          description: Cancellation accepted
+        '409':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/retry:
     parameters:
-      - $ref: "#/components/parameters/BuildID"
+    - $ref: '#/components/parameters/BuildID'
     post:
       summary: Retry a failed or cancelled build
       responses:
-        "202": { description: Retry accepted }
-        "409":
-          $ref: "#/components/responses/Problem"
-  /builds/{build_id}/events:
+        '202':
+          description: Retry accepted
+        '409':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/events:
     parameters:
-      - $ref: "#/components/parameters/BuildID"
+    - $ref: '#/components/parameters/BuildID'
     get:
       summary: Poll build events
       parameters:
-        - name: after
-          in: query
-          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+      - name: after
+        in: query
+        schema:
+          type: integer
+          format: int64
+          minimum: 0
+          default: 0
+        description: この ID より後のイベントを最大 500 件返します。
       responses:
-        "200":
+        '200':
           description: Events ordered by ID
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
                   items:
                     type: array
-                    items: { $ref: "#/components/schemas/Event" }
-  /builds/{build_id}/artifacts:
+                    items:
+                      $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+        '400':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/artifacts:
     parameters:
-      - $ref: "#/components/parameters/BuildID"
+    - $ref: '#/components/parameters/BuildID'
     get:
       summary: List build artifacts
       responses:
-        "200":
+        '200':
           description: Artifact metadata
           content:
             application/json:
               schema:
                 type: object
-                required: [items]
+                required:
+                - items
                 properties:
                   items:
                     type: array
-                    items: { $ref: "#/components/schemas/Artifact" }
-  /builds/{build_id}/artifacts/{artifact_id}/content:
-    parameters:
-      - $ref: "#/components/parameters/BuildID"
-      - name: artifact_id
-        in: path
-        required: true
-        schema: { type: string, format: uuid }
+                    items:
+                      $ref: '#/components/schemas/Artifact'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/artifacts/{artifact_id}/content:
     get:
       summary: Download an artifact
       responses:
-        "200":
+        '200':
           description: Artifact stream
           content:
             application/zip:
-              schema: { type: string, format: binary }
-        "404":
-          $ref: "#/components/responses/Problem"
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
+        '206':
+          description: Range で指定した ZIP の一部
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '409':
+          $ref: '#/components/responses/Problem'
+        '416':
+          description: 要求範囲がファイルの外です。
+      parameters:
+      - $ref: '#/components/parameters/BuildID'
+      - name: artifact_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 部分取得するバイト範囲。
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          type: string
+        description: 一致時だけ部分取得を継続する条件。
+  /health/live:
+    get:
+      summary: 生存確認
+      security: []
+      responses:
+        '200':
+          description: HTTP プロセスは稼働中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      summary: 稼働準備の確認
+      security: []
+      responses:
+        '200':
+          description: PostgreSQL に接続可能
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/Problem'
+  /v1/builds/{build_id}/logs/packer:
+    parameters:
+    - $ref: '#/components/parameters/BuildID'
+    get:
+      summary: Packer ログの末尾を取得
+      responses:
+        '200':
+          description: ログの末尾
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '503':
+          $ref: '#/components/responses/Problem'
+        '500':
+          $ref: '#/components/responses/Problem'
 components:
   securitySchemes:
     serviceToken:
@@ -144,82 +279,169 @@ components:
       name: Idempotency-Key
       in: header
       required: true
-      schema: { type: string, maxLength: 200 }
+      schema:
+        type: string
+        maxLength: 200
+        minLength: 1
     UserID:
       name: X-Authenticated-User-ID
       in: header
       required: true
       description: User identity asserted by the authenticated BFF.
-      schema: { type: string }
+      schema:
+        type: string
+        minLength: 1
     BuildID:
       name: build_id
       in: path
       required: true
-      schema: { type: string, format: uuid }
+      schema:
+        type: string
+        format: uuid
   responses:
     Problem:
       description: RFC 9457-style problem details
       content:
         application/problem+json:
-          schema: { $ref: "#/components/schemas/Problem" }
+          schema:
+            $ref: '#/components/schemas/Problem'
   schemas:
     ExternalID:
       type: string
-      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+      pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
     Build:
       type: object
       required:
-        - build_id
-        - scenario_id
-        - scenario_version_id
-        - requested_by
-        - status
-        - progress
-        - queued_at
-        - cancel_requested
+      - build_id
+      - scenario_id
+      - scenario_version_id
+      - requested_by
+      - status
+      - progress
+      - queued_at
+      - cancel_requested
       properties:
-        build_id: { type: string, format: uuid }
-        scenario_id: { $ref: "#/components/schemas/ExternalID" }
-        scenario_version_id: { $ref: "#/components/schemas/ExternalID" }
-        requested_by: { type: string }
+        build_id:
+          type: string
+          format: uuid
+        scenario_id:
+          $ref: '#/components/schemas/ExternalID'
+        scenario_version_id:
+          $ref: '#/components/schemas/ExternalID'
+        requested_by:
+          type: string
         status:
           type: string
-          enum: [queued, validating, preparing, building, uploading, completed, failed, cancelled, retrying]
-        progress: { type: integer, minimum: 0, maximum: 100 }
-        worker_id: { type: string }
-        queued_at: { type: string, format: date-time }
-        started_at: { type: string, format: date-time }
-        completed_at: { type: string, format: date-time }
-        error_message: { type: string }
+          enum:
+          - queued
+          - validating
+          - preparing
+          - building
+          - uploading
+          - completed
+          - failed
+          - cancelled
+          - retrying
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        worker_id:
+          type: string
+        queued_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        error_message:
+          type: string
         machine_password:
           type: string
           minLength: 32
           maxLength: 32
           description: Random password assigned to the provisioner user after provisioning succeeds.
-        cancel_requested: { type: boolean }
+        cancel_requested:
+          type: boolean
     Event:
       type: object
       properties:
-        build_event_id: { type: integer, format: int64 }
-        build_id: { type: string, format: uuid }
-        event_type: { type: string }
-        message: { type: string }
-        progress: { type: integer }
-        created_at: { type: string, format: date-time }
+        build_event_id:
+          type: integer
+          format: int64
+        build_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+        message:
+          type: string
+        progress:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - build_event_id
+      - build_id
+      - event_type
+      - message
+      - progress
+      - created_at
     Artifact:
       type: object
       properties:
-        artifact_id: { type: string, format: uuid }
-        build_id: { type: string, format: uuid }
-        artifact_type: { type: string }
-        file_name: { type: string }
-        file_size: { type: integer, format: int64 }
-        checksum: { type: string }
-        created_at: { type: string, format: date-time }
+        artifact_id:
+          type: string
+          format: uuid
+        build_id:
+          type: string
+          format: uuid
+        artifact_type:
+          type: string
+          description: 完成後の配布物は zip。
+        file_name:
+          type: string
+        file_size:
+          type: integer
+          format: int64
+        checksum:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - artifact_id
+      - build_id
+      - artifact_type
+      - file_name
+      - file_size
+      - checksum
+      - created_at
     Problem:
       type: object
       properties:
-        type: { type: string }
-        title: { type: string }
-        status: { type: integer }
-        detail: { type: string }
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+      required:
+      - type
+      - title
+      - status
+      - detail
+    Health:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          type: string
+          const: ok

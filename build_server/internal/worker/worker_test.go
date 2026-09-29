@@ -144,10 +144,10 @@ func TestArtifactType(t *testing.T) {
 	if got := artifactType("3a3c16bd-6d41-49e1-98c3-927138f8a271.zip"); got != "zip" {
 		t.Fatalf("artifactType() = %q, want zip", got)
 	}
-	if got := artifactType("start-linux.sh"); got != "launcher" {
+	if got := artifactType("start-macos.sh"); got != "launcher" {
 		t.Fatalf("artifactType() = %q, want launcher", got)
 	}
-	if got := artifactType("README-Linux.md"); got != "documentation" {
+	if got := artifactType("README-Windows.pdf"); got != "documentation" {
 		t.Fatalf("artifactType() = %q, want documentation", got)
 	}
 }
@@ -157,11 +157,7 @@ func TestPackageArtifactsCreatesSingleZip(t *testing.T) {
 	work := t.TempDir()
 	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
 	archiveName := distributionFileName(artifactID)
-	files := map[string]string{
-		"image.qcow2":     "disk",
-		"start-linux.sh":  "#!/bin/sh\n",
-		"README-Linux.md": "# Linux\n",
-	}
+	files := distributionTestFiles("disk")
 	for name, contents := range files {
 		if err := os.WriteFile(filepath.Join(source, name), []byte(contents), 0o640); err != nil {
 			t.Fatal(err)
@@ -209,6 +205,43 @@ func TestPackageArtifactsCreatesSingleZip(t *testing.T) {
 	}
 }
 
+func TestPackagedRepositoryAssetsContainExactlyFiveFiles(t *testing.T) {
+	source := t.TempDir()
+	if err := os.WriteFile(filepath.Join(source, "image.qcow2"), []byte("machine"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyLauncherAssets("../../builder/launchers", source); err != nil {
+		t.Fatal(err)
+	}
+	archiveName := "distribution.zip"
+	if err := packageArtifacts(context.Background(), source, t.TempDir(), archiveName); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.OpenReader(filepath.Join(source, archiveName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if len(archive.File) != len(distributionFiles) {
+		t.Fatalf("zip contains %d files, want %d", len(archive.File), len(distributionFiles))
+	}
+	want := make(map[string]bool, len(distributionFiles))
+	for _, name := range distributionFiles {
+		want["slsg-machine/"+name] = false
+	}
+	for _, file := range archive.File {
+		if _, ok := want[file.Name]; !ok {
+			t.Fatalf("unexpected zip entry %q", file.Name)
+		}
+		want[file.Name] = true
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("missing zip entry %q", name)
+		}
+	}
+}
+
 func TestDistributionFileNameUsesArtifactID(t *testing.T) {
 	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
 	if got := distributionFileName(artifactID); got != artifactID+".zip" {
@@ -228,11 +261,7 @@ func TestConvertLegacyTarZstCreatesArtifactIDZip(t *testing.T) {
 	if err := os.Mkdir(machineDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	files := map[string]string{
-		"image.qcow2":     "legacy disk",
-		"start-linux.sh":  "#!/bin/sh\n",
-		"README-Linux.md": "# Linux\n",
-	}
+	files := map[string]string{"image.qcow2": "legacy disk", "start-linux.sh": "#!/bin/sh\n"}
 	for name, contents := range files {
 		if err := os.WriteFile(filepath.Join(machineDir, name), []byte(contents), 0o640); err != nil {
 			t.Fatal(err)
@@ -245,7 +274,9 @@ func TestConvertLegacyTarZstCreatesArtifactIDZip(t *testing.T) {
 	}
 	artifactID := "3a3c16bd-6d41-49e1-98c3-927138f8a271"
 	zipPath := filepath.Join(root, distributionFileName(artifactID))
-	if err := convertLegacyTarZst(context.Background(), legacyPath, zipPath); err != nil {
+	assets := t.TempDir()
+	writeLauncherTestFiles(t, assets)
+	if err := convertLegacyTarZst(context.Background(), legacyPath, zipPath, assets); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateDistributionZip(zipPath); err != nil {
@@ -256,44 +287,133 @@ func TestConvertLegacyTarZstCreatesArtifactIDZip(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer archive.Close()
-	if len(archive.File) != len(files) {
-		t.Fatalf("zip contains %d files, want %d", len(archive.File), len(files))
+	if len(archive.File) != len(distributionFiles) {
+		t.Fatalf("zip contains %d files, want %d", len(archive.File), len(distributionFiles))
 	}
 	for _, file := range archive.File {
 		name := strings.TrimPrefix(file.Name, "slsg-machine/")
-		if _, ok := files[name]; !ok {
-			t.Fatalf("unexpected zip entry %q", file.Name)
+		if name == "start-linux.sh" {
+			t.Fatalf("legacy launcher remains in zip: %q", file.Name)
 		}
 	}
 }
 
-func TestCopyLauncherAssetsCopiesFlatFiles(t *testing.T) {
-	source := t.TempDir()
-	destination := t.TempDir()
-	if err := os.WriteFile(filepath.Join(source, "start-linux.sh"), []byte("#!/bin/sh\n"), 0o750); err != nil {
+func distributionTestFiles(image string) map[string]string {
+	return map[string]string{
+		"image.qcow2":        image,
+		"README-Windows.pdf": "%PDF Windows",
+		"README-macOS.pdf":   "%PDF macOS",
+		"Start-Windows.ps1":  "Write-Output start",
+		"start-macos.sh":     "#!/bin/sh\n",
+	}
+}
+
+func writeLauncherTestFiles(t *testing.T, directory string) {
+	t.Helper()
+	for name, contents := range distributionTestFiles("") {
+		if name == "image.qcow2" {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(contents), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRepackDistributionZipReplacesLegacyAssetsAndPreservesImage(t *testing.T) {
+	root := t.TempDir()
+	assets := t.TempDir()
+	writeLauncherTestFiles(t, assets)
+	oldFiles := map[string]string{
+		"image.qcow2":       "existing machine",
+		"README-Windows.md": "old instructions",
+		"README-macOS.md":   "old instructions",
+		"start-linux.sh":    "#!/bin/sh\n",
+	}
+	for name, contents := range oldFiles {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := filepath.Join(t.TempDir(), "old.zip")
+	if err := createDistributionZip(context.Background(), root, original, []string{"image.qcow2", "README-Windows.md", "README-macOS.md", "start-linux.sh"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(source, "README-Linux.md"), []byte("# Linux\n"), 0o640); err != nil {
+	current, err := distributionZipIsCurrent(original, assets)
+	if err != nil || current {
+		t.Fatalf("old zip current = %t, error = %v", current, err)
+	}
+	updated := filepath.Join(t.TempDir(), "updated.zip")
+	if err := repackDistributionZip(context.Background(), original, updated, assets); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDistributionZip(updated); err != nil {
+		t.Fatal(err)
+	}
+	current, err = distributionZipIsCurrent(updated, assets)
+	if err != nil || !current {
+		t.Fatalf("updated zip current = %t, error = %v", current, err)
+	}
+	archive, err := zip.OpenReader(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	if len(archive.File) != len(distributionFiles) {
+		t.Fatalf("zip contains %d files, want %d", len(archive.File), len(distributionFiles))
+	}
+	for _, file := range archive.File {
+		if file.Name != "slsg-machine/image.qcow2" {
+			continue
+		}
+		input, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		image, err := io.ReadAll(input)
+		_ = input.Close()
+		if err != nil || string(image) != oldFiles["image.qcow2"] {
+			t.Fatalf("image changed: %q, error = %v", image, err)
+		}
+	}
+}
+
+func TestCopyLauncherAssetsCopiesOnlyDistributionFiles(t *testing.T) {
+	source := t.TempDir()
+	destination := t.TempDir()
+	writeLauncherTestFiles(t, source)
+	if err := os.WriteFile(filepath.Join(source, "README-Windows.md"), []byte("old"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(source, "images"), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := copyLauncherAssets(source, destination); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"start-linux.sh", "README-Linux.md"} {
+	for _, name := range launcherFiles {
 		if _, err := os.Stat(filepath.Join(destination, name)); err != nil {
 			t.Fatalf("copied asset %q: %v", name, err)
 		}
 	}
+	entries, err := os.ReadDir(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(launcherFiles) {
+		t.Fatalf("copied %d files, want %d", len(entries), len(launcherFiles))
+	}
 }
 
-func TestCopyLauncherAssetsRejectsDirectory(t *testing.T) {
+func TestCopyLauncherAssetsRequiresEachFile(t *testing.T) {
 	source := t.TempDir()
-	if err := os.Mkdir(filepath.Join(source, "nested"), 0o750); err != nil {
+	writeLauncherTestFiles(t, source)
+	if err := os.Remove(filepath.Join(source, "README-Windows.pdf")); err != nil {
 		t.Fatal(err)
 	}
 	err := copyLauncherAssets(source, t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "unsupported entry") {
-		t.Fatalf("copyLauncherAssets() error = %v, want unsupported-entry rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "README-Windows.pdf") {
+		t.Fatalf("copyLauncherAssets() error = %v, want missing PDF", err)
 	}
 }
 

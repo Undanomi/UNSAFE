@@ -1,120 +1,71 @@
-# SLSG Build Service
+# UNSAFE Build Server
 
-The build service accepts asynchronous REST requests and stores build state in
-PostgreSQL. Workers claim jobs from the same database with
-`FOR UPDATE SKIP LOCKED`, run Packer, and publish artifacts atomically.
+## 概要
 
-## Layout
+Build Server は学習用 VM を作る内部サービスです。AI Server から受け取ったシナリオソースを使い、ビルドを非同期で進めます。進捗と成果物は PostgreSQL に保存します。完成した VM イメージと起動手順は ZIP にまとめ、AI Server 経由で利用者に配信します。
 
-```text
-cmd/server/             REST API process
-cmd/worker/             Packer worker process
-internal/httpapi/       HTTP transport and authentication boundary
-internal/postgres/      build repository and PostgreSQL job queue
-internal/worker/        isolated workspace and Packer orchestration
-builder/packer/         controlled Packer template
-builder/launchers/      end-user QEMU launchers and connection guides
-builder/base_images/    base VM images (not committed)
-data/scenarios/         local-development scenario inputs (not committed)
-```
+## 起動方法
 
-Scenario source is uploaded as a ZIP file and extracted by the API into a
-build-specific internal path:
+### Build Server だけを起動する
+
+**1. VM のビルド環境を用意する**
+
+Docker を実行する Linux ホストで `/dev/kvm` が使えることを確認してください。KVM は VM の実行を高速化する Linux の機能です。worker は、対象 OS のベースイメージを土台にして VM を作ります。ベースイメージは `qcow2` 形式のディスクファイルです。既定の `Debian 13.7.0` をビルドする場合は、次の場所に配置します。
 
 ```text
-/var/lib/slsg/scenarios/uploads/{build_id}/source/
+build_server/builder/base_images/debian-13.7.0-amd64.qcow2
 ```
 
-The worker derives this path from the generated build ID; callers cannot supply
-a filesystem path. The archive must contain `build.sh`, either at its root, in
-`contents/`, or within three levels of the root. Validated SLSG archives also
-contain server-generated `contents/scripts/install-flags.sh` and
-`contents/scripts/verify.sh`; Packer runs them after the scenario `build.sh`, in
-that order.
+**2. 環境変数を設定する**
 
-## Local development
-
-KVM must be available at `/dev/kvm`. The worker reads `target_os` from
-`contents/scenario_manifest.json` and selects a base image named
-`builder/base_images/debian-<version>-amd64.qcow2`. For example, Debian 13.7.0
-uses `debian-13.7.0-amd64.qcow2`. A missing `target_os` defaults to Debian 13.7.0.
-
-The current Packer communicator supports Debian images. Put every Debian version
-you intend to build under `builder/base_images/`, then start the stack:
-
-Copy the environment template, then fill the blank `INTERNAL_API_TOKEN` and
-`BUILD_POSTGRES_PASSWORD` values with independent random values. The API token
-must be at least 32 characters and identical to the AI server's
-`BUILD_SERVER_TOKEN`. There are no built-in secret fallbacks.
+リポジトリのルートでテンプレートをコピーし、KVM デバイスのグループ ID を調べます。
 
 ```sh
-cp .env.example .env
-docker compose up --build
-```
-
-Set `KVM_GID` in `.env` to the numeric group of the host KVM device before
-starting the worker:
-
-```sh
+cp build_server/.env.example build_server/.env
 stat -c '%g' /dev/kvm
 ```
 
-The default is `993`, matching the development host used by this repository.
+次の表に従って `build_server/.env` を編集してください。パスワードとトークンには、`openssl rand -hex 32` などで**別々の値**を生成します。
 
-Changing `POSTGRES_PASSWORD` does not update a role in an existing PostgreSQL
-data volume. For an existing deployment, change the database role password
-first, then update `BUILD_POSTGRES_PASSWORD` and restart the services.
+| 変数 | 設定する値 |
+| --- | --- |
+| `INTERNAL_API_TOKEN` | 内部 API を呼ぶための 32 文字以上のトークン。AI Server と接続する場合は、AI Server の `BUILD_SERVER_TOKEN` に同じ値を設定する。 |
+| `BUILD_POSTGRES_PASSWORD` | ビルド状態を保存する PostgreSQL のパスワード。トークンとは別の値にする。 |
+| `KVM_GID` | 上の `stat` で表示された数値。worker が `/dev/kvm` を使うために必要。 |
 
-The build server is an internal service. Its port is exposed only to the Compose
-network and the AI server is its sole application-level caller. Users create and
-inspect machines through the AI server API, then download the completed distribution with:
+**3. 起動して確認する**
 
 ```sh
-curl -L -OJ \
-  http://localhost:8000/v1/sessions/{session_id}/download \
-  -H 'X-Authenticated-User-ID: user-123'
-
-unzip ARTIFACT_ID.zip
-cd slsg-machine
+docker compose --env-file build_server/.env -f build_server/compose.yml up --build -d
+docker compose --env-file build_server/.env -f build_server/compose.yml ps
 ```
 
-Archives are limited to 64 MiB compressed, 512 MiB expanded, 100 MiB per file,
-and 10,000 entries. Absolute paths, parent traversal, symbolic links, and
-non-regular files are rejected.
+Build Server の API は Compose 内部の 8080 番ポートで待ち受けます。ホストからは直接アクセスできません。AI Server と連携する場合は、次のルート Compose を使うと両サービスが同じ内部ネットワークにつながります。
 
-The AI server authenticates the user context and calls this API with a service
-token. Production deployments should replace the development token with a
-short-lived, audience-restricted internal JWT or enforce equivalent authentication
-at the service boundary.
+### AI Server と一緒に起動する
 
-## API
+両サービスを連携させる場合は、リポジトリのルートにある Compose を使います。テンプレートをコピーしてから、`.env` に次の値を設定してください。
 
-The internal contract used by the AI server is documented in
-[`api/openapi.yaml`](api/openapi.yaml). Important operations are:
+```sh
+cp .env.example .env
+```
 
-- `POST /v1/builds`
-- `GET /v1/builds/{build_id}`
-- `POST /v1/builds/{build_id}/cancel`
-- `POST /v1/builds/{build_id}/retry`
-- `GET /v1/builds/{build_id}/events?after={event_id}`
-- `GET /v1/builds/{build_id}/logs/packer`
-- `GET /v1/builds/{build_id}/artifacts`
-- `GET /v1/builds/{build_id}/artifacts/{artifact_id}/content`
+| 変数 | 設定する値 |
+| --- | --- |
+| `BUILD_POSTGRES_PASSWORD` | Build Server 用 PostgreSQL のパスワード。 |
+| `AI_POSTGRES_PASSWORD` / `FRONTEND_POSTGRES_PASSWORD` | ほかの PostgreSQL 用パスワード。それぞれ異なる値にする。フロントエンドを起動しない場合も後者は Compose の設定読み込みに必要。 |
+| `INTERNAL_API_TOKEN` / `BUILD_SERVER_TOKEN` | サービス間通信の認証に使う同じ 32 文字以上の値。 |
+| `KVM_GID` | `/dev/kvm` のグループ ID。`stat -c '%g' /dev/kvm` で確認する。 |
 
-After the scenario `build.sh` succeeds, the worker replaces the base image's
-`provisioner` user password with a cryptographically random value. A completed build's
-authenticated `GET /v1/builds/{build_id}` response includes that value in
-`machine_password`. The AI server copies it to its session's `machine_access`
-field. Treat both fields as secrets and do not write them to logs.
+AI による生成を使う場合は、`AI_PROVIDER` と選択したプロバイダーの API キーも必要です。設定値と `rockyou.txt` の説明は [AI Server の起動方法](../ai_server/README.md#起動方法)を参照してください。ベースイメージは、単体起動と同じ場所に用意します。
 
-The worker also installs `slsg-login-banner.service` as the final guest
-customization. It waits for DHCP and writes every global IPv4 address to
-`/etc/issue`, so the target address is visible before console login. End-user
-launchers and their platform-specific connection guides are copied from
-`builder/launchers/` beside `image.qcow2`. The worker packages all of these files
-under a top-level `slsg-machine/` directory in the single
-`<artifact_id>.zip` distribution artifact, then removes the individual files
-from the public artifact directory.
-When the worker starts, it also converts registered legacy `tar.zst` artifacts
-to ZIP, keeps the existing artifact ID, updates the stored size and SHA-256,
-and removes the old file only after the metadata update succeeds.
+```sh
+docker compose up --build -d
+docker compose ps
+```
+
+利用者向け API は AI Server の `http://localhost:8000` です。Build Server の内部 API は AI Server が呼び出し、完成した ZIP も AI Server 経由で配信します。
+
+## API仕様
+
+API の詳細な仕様は[こちら](docs/spec.md)を参照してください。機械可読な定義は [OpenAPI](api/openapi.yaml) にあります。
