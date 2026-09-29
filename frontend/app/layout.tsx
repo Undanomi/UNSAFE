@@ -15,7 +15,7 @@ const notoSansJp = Noto_Sans_JP({
 })
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://slsg.konekotech.com"),
+  metadataBase: new URL("https://unsafe.konekotech.com"),
   title: "UNSAFE",
   description: "セキュリティ学習用の演習環境を自動作成するアプリケーション",
   icons: {

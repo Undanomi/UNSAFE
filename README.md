@@ -1,11 +1,11 @@
 # UNSAFE
 
-[![デモサイト](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://slsg.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
+[![デモサイト](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://unsafe.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
 
 UNSAFE（UN-danomi Security AI Framework for Education）へようこそ！現在デモサイト公開中です。
 
 <p align="center">
-  <a href="https://slsg.konekotech.com/">
+  <a href="https://unsafe.konekotech.com/">
     <img src="docs/images/title.png" alt="タイトル" width="640">
   </a>
 </p>
@@ -75,7 +75,7 @@ UNSAFE（UN-danomi Security AI Framework for Education）は、この負担を�
 
 ## 使い方
 
-1. [公開デモ](https://slsg.konekotech.com) にアクセスし、Googleアカウントでログインします。
+1. [公開デモ](https://unsafe.konekotech.com) にアクセスし、Googleアカウントでログインします。
 2. 公開されているマシンを選ぶか、チャット画面で学びたいテーマや難易度を指定して新しいマシンを作成します。
 3. マシンのビルドが完了したら、詳細画面からダウンロードします。同梱の起動手順書に沿ってマシンを起動し、演習を始めます。
 4. 必要に応じて、詳細画面のヒントや誘導問題を確認します。
