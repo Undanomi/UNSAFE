@@ -24,6 +24,7 @@ import {
 import { FlagCorrectEffect } from "@/components/flag-correct-effect"
 import { MarkdownContent } from "@/components/markdown-content"
 import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { toMachineDifficulty, toMachineLevel } from "@/lib/machines/difficulty"
 import type {
   FlagDefinition,
   MachineBuildState,
@@ -393,14 +394,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
     setSaveError("")
     const formData = new FormData()
     formData.set("name", draftFields.name)
-    formData.set(
-      "level",
-      draftFields.difficulty === "High"
-        ? "hard"
-        : draftFields.difficulty === "Medium"
-          ? "medium"
-          : "easy",
-    )
+    formData.set("level", toMachineLevel(draftFields.difficulty))
     formData.set("published", draftFields.visibility === "公開" ? "true" : "false")
     try {
       const result = await updateMachineDetailsAction(machine.id, formData)
@@ -410,12 +404,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
       }
       const nextFields = {
         name: result.machine.name,
-        difficulty:
-          result.machine.level === "hard"
-            ? "High"
-            : result.machine.level === "medium"
-              ? "Medium"
-              : "Easy",
+        difficulty: toMachineDifficulty(result.machine.level),
         visibility: result.machine.published ? "公開" : "非公開",
       } as const
       setSavedFields(nextFields)
@@ -600,6 +589,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
                   }
                   value={draftFields.difficulty}
                 >
+                  <option value="Very Easy">Very Easy</option>
                   <option value="Easy">Easy</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>

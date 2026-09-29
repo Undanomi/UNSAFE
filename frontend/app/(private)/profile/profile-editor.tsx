@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
 import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { MACHINE_DIFFICULTY_LABELS } from "@/lib/machines/difficulty"
 import type { ProfileMachine, UserProfile } from "@/types/profile"
 
 type ProfileEditorProps = {
@@ -312,13 +313,8 @@ type MachineRecordListProps = {
   title: string
 }
 
-const profileDifficultyLabels = {
-  easy: "Easy",
-  medium: "Medium",
-  hard: "High",
-} as const
-
 const profileDifficultyClasses = {
+  very_easy: "slsg-difficulty-very-easy",
   easy: "slsg-difficulty-easy",
   medium: "slsg-difficulty-medium",
   hard: "slsg-difficulty-high",
@@ -357,7 +353,7 @@ function MachineRecordList({ items, kind, title }: MachineRecordListProps) {
                 <span
                   className={`slsg-difficulty slsg-profile-difficulty ${profileDifficultyClasses[machine.level]}`}
                 >
-                  {profileDifficultyLabels[machine.level]}
+                  {MACHINE_DIFFICULTY_LABELS[machine.level]}
                 </span>
                 {kind === "solved" ? (
                   <Link

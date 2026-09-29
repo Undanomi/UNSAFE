@@ -1,3 +1,4 @@
+import { MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import type { MachineRecord } from "@/types/postgres"
 
 export const MACHINE_PAGE_SIZE = 10
@@ -34,7 +35,7 @@ export function parseMachineListQuery(
   const rawPage = value("page")
   const page = /^\d+$/.test(rawPage) ? Number(rawPage) : 1
   const rawLevels = Array.isArray(params.level) ? params.level : [params.level]
-  const levels = (["easy", "medium", "hard"] as const).filter((level) => rawLevels.includes(level))
+  const levels = MACHINE_LEVELS.filter((level) => rawLevels.includes(level))
   const solved = value("solved")
   return {
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,

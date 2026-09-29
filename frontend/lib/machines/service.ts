@@ -13,6 +13,7 @@ import {
   BUILDING_MACHINE_DESCRIPTION,
   completedMachineDescription,
 } from "@/lib/machines/description"
+import { toMachineDifficulty } from "@/lib/machines/difficulty"
 import type { MachineBuildState, MachineDetail, MachineGuidance } from "@/types/machine-detail"
 import type { MachineRecord } from "@/types/postgres"
 
@@ -23,12 +24,6 @@ function formatCreatedAt(value: Date | string) {
     dateStyle: "medium",
     timeZone: "Asia/Tokyo",
   }).format(date)
-}
-
-function toDifficulty(level: MachineRecord["level"]): MachineDetail["difficulty"] {
-  if (level === "hard") return "High"
-  if (level === "medium") return "Medium"
-  return "Easy"
 }
 
 function toMachineBuildState(session: AiSessionResponse): MachineBuildState {
@@ -179,7 +174,7 @@ export async function getMachineDetailService(
     createdAt: formatCreatedAt(machine.created_at),
     visibility: machine.published ? "公開" : "非公開",
     tags: machine.tags,
-    difficulty: toDifficulty(machine.level),
+    difficulty: toMachineDifficulty(machine.level),
     canEdit: isOwner && machine.status === "ready",
     description,
     buildProgress: machine.build_progress ?? 0,

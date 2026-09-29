@@ -13,6 +13,7 @@ import Link from "next/link"
 import type { ReactNode } from "react"
 import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filter-reset-button"
 import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { MACHINE_DIFFICULTY_LABELS, MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import {
   MACHINE_PAGE_SIZE,
   type MachineListQuery,
@@ -23,8 +24,8 @@ import {
 const paginationClass =
   "slsg-pagination-button grid size-11 shrink-0 place-items-center rounded-md border text-sm font-bold sm:size-12 sm:text-base"
 
-const difficultyLabels = { easy: "Easy", medium: "Medium", hard: "High" }
 const difficultyClasses = {
+  very_easy: "slsg-difficulty-very-easy",
   easy: "slsg-difficulty-easy",
   medium: "slsg-difficulty-medium",
   hard: "slsg-difficulty-high",
@@ -112,7 +113,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
           <fieldset className="min-w-0 sm:col-span-2 xl:col-span-1">
             <legend className="mb-2 p-0 text-sm leading-5 font-bold">難易度</legend>
             <div className="slsg-machine-filter-options flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border px-3">
-              {(["easy", "medium", "hard"] as const).map((level) => (
+              {MACHINE_LEVELS.map((level) => (
                 <label
                   key={level}
                   className="flex min-h-[42px] shrink-0 items-center gap-2 text-sm leading-5"
@@ -124,7 +125,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
                     value={level}
                     defaultChecked={query.level.includes(level)}
                   />
-                  {difficultyLabels[level]}
+                  {MACHINE_DIFFICULTY_LABELS[level]}
                 </label>
               ))}
             </div>
@@ -297,7 +298,7 @@ export function MachineListResults({
                       <span
                         className={`slsg-difficulty inline-flex rounded-full px-3 py-1.5 text-xs font-bold ${difficultyClasses[machine.level]}`}
                       >
-                        {difficultyLabels[machine.level]}
+                        {MACHINE_DIFFICULTY_LABELS[machine.level]}
                       </span>
                     </td>
                     <td className="px-4 py-5">
