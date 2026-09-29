@@ -133,6 +133,20 @@ export async function listChatSessionsService(ownerUserId: string): Promise<Chat
   })
 }
 
+export async function listOwnedActiveChatLinksService(
+  ownerUserId: string,
+  activeSessionIds: string[],
+): Promise<Pick<ChatSessionSummary, "id" | "name">[]> {
+  if (activeSessionIds.length === 0) return []
+  const result = await queryDatabase<Pick<ChatSessionRow, "ai_session_id" | "name">>(
+    `SELECT ai_session_id, name FROM chat_sessions
+     WHERE owner_user_id = $1 AND ai_session_id = ANY($2::varchar[])
+     ORDER BY updated_at DESC, ai_session_id ASC`,
+    [ownerUserId, activeSessionIds],
+  )
+  return result.rows.map((row) => ({ id: row.ai_session_id, name: row.name }))
+}
+
 export async function canModifyMachineCreationService(
   ownerUserId: string,
   sessionId: string,

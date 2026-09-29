@@ -24,13 +24,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
+        '409':
+          description: ユーザーの同時実行セッション数が上限に達しています。
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      description: セッションを作成します。X-Authenticated-User-ID を省略した場合の所有者は local-user です。
+      description: セッションを作成します。X-Authenticated-User-ID を省略した場合の所有者は local-user です。完了・失敗・キャンセル以外のセッションが上限に達している場合は 409 です。
   /v1/sessions/{session_id}:
     get:
       summary: Get Session
@@ -237,6 +239,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
+        '409':
+          description: セッションの状態が不正か、ユーザーの同時実行セッション数が上限に達しています。
         '422':
           description: Validation Error
           content:

@@ -21,7 +21,14 @@ import {
   saveChatProgressAction,
   startMachineBuildAction,
 } from "@/app/actions/chat"
+
 import {
+  type ActiveLimitNotice,
+  ActiveSessionLimitPanel,
+} from "@/components/active-session-limit-panel"
+
+import {
+  type ActiveChatLink,
   CHAT_CONFIG,
   CHAT_COPY,
   CHAT_PROMPTS,
@@ -51,6 +58,15 @@ const SCENARIO_STREAM_RETRY_DELAY_MS = 500
 
 class ScenarioGenerationFailedError extends Error {}
 class ScenarioGenerationCancelledError extends Error {}
+
+class ActiveSessionLimitNoticeError extends Error {
+  constructor(
+    message: string,
+    readonly activeChats: ActiveChatLink[],
+  ) {
+    super(message)
+  }
+}
 
 class ScenarioInputRevisionRequiredError extends Error {
   suggestions: string[]
@@ -327,6 +343,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     session.creationFailure,
   )
   const [error, setError] = useState("")
+  const [activeLimitNotice, setActiveLimitNotice] = useState<ActiveLimitNotice | null>(null)
   const [editingStep, setEditingStep] = useState<number | null>(null)
   const [editingError, setEditingError] = useState("")
   const [isSaving, setIsSaving] = useState(false)
@@ -389,10 +406,20 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
         basicReady: nextBasicReady,
       })
       if (!result.success) {
-        setError(result.message)
+        if (result.code === "active_session_limit") {
+          setError("")
+          setActiveLimitNotice({
+            message: result.message,
+            activeChats: result.activeChats ?? [],
+          })
+        } else {
+          setActiveLimitNotice(null)
+          setError(result.message)
+        }
         return false
       }
 
+      setActiveLimitNotice(null)
       if (!sessionId) {
         setSessionId(result.sessionId)
         router.replace(`/machines/chat/${result.sessionId}`)
@@ -456,11 +483,20 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
       setCreationMessage("AIにマシン設定を送信しています…")
       setCreationFailure(null)
       setError("")
+      setActiveLimitNotice(null)
 
       try {
         if (!resume) {
           const preparation = await prepareMachineCreationAction(sessionId, answers)
-          if (!preparation.success) throw new Error(preparation.message)
+          if (!preparation.success) {
+            if (preparation.code === "active_session_limit") {
+              throw new ActiveSessionLimitNoticeError(
+                preparation.message,
+                preparation.activeChats ?? [],
+              )
+            }
+            throw new Error(preparation.message)
+          }
           if (cancellationRequestedRef.current) {
             await cancelMachineCreationAction(sessionId)
             return
@@ -496,9 +532,13 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           await cancelMachineCreationAction(sessionId)
           return
         }
-        if (!build.success || !build.machineId) {
-          throw new Error(build.success ? "マシン情報を保存できませんでした。" : build.message)
+        if (!build.success) {
+          if (build.code === "active_session_limit") {
+            throw new ActiveSessionLimitNoticeError(build.message, build.activeChats ?? [])
+          }
+          throw new Error(build.message)
         }
+        if (!build.machineId) throw new Error("マシン情報を保存できませんでした。")
 
         setCreationStatus("building")
         setCreationMessage("マシンの生成・ビルドを受け付けました。")
@@ -509,6 +549,15 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           abortController.signal.aborted ||
           creationError instanceof ScenarioGenerationCancelledError
         ) {
+          return
+        }
+        if (creationError instanceof ActiveSessionLimitNoticeError) {
+          setCreationStatus("input")
+          setCreationMessage("")
+          setActiveLimitNotice({
+            message: creationError.message,
+            activeChats: creationError.activeChats,
+          })
           return
         }
         console.error("Machine creation failed.", creationError)
@@ -729,6 +778,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                   </div>
                 ) : null}
                 {error ? <p className="slsg-chat-error">{error}</p> : null}
+                {activeLimitNotice ? <ActiveSessionLimitPanel notice={activeLimitNotice} /> : null}
 
                 {creationStatus !== "input" || basicReady || isFinalStep ? (
                   <div className="slsg-chat-actions">
