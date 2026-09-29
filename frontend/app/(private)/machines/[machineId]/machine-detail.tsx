@@ -649,7 +649,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
         </div>
       ) : null}
 
-      {machine.status !== undefined ? (
+      {machine.status !== undefined && (buildState.status !== "ready" || machine.isOwner) ? (
         <BuildStatusPanel
           canRetry={machine.canRetry === true}
           error={retryError}
@@ -778,7 +778,7 @@ function BuildStatusPanel({
     return (
       <section className="slsg-detail-build-status is-ready">
         <CheckCircle2 aria-hidden="true" size={20} />
-        <p>マシンのビルドが完了しました。</p>
+        <p>マシンのビルドが完了しています。</p>
       </section>
     )
   }
