@@ -25,7 +25,7 @@ function machine(id: string, name: string, tags: string[]): MachineListItem {
   }
 }
 
-test("tag links keep the current conditions and restart at page one", () => {
+test("tag links add selections, keep other conditions, and restart at page one", () => {
   const query = parseMachineListQuery({
     page: "3",
     q: "auth",
@@ -33,12 +33,13 @@ test("tag links keep the current conditions and restart at page one", () => {
     owned: "1",
     solved: "no",
     sort: "asc",
+    tag: "Web",
   })
 
-  const taggedHref = machineListHref({ ...query, tag: "Web セキュリティ" }, 1)
+  const taggedHref = machineListHref({ ...query, tags: [...query.tags, "Web セキュリティ"] }, 1)
   const taggedParams = new URL(taggedHref, "http://localhost").searchParams
   assert.equal(taggedParams.get("q"), "auth")
-  assert.equal(taggedParams.get("tag"), "Web セキュリティ")
+  assert.deepEqual(taggedParams.getAll("tag"), ["Web", "Web セキュリティ"])
   assert.deepEqual(taggedParams.getAll("level"), ["easy", "medium"])
   assert.equal(taggedParams.get("owned"), "1")
   assert.equal(taggedParams.get("solved"), "no")
@@ -47,22 +48,27 @@ test("tag links keep the current conditions and restart at page one", () => {
 
   const selected = parseMachineListQuery({
     q: "auth",
-    tag: "Web セキュリティ",
+    tag: ["Web", "Web セキュリティ", "Web"],
     level: "easy",
   })
   assert.equal(
     machineListHref(selected, 2),
-    "/machines?q=auth&tag=Web+%E3%82%BB%E3%82%AD%E3%83%A5%E3%83%AA%E3%83%86%E3%82%A3&level=easy&page=2",
+    "/machines?q=auth&tag=Web&tag=Web+%E3%82%BB%E3%82%AD%E3%83%A5%E3%83%AA%E3%83%86%E3%82%A3&level=easy&page=2",
   )
-  assert.equal(machineListHref({ ...selected, tag: "" }, 1), "/machines?q=auth&level=easy")
+  assert.equal(
+    machineListHref({ ...selected, tags: selected.tags.filter((tag) => tag !== "Web") }, 1),
+    "/machines?q=auth&tag=Web+%E3%82%BB%E3%82%AD%E3%83%A5%E3%83%AA%E3%83%86%E3%82%A3&level=easy",
+  )
+  assert.equal(machineListHref({ ...selected, tags: [] }, 1), "/machines?q=auth&level=easy")
 })
 
-test("tag filtering is exact while keyword matching remains partial", () => {
-  const query = parseMachineListQuery({ q: "auth", tag: "Web", level: "easy" })
+test("all selected tags match exactly while keyword matching remains partial", () => {
+  const query = parseMachineListQuery({ q: "auth", tag: ["Web", "API"], level: "easy" })
   const items = [
     machine("exact", "Auth lab", ["Web", "API"]),
     machine("longer-tag", "Auth course", ["Web Security"]),
     machine("other-name", "Networking lab", ["Web"]),
+    machine("missing-api", "Auth primer", ["Web"]),
   ]
 
   assert.deepEqual(

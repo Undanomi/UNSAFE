@@ -5,7 +5,7 @@ export const MACHINE_PAGE_SIZE = 10
 export type MachineListQuery = {
   page: number
   q: string
-  tag: string
+  tags: string[]
   level: MachineRecord["level"][]
   owned: boolean
   solved: "" | "yes" | "no"
@@ -37,11 +37,17 @@ export function parseMachineListQuery(
   const page = /^\d+$/.test(rawPage) ? Number(rawPage) : 1
   const rawLevels = Array.isArray(params.level) ? params.level : [params.level]
   const levels = MACHINE_LEVELS.filter((level) => rawLevels.includes(level))
+  const rawTags = Array.isArray(params.tag) ? params.tag : [params.tag]
+  const tags = [
+    ...new Set(
+      rawTags.map((tag) => tag?.trim().slice(0, 100)).filter((tag): tag is string => Boolean(tag)),
+    ),
+  ]
   const solved = value("solved")
   return {
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
     q: value("q").trim().slice(0, 100),
-    tag: value("tag").trim().slice(0, 100),
+    tags,
     level: levels,
     owned: value("owned") === "1",
     solved: solved === "yes" || solved === "no" ? solved : "",
@@ -52,7 +58,7 @@ export function parseMachineListQuery(
 export function machineListHref(query: MachineListQuery, page = query.page) {
   const params = new URLSearchParams()
   if (query.q) params.set("q", query.q)
-  if (query.tag) params.set("tag", query.tag)
+  for (const tag of query.tags) params.append("tag", tag)
   for (const level of query.level) params.append("level", level)
   if (query.owned) params.set("owned", "1")
   if (query.solved) params.set("solved", query.solved)
@@ -72,7 +78,7 @@ export function selectMachinePage(
       (item.published === true || item.isOwned) &&
       (!query.owned || item.isOwned) &&
       (query.level.length === 0 || query.level.includes(item.level)) &&
-      (!query.tag || item.tags.includes(query.tag)) &&
+      query.tags.every((tag) => item.tags.includes(tag)) &&
       (!query.solved || item.isSolved === (query.solved === "yes")) &&
       (!needle ||
         [item.name, ...item.tags].some((text) => text.toLocaleLowerCase("ja-JP").includes(needle))),

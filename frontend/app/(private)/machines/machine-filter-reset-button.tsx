@@ -13,8 +13,9 @@ export function MachineFilterResetButton() {
     const keyword = form.elements.namedItem("q")
     if (keyword instanceof HTMLInputElement) keyword.value = ""
 
-    const tag = form.elements.namedItem("tag")
-    if (tag instanceof HTMLInputElement) tag.value = ""
+    form.querySelectorAll<HTMLInputElement>('input[name="tag"]').forEach((input) => {
+      input.value = ""
+    })
 
     form
       .querySelectorAll<HTMLInputElement>('input[name="level"], input[name="owned"]')
