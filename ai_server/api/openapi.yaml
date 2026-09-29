@@ -1,0 +1,1087 @@
+openapi: 3.1.0
+info:
+  title: SLSG AI Server
+  version: 0.1.0
+  description: AI Server のセッション、シナリオ生成、マシン生成、成果物配信 API。
+paths:
+  /v1/sessions:
+    post:
+      summary: Create Session
+      operationId: create_session_v1_sessions_post
+      parameters:
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: セッションを作成します。X-Authenticated-User-ID を省略した場合の所有者は local-user です。
+  /v1/sessions/{session_id}:
+    get:
+      summary: Get Session
+      operationId: get_session_v1_sessions__session_id__get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 所有者のセッション状態を返します。完了済み成果物の情報も同期します。
+  /v1/sessions/{session_id}/machine-information:
+    put:
+      summary: Save Machine Information
+      operationId: save_machine_information_v1_sessions__session_id__machine_information_put
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineInformation'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 生成条件を保存し、既存のシナリオと生成結果を破棄して ready に戻します。
+  /v1/sessions/{session_id}/skills:
+    get:
+      summary: Skill Selection Report
+      operationId: skill_selection_report_v1_sessions__session_id__skills_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Skill Selection Report V1 Sessions  Session Id  Skills Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: セッションで選択されたスキルと CVE の利用状況を返します。
+  /v1/sessions/{session_id}/scenarios/events:
+    get:
+      summary: Scenario Events
+      operationId: scenario_events_v1_sessions__session_id__scenarios_events_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '200':
+          description: SSE ストリーム。scenario.started、scenario.flags_planned、scenario.delta、scenario.completed、scenario.error、scenario.cancelled
+            を配信します。
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: シナリオ生成を開始または再接続し、SSE で進捗と結果を配信します。
+  /v1/sessions/{session_id}/cancel:
+    post:
+      summary: Cancel Session
+      operationId: cancel_session_v1_sessions__session_id__cancel_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 実行中のシナリオ生成やマシン生成をキャンセルします。完了後は 409 です。
+  /v1/sessions/{session_id}/machines:
+    post:
+      summary: Create Machine
+      operationId: create_machine_v1_sessions__session_id__machines_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMachineRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: ソース生成とビルド依頼を非同期で開始します。
+  /v1/sessions/{session_id}/guidance:
+    post:
+      summary: Create Guidance
+      operationId: create_guidance_v1_sessions__session_id__guidance_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GuidanceRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuidancePlan'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 完成したマシンについて、未取得フラグ向けの誘導問題を生成します。
+  /v1/sessions/{session_id}/download-url:
+    post:
+      summary: Create Download Url
+      operationId: create_download_url_v1_sessions__session_id__download_url_post
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: X-Authenticated-User-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Authenticated-User-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadURLResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 完成した ZIP の有効期限付き署名 URL を発行します。
+  /v1/sessions/{session_id}/download:
+    get:
+      summary: Download Machine
+      operationId: download_machine_v1_sessions__session_id__download_get
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Session Id
+      - name: expires
+        in: query
+        required: true
+        schema:
+          type: integer
+          title: Expires
+      - name: signature
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Signature
+      - name: Range
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Range
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: If-Range
+      responses:
+        '200':
+          description: ZIP 全体。署名不正または期限切れは 403 です。
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+        '206':
+          description: Range に対応した ZIP の一部。
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: 署名が不正または期限切れです。
+        '416':
+          description: 要求範囲がファイルの外です。
+      description: 署名 URL によって ZIP をストリーミング配信します。Range に対応します。
+  /v1/health/live:
+    get:
+      summary: Live
+      operationId: live_v1_health_live_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Live V1 Health Live Get
+      description: HTTP プロセスの生存を返します。
+  /v1/health/ready:
+    get:
+      summary: Ready
+      operationId: ready_v1_health_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Ready V1 Health Ready Get
+      description: PostgreSQL への接続を確認します。
+components:
+  schemas:
+    Artifact:
+      properties:
+        artifact_id:
+          type: string
+          title: Artifact Id
+        artifact_type:
+          type: string
+          title: Artifact Type
+        file_name:
+          type: string
+          title: File Name
+        file_size:
+          type: integer
+          title: File Size
+        checksum:
+          type: string
+          title: Checksum
+      type: object
+      required:
+      - artifact_id
+      - artifact_type
+      - file_name
+      - file_size
+      - checksum
+      title: Artifact
+    AttackGraph:
+      properties:
+        objectives:
+          items:
+            $ref: '#/components/schemas/AttackObjective'
+          type: array
+          maxItems: 10
+          title: Objectives
+        steps:
+          items:
+            $ref: '#/components/schemas/AttackStep'
+          type: array
+          maxItems: 30
+          minItems: 1
+          title: Steps
+      type: object
+      required:
+      - steps
+      title: AttackGraph
+    AttackObjective:
+      properties:
+        objective_id:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,63}$
+          title: Objective Id
+        objective_type:
+          type: string
+          enum:
+          - user_flag
+          - system_flag
+          title: Objective Type
+        description:
+          type: string
+          maxLength: 4000
+          minLength: 1
+          title: Description
+      type: object
+      required:
+      - objective_id
+      - objective_type
+      - description
+      title: AttackObjective
+    AttackStep:
+      properties:
+        step_id:
+          type: string
+          pattern: ^[a-z][a-z0-9_-]{0,63}$
+          title: Step Id
+        title:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Title
+        kind:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Kind
+        phase:
+          type: string
+          maxLength: 64
+          minLength: 1
+          title: Phase
+        description:
+          type: string
+          maxLength: 4000
+          minLength: 1
+          title: Description
+        requires:
+          items:
+            type: string
+          type: array
+          maxItems: 20
+          title: Requires
+        achieves:
+          items:
+            type: string
+          type: array
+          maxItems: 10
+          title: Achieves
+        cve_id:
+          anyOf:
+          - type: string
+            pattern: ^CVE-\d{4}-\d{4,7}$
+          - type: 'null'
+          title: Cve Id
+        cve_title:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Cve Title
+        cve_description:
+          anyOf:
+          - type: string
+            maxLength: 4000
+          - type: 'null'
+          title: Cve Description
+        cwe_ids:
+          items:
+            type: string
+          type: array
+          maxItems: 30
+          title: Cwe Ids
+        installation_artifact:
+          anyOf:
+          - type: string
+            enum:
+            - os_repository_package
+            - vendor_repository_package
+            - vendor_release_binary
+            - other_prebuilt
+            - source_build
+          - type: 'null'
+          title: Installation Artifact
+        artifact_source:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Artifact Source
+        source_build_reason:
+          anyOf:
+          - type: string
+            maxLength: 2000
+          - type: 'null'
+          title: Source Build Reason
+        software:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Software
+        vulnerable_version:
+          anyOf:
+          - type: string
+            maxLength: 200
+          - type: 'null'
+          title: Vulnerable Version
+        os_compatible:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Os Compatible
+        compatibility_reason:
+          anyOf:
+          - type: string
+            maxLength: 2000
+          - type: 'null'
+          title: Compatibility Reason
+        installation_method:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Installation Method
+        implementation_steps:
+          items:
+            type: string
+          type: array
+          maxItems: 50
+          minItems: 1
+          title: Implementation Steps
+        references:
+          items:
+            type: string
+          type: array
+          maxItems: 30
+          title: References
+        password_cracking:
+          anyOf:
+          - $ref: '#/components/schemas/PasswordCrackingSpec'
+          - type: 'null'
+      type: object
+      required:
+      - step_id
+      - title
+      - kind
+      - phase
+      - description
+      - implementation_steps
+      title: AttackStep
+    CreateMachineRequest:
+      properties:
+        scenario_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Scenario Id
+      type: object
+      title: CreateMachineRequest
+    DownloadURLResponse:
+      properties:
+        download_url:
+          type: string
+          title: Download Url
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+      type: object
+      required:
+      - download_url
+      - expires_at
+      title: DownloadURLResponse
+    GuidanceItem:
+      properties:
+        target_flag:
+          type: string
+          enum:
+          - user
+          - system
+          title: Target Flag
+        title:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Title
+        question:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Question
+        hint:
+          type: string
+          maxLength: 1000
+          minLength: 1
+          title: Hint
+      type: object
+      required:
+      - target_flag
+      - title
+      - question
+      - hint
+      title: GuidanceItem
+    GuidancePlan:
+      properties:
+        introduction:
+          type: string
+          maxLength: 1000
+          minLength: 1
+          title: Introduction
+        items:
+          items:
+            $ref: '#/components/schemas/GuidanceItem'
+          type: array
+          maxItems: 8
+          title: Items
+      type: object
+      required:
+      - introduction
+      - items
+      title: GuidancePlan
+    GuidanceRequest:
+      properties:
+        acquired_flags:
+          items:
+            type: string
+            enum:
+            - user
+            - system
+          type: array
+          maxItems: 2
+          title: Acquired Flags
+      type: object
+      title: GuidanceRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    MachineAccess:
+      properties:
+        username:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Username
+        password:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Password
+      type: object
+      required:
+      - username
+      - password
+      title: MachineAccess
+    MachineInformation:
+      properties:
+        name:
+          type: string
+          maxLength: 40
+          minLength: 1
+          title: Name
+        visibility:
+          type: string
+          enum:
+          - private
+          - public
+          - 非公開
+          - 公開
+          title: Visibility
+        theme:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Theme
+        difficulty:
+          type: string
+          enum:
+          - Very Easy
+          - Easy
+          - Medium
+          - High
+          title: Difficulty
+        operating_system:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Operating System
+          default: Debian 13.7.0
+        needs_user_flag:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Needs User Flag
+        user_flag_details:
+          type: string
+          maxLength: 4000
+          title: User Flag Details
+          default: ''
+        needs_system_flag:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Needs System Flag
+        system_flag_details:
+          type: string
+          maxLength: 4000
+          title: System Flag Details
+          default: ''
+        skill_names:
+          anyOf:
+          - items:
+              type: string
+              maxLength: 64
+              pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+            type: array
+            maxItems: 32
+          - type: 'null'
+          title: Skill Names
+        cve_ids:
+          items:
+            type: string
+            pattern: ^CVE-\d{4}-\d{4,7}$
+          type: array
+          maxItems: 20
+          title: Cve Ids
+      type: object
+      required:
+      - name
+      - visibility
+      - theme
+      - difficulty
+      title: MachineInformation
+    PasswordCrackingSpec:
+      properties:
+        wordlist:
+          type: string
+          const: rockyou.txt
+          title: Wordlist
+        password:
+          anyOf:
+          - type: string
+            maxLength: 32
+            minLength: 8
+            pattern: ^[A-Za-z0-9]+$
+          - type: 'null'
+          title: Password
+        line_number:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Line Number
+        search_space_lines:
+          anyOf:
+          - type: integer
+            minimum: 1.0
+          - type: 'null'
+          title: Search Space Lines
+        hash_algorithm:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Hash Algorithm
+        hash_runtime:
+          type: string
+          maxLength: 100
+          minLength: 1
+          title: Hash Runtime
+        hash_api:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Hash Api
+        hashcat_mode:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Hashcat Mode
+        john_format:
+          anyOf:
+          - type: string
+            maxLength: 100
+            minLength: 1
+          - type: 'null'
+          title: John Format
+        target_crack_seconds:
+          type: integer
+          maximum: 180.0
+          minimum: 120.0
+          title: Target Crack Seconds
+      type: object
+      required:
+      - wordlist
+      - hash_algorithm
+      - hash_runtime
+      - hash_api
+      - target_crack_seconds
+      title: PasswordCrackingSpec
+    ScenarioDraft:
+      properties:
+        scenario_id:
+          type: string
+          title: Scenario Id
+        scenario_version_id:
+          type: string
+          title: Scenario Version Id
+          default: v1
+        title:
+          type: string
+          title: Title
+        scenario_description:
+          type: string
+          maxLength: 1000
+          title: Scenario Description
+          default: ''
+        definition:
+          type: string
+          maxLength: 12000
+          minLength: 1
+          title: Definition
+        target_os:
+          type: string
+          title: Target Os
+          default: Debian 13.7.0
+        attack_graph:
+          $ref: '#/components/schemas/AttackGraph'
+        tags:
+          items:
+            type: string
+            maxLength: 30
+            minLength: 1
+          type: array
+          maxItems: 5
+          title: Tags
+      type: object
+      required:
+      - scenario_id
+      - title
+      - definition
+      - attack_graph
+      title: ScenarioDraft
+    SessionFailureFeedback:
+      properties:
+        kind:
+          type: string
+          const: ai_safety_refusal
+          title: Kind
+        summary:
+          type: string
+          maxLength: 2000
+          minLength: 1
+          title: Summary
+        retry_allowed:
+          type: boolean
+          title: Retry Allowed
+          default: false
+      type: object
+      required:
+      - kind
+      - summary
+      title: SessionFailureFeedback
+    SessionResponse:
+      properties:
+        session_id:
+          type: string
+          title: Session Id
+        owner_user_id:
+          type: string
+          title: Owner User Id
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+          default: created
+        machine_information:
+          anyOf:
+          - $ref: '#/components/schemas/MachineInformation'
+          - type: 'null'
+        scenario:
+          anyOf:
+          - $ref: '#/components/schemas/ScenarioDraft'
+          - type: 'null'
+        source_path:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Path
+        source_checksum:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Source Checksum
+        build_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Build Id
+        build_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Build Status
+        build_progress:
+          type: integer
+          title: Build Progress
+          default: 0
+        build_repair_attempts:
+          type: integer
+          minimum: 0.0
+          title: Build Repair Attempts
+          description: Cumulative number of submitted build repair attempts
+          default: 0
+        machine_access:
+          anyOf:
+          - $ref: '#/components/schemas/MachineAccess'
+          - type: 'null'
+        artifact:
+          anyOf:
+          - $ref: '#/components/schemas/Artifact'
+          - type: 'null'
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error Message
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        scenario_events_url:
+          type: string
+          title: Scenario Events Url
+        download_url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Download Url
+        user_flag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Flag
+        system_flag:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: System Flag
+        failure:
+          anyOf:
+          - $ref: '#/components/schemas/SessionFailureFeedback'
+          - type: 'null'
+        source_workbench:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Source Workbench
+      type: object
+      required:
+      - session_id
+      - owner_user_id
+      - scenario_events_url
+      title: SessionResponse
+    SessionStatus:
+      type: string
+      enum:
+      - created
+      - ready
+      - generating_scenario
+      - scenario_ready
+      - generating_code
+      - build_queued
+      - building
+      - completed
+      - failed
+      - cancelled
+      title: SessionStatus
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+servers:
+- url: /
+  description: AI Server
