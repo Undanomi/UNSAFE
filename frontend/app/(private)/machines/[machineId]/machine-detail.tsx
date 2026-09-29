@@ -27,7 +27,7 @@ import {
 } from "@/components/active-session-limit-panel"
 import { FlagCorrectEffect } from "@/components/flag-correct-effect"
 import { MarkdownContent } from "@/components/markdown-content"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { toMachineDifficulty, toMachineLevel } from "@/lib/machines/difficulty"
 import type {
   FlagDefinition,
   MachineBuildState,
@@ -36,8 +36,6 @@ import type {
 } from "@/types/machine-detail"
 
 type MachineDetailProps = {
-  backHref?: string
-  backLabel?: string
   machine: MachineDetail
 }
 
@@ -351,11 +349,7 @@ function GuidancePanel({
   )
 }
 
-export function MachineDetailView({
-  backHref = "/machines",
-  backLabel = "マシン一覧へ戻る",
-  machine,
-}: MachineDetailProps) {
+export function MachineDetailView({ machine }: MachineDetailProps) {
   const router = useRouter()
   const [savedFields, setSavedFields] = useState(() => ({
     name: machine.name,
@@ -404,14 +398,7 @@ export function MachineDetailView({
     setSaveError("")
     const formData = new FormData()
     formData.set("name", draftFields.name)
-    formData.set(
-      "level",
-      draftFields.difficulty === "High"
-        ? "hard"
-        : draftFields.difficulty === "Medium"
-          ? "medium"
-          : "easy",
-    )
+    formData.set("level", toMachineLevel(draftFields.difficulty))
     formData.set("published", draftFields.visibility === "公開" ? "true" : "false")
     try {
       const result = await updateMachineDetailsAction(machine.id, formData)
@@ -421,12 +408,7 @@ export function MachineDetailView({
       }
       const nextFields = {
         name: result.machine.name,
-        difficulty:
-          result.machine.level === "hard"
-            ? "High"
-            : result.machine.level === "medium"
-              ? "Medium"
-              : "Easy",
+        difficulty: toMachineDifficulty(result.machine.level),
         visibility: result.machine.published ? "公開" : "非公開",
       } as const
       setSavedFields(nextFields)
@@ -523,9 +505,9 @@ export function MachineDetailView({
 
   return (
     <section className="slsg-machine-detail-page">
-      <Link className="slsg-detail-back-link" href={backHref}>
+      <Link className="slsg-detail-back-link" href="/machines">
         <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
-        {backLabel}
+        マシン一覧へ
       </Link>
       <header className={`slsg-detail-hero${machine.canEdit ? " is-editable" : ""}`}>
         <div className="slsg-detail-heading">
@@ -616,6 +598,7 @@ export function MachineDetailView({
                   }
                   value={draftFields.difficulty}
                 >
+                  <option value="Very Easy">Very Easy</option>
                   <option value="Easy">Easy</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
@@ -676,7 +659,7 @@ export function MachineDetailView({
         </div>
       ) : null}
 
-      {machine.status !== undefined ? (
+      {machine.status !== undefined && (buildState.status !== "ready" || machine.isOwner) ? (
         <BuildStatusPanel
           activeLimitNotice={retryLimitNotice}
           canRetry={machine.canRetry === true}
@@ -778,7 +761,6 @@ export function MachineDetailView({
           </div>
         </section>
       ) : null}
-      <TerminalTelemetry />
     </section>
   )
 }
@@ -809,7 +791,7 @@ function BuildStatusPanel({
     return (
       <section className="slsg-detail-build-status is-ready">
         <CheckCircle2 aria-hidden="true" size={20} />
-        <p>マシンのビルドが完了しました。</p>
+        <p>マシンのビルドが完了しています。</p>
       </section>
     )
   }
@@ -901,13 +883,7 @@ function BuildStatusPanel({
   )
 }
 
-export function MissingMachine({
-  backHref = "/machines",
-  backLabel = "マシン一覧へ戻る",
-}: {
-  backHref?: string
-  backLabel?: string
-}) {
+export function MissingMachine() {
   return (
     <section className="slsg-panel slsg-state-card">
       <div className="slsg-state-card-content">
@@ -916,9 +892,9 @@ export function MissingMachine({
         </span>
         <h1>このマシンは見つかりませんでした。</h1>
         <p>一覧から別のマシンを選択してください。</p>
-        <Link className="slsg-state-card-action" href={backHref}>
+        <Link className="slsg-state-card-action" href="/machines">
           <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          {backLabel}
+          マシン一覧へ
         </Link>
       </div>
     </section>

@@ -16,11 +16,12 @@ import {
   verifyMachineFlagService,
 } from "@/lib/machines/service"
 import type { MachineBuildState, MachineGuidance } from "@/types/machine-detail"
+import type { MachineRecord } from "@/types/postgres"
 
 export type UpdateMachineDetailsResult =
   | {
       success: true
-      machine: { name: string; level: "easy" | "medium" | "hard"; published: boolean }
+      machine: { name: string; level: MachineRecord["level"]; published: boolean }
     }
   | { success: false; message: string }
 
@@ -45,7 +46,12 @@ export async function updateMachineDetailsAction(
   if (!name || name.length > 40) {
     return { success: false, message: "マシン名は1〜40文字で入力してください。" }
   }
-  if (rawLevel !== "easy" && rawLevel !== "medium" && rawLevel !== "hard") {
+  if (
+    rawLevel !== "very_easy" &&
+    rawLevel !== "easy" &&
+    rawLevel !== "medium" &&
+    rawLevel !== "hard"
+  ) {
     return { success: false, message: "難易度を選択してください。" }
   }
   if (rawPublished !== "true" && rawPublished !== "false") {

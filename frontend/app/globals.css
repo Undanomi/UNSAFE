@@ -278,6 +278,12 @@
     letter-spacing: 0.025em;
     line-height: 1;
   }
+  .slsg-brand-image {
+    display: block;
+    width: 190px;
+    height: auto;
+    transform: scale(1.28);
+  }
   .slsg-brand-mark {
     position: relative;
     display: grid;
@@ -315,6 +321,9 @@
     font-weight: 500;
     letter-spacing: 0.15em;
   }
+  .slsg-brand-orbit .slsg-brand-image {
+    width: clamp(160px, 13.5vw, 178px);
+  }
   .slsg-brand-mark-orbit {
     width: 68px;
     height: 68px;
@@ -347,7 +356,7 @@
     background: linear-gradient(180deg, #131627 0%, #101624 45%, #131725 100%);
   }
   .slsg-shell-machines .slsg-sidebar .slsg-brand {
-    margin: 28px 32px 46px;
+    margin: 28px 32px 26px;
   }
   .slsg-shell-machines .slsg-sidebar-link {
     min-height: 64px;
@@ -904,11 +913,12 @@
   .slsg-difficulty {
     border: 1px solid transparent;
     letter-spacing: 0.01em;
+    white-space: nowrap;
   }
   .slsg-difficulty-very-easy {
-    border-color: rgba(93, 210, 190, 0.14);
-    background: rgba(28, 99, 88, 0.4);
-    color: #7ddbc8;
+    border-color: rgba(131, 184, 255, 0.4);
+    background: rgba(45, 84, 150, 0.48);
+    color: #a5d2ff;
   }
   .slsg-difficulty-easy {
     border-color: rgba(112, 205, 137, 0.14);
@@ -2165,10 +2175,10 @@
     font-weight: 400;
   }
   .slsg-profile-history-card.is-created {
-    --slsg-profile-history-columns: minmax(0, 1fr) 76px 108px 18px;
+    --slsg-profile-history-columns: minmax(0, 1fr) 90px 108px 18px;
   }
   .slsg-profile-history-card.is-solved {
-    --slsg-profile-history-columns: minmax(0, 1fr) 76px minmax(88px, 0.65fr) 108px 18px;
+    --slsg-profile-history-columns: minmax(0, 1fr) 90px minmax(88px, 0.65fr) 108px 18px;
   }
   .slsg-profile-history-list {
     min-height: 0;
@@ -2291,18 +2301,6 @@
     color: #929ab1;
     font-size: 16px;
   }
-  .slsg-terminal-telemetry {
-    position: absolute;
-    bottom: -44px;
-    left: -25px;
-    z-index: -1;
-    display: grid;
-    color: rgba(126, 140, 166, 0.42);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    pointer-events: none;
-  }
   .slsg-chat-shell {
     --chat-border: #566985;
     --chat-border-soft: #242b3e;
@@ -2334,7 +2332,7 @@
     );
   }
   .slsg-chat-shell .slsg-sidebar .slsg-brand {
-    margin: 28px 32px 46px;
+    margin: 28px 32px 26px;
   }
   .slsg-chat-shell .slsg-sidebar-link {
     min-height: 64px;
@@ -3466,6 +3464,14 @@
   .slsg-profile-page.is-public-profile {
     grid-template-rows: auto auto minmax(0, 1fr);
   }
+  .slsg-profile-shell .slsg-main:has(.slsg-profile-page.is-editing) {
+    overflow-y: auto;
+  }
+  .slsg-profile-page.is-editing {
+    height: auto;
+    min-height: 100%;
+    grid-template-rows: auto auto;
+  }
   .slsg-profile-history-grid {
     min-height: 0;
   }
@@ -4350,10 +4356,10 @@
     gap: 22px;
   }
   .slsg-profile-history-card.is-created {
-    --slsg-profile-history-columns: minmax(0, 1fr) 72px 104px 18px;
+    --slsg-profile-history-columns: minmax(0, 1fr) 90px 104px 18px;
   }
   .slsg-profile-history-card.is-solved {
-    --slsg-profile-history-columns: minmax(0, 1fr) 72px minmax(82px, 0.55fr) 104px 18px;
+    --slsg-profile-history-columns: minmax(0, 1fr) 90px minmax(82px, 0.55fr) 104px 18px;
   }
   .slsg-profile-history-columns,
   .slsg-profile-machine-row {
@@ -4477,9 +4483,6 @@
   }
   .slsg-profile-machine-row > svg {
     grid-area: arrow;
-  }
-  .slsg-terminal-telemetry {
-    display: none;
   }
 }
 

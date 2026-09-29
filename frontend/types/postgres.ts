@@ -15,7 +15,7 @@ export type MachineRecord = {
   name: string
   description: string
   file_path: string
-  level: "easy" | "medium" | "hard"
+  level: "very_easy" | "easy" | "medium" | "hard"
   published: boolean
   status: "created" | "building" | "ready" | "failed" | "cancelled" | "preparing" | "deleted"
   system_flag: string

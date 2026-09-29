@@ -5,6 +5,7 @@ import { cancelAiSessionService, getAiSessionService } from "@/lib/ai/service"
 import { resolveMachineFlag } from "@/lib/chat/flags"
 import { queryDatabase, withDatabaseTransaction } from "@/lib/database/client"
 import { BUILDING_MACHINE_DESCRIPTION } from "@/lib/machines/description"
+import { toMachineLevel } from "@/lib/machines/difficulty"
 import {
   CHAT_STEPS,
   type ChatAnswers,
@@ -280,12 +281,6 @@ export async function setChatCreationReadyService(
   })
 }
 
-function difficultyToLevel(difficulty: ChatAnswers["difficulty"]) {
-  if (difficulty === "Medium") return "medium"
-  if (difficulty === "High") return "hard"
-  return "easy"
-}
-
 async function lockOwnedChat(client: PoolClient, ownerUserId: string, sessionId: string) {
   const result = await client.query<ChatSessionRow>(
     `SELECT * FROM chat_sessions
@@ -314,6 +309,7 @@ export async function createMachineDocumentService(
   return withDatabaseTransaction(async (client) => {
     const chat = await lockOwnedChat(client, ownerUserId, sessionId)
     if (!chat || (await isCompletedMachine(client, chat))) return null
+    if (!chat.answers.difficulty) throw new Error("Machine difficulty is missing.")
 
     const userFlag = resolveMachineFlag(chat.answers.needsUserFlag, generated.userFlag)
     const systemFlag = resolveMachineFlag(chat.answers.needsSystemFlag, generated.systemFlag)
@@ -362,7 +358,7 @@ export async function createMachineDocumentService(
         ownerUserId,
         chat.answers.name,
         BUILDING_MACHINE_DESCRIPTION,
-        difficultyToLevel(chat.answers.difficulty),
+        toMachineLevel(chat.answers.difficulty),
         chat.answers.visibility === "公開",
         systemFlag,
         userFlag,

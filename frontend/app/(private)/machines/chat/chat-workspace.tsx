@@ -21,11 +21,12 @@ import {
   saveChatProgressAction,
   startMachineBuildAction,
 } from "@/app/actions/chat"
+
 import {
   type ActiveLimitNotice,
   ActiveSessionLimitPanel,
 } from "@/components/active-session-limit-panel"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
+
 import {
   type ActiveChatLink,
   CHAT_CONFIG,
@@ -867,7 +868,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           </button>
         </div>
       </dialog>
-      <TerminalTelemetry />
     </div>
   )
 }
