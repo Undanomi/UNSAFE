@@ -2345,7 +2345,7 @@
     height: 100%;
     min-height: 600px;
     overflow: hidden;
-    padding: 12px clamp(26px, 3vw, 54px) 28px;
+    padding: max(32px, 4dvh) clamp(26px, 3vw, 54px) 28px;
   }
   .slsg-chat-workspace {
     position: relative;
@@ -2625,7 +2625,9 @@
     padding: 4px 44px 4px 0;
   }
   .slsg-chat-panel-header .slsg-chat-progress {
+    width: auto;
     max-width: 495px;
+    margin-right: 32px;
   }
   .slsg-chat-panel-header .slsg-chat-loading-button {
     width: 104px;
@@ -3436,9 +3438,6 @@
   .slsg-shell-machines .slsg-main {
     padding-bottom: 44px;
   }
-  .slsg-chat-shell .slsg-main {
-    padding: 12px clamp(26px, 3vw, 54px) 28px;
-  }
   .slsg-chat-header {
     padding-bottom: 6px;
   }
@@ -3486,9 +3485,6 @@
 }
 
 @media (max-width: 1439px) and (min-width: 1024px) {
-  .slsg-chat-shell .slsg-main {
-    padding: 24px clamp(26px, 3vw, 54px) 28px;
-  }
   .slsg-chat-layout {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
@@ -3501,6 +3497,12 @@
   }
   .slsg-chat-cancel {
     min-width: 112px;
+  }
+}
+
+@media (max-width: 1199px) and (min-width: 1024px) {
+  .slsg-chat-shell .slsg-main {
+    padding-top: max(72px, 7dvh);
   }
 }
 
@@ -3588,6 +3590,10 @@
   }
   .slsg-chat-progress {
     width: 100%;
+  }
+  .slsg-chat-panel-header .slsg-chat-progress {
+    width: 100%;
+    margin-right: 0;
   }
   .slsg-chat-layout {
     height: clamp(500px, 70dvh, 680px);
