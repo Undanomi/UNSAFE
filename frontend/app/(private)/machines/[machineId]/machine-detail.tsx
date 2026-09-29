@@ -509,7 +509,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
     <section className="slsg-machine-detail-page">
       <Link className="slsg-detail-back-link" href="/machines">
         <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
-        マシン一覧へ戻る
+        マシン一覧へ
       </Link>
       <header className={`slsg-detail-hero${machine.canEdit ? " is-editable" : ""}`}>
         <div className="slsg-detail-heading">
@@ -880,7 +880,7 @@ export function MissingMachine() {
         <p>一覧から別のマシンを選択してください。</p>
         <Link className="slsg-state-card-action" href="/machines">
           <ArrowLeft aria-hidden="true" size={17} strokeWidth={2} />
-          マシン一覧へ戻る
+          マシン一覧へ
         </Link>
       </div>
     </section>
