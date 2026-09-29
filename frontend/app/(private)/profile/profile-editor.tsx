@@ -6,7 +6,6 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import { MACHINE_DIFFICULTY_LABELS } from "@/lib/machines/difficulty"
 import type { ProfileMachine, UserProfile } from "@/types/profile"
 
@@ -290,18 +289,14 @@ export function ProfileEditor({
       </section>
 
       {!isEditing ? (
-        <>
-          <div className="slsg-profile-history-grid">
-            <MachineRecordList
-              items={profile.createdMachines}
-              kind="created"
-              title="作成したマシン"
-            />
-            <MachineRecordList items={profile.solvedMachines} kind="solved" title="解いたマシン" />
-          </div>
-
-          <TerminalTelemetry />
-        </>
+        <div className="slsg-profile-history-grid">
+          <MachineRecordList
+            items={profile.createdMachines}
+            kind="created"
+            title="作成したマシン"
+          />
+          <MachineRecordList items={profile.solvedMachines} kind="solved" title="解いたマシン" />
+        </div>
       ) : null}
     </section>
   )

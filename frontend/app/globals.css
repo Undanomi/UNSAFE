@@ -2289,18 +2289,6 @@
     color: #929ab1;
     font-size: 16px;
   }
-  .slsg-terminal-telemetry {
-    position: absolute;
-    bottom: -44px;
-    left: -25px;
-    z-index: -1;
-    display: grid;
-    color: rgba(126, 140, 166, 0.42);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    pointer-events: none;
-  }
   .slsg-chat-shell {
     --chat-border: #566985;
     --chat-border-soft: #242b3e;
@@ -4438,9 +4426,6 @@
   }
   .slsg-profile-machine-row > svg {
     grid-area: arrow;
-  }
-  .slsg-terminal-telemetry {
-    display: none;
   }
 }
 

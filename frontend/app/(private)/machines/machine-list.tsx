@@ -12,7 +12,6 @@ import Image from "next/image"
 import Link from "next/link"
 import type { ReactNode } from "react"
 import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filter-reset-button"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import { MACHINE_DIFFICULTY_LABELS, MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import {
   MACHINE_PAGE_SIZE,
@@ -194,7 +193,6 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
       </Form>
 
       {children}
-      <TerminalTelemetry />
     </section>
   )
 }

@@ -23,7 +23,6 @@ import {
 } from "@/app/actions/machines"
 import { FlagCorrectEffect } from "@/components/flag-correct-effect"
 import { MarkdownContent } from "@/components/markdown-content"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import { toMachineDifficulty, toMachineLevel } from "@/lib/machines/difficulty"
 import type {
   FlagDefinition,
@@ -751,7 +750,6 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
           </div>
         </section>
       ) : null}
-      <TerminalTelemetry />
     </section>
   )
 }

@@ -21,7 +21,6 @@ import {
   saveChatProgressAction,
   startMachineBuildAction,
 } from "@/app/actions/chat"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
 import {
   CHAT_CONFIG,
   CHAT_COPY,
@@ -819,7 +818,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           </button>
         </div>
       </dialog>
-      <TerminalTelemetry />
     </div>
   )
 }
