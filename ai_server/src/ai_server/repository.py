@@ -41,7 +41,13 @@ class ActiveSessionLimitError(Exception):
 ACTIVE_SESSION_STATUSES = tuple(
     status.value
     for status in SessionStatus
-    if status not in {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}
+    if status
+    not in {
+        SessionStatus.CREATED,
+        SessionStatus.COMPLETED,
+        SessionStatus.FAILED,
+        SessionStatus.CANCELLED,
+    }
 )
 
 
@@ -164,7 +170,6 @@ class SessionRepository:
             updated_at=state.updated_at,
         )
         async with self.session_factory.begin() as session:
-            await self._check_active_limit(session, owner_user_id)
             session.add(record)
         return state
 
@@ -251,8 +256,8 @@ class SessionRepository:
         state.updated_at = utcnow()
         async with self.session_factory.begin() as session:
             if state.status.value in ACTIVE_SESSION_STATUSES:
-                # A failed or cancelled session may be restarted. Admit that transition
-                # under the same user lock used when a new session is created.
+                # Created, failed, or cancelled sessions enter the active pool here.
+                # Serialize those transitions across API processes for this user.
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:owner_user_id, 0))"),
                     {"owner_user_id": state.owner_user_id},

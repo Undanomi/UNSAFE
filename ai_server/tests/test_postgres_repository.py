@@ -232,9 +232,17 @@ async def test_user_active_session_limit_is_atomic_across_repositories() -> None
     owner = f"limit-test-{uuid4()}"
     created_ids: list[UUID] = []
     try:
-        results = await asyncio.gather(
+        first, second = await asyncio.gather(
             first_repository.create(owner),
             second_repository.create(owner),
+        )
+        created_ids.extend((UUID(first.session_id), UUID(second.session_id)))
+        assert first.status == second.status == SessionStatus.CREATED
+
+        first.status = second.status = SessionStatus.READY
+        results = await asyncio.gather(
+            first_repository.save(first),
+            second_repository.save(second),
             return_exceptions=True,
         )
         successes = [item for item in results if not isinstance(item, BaseException)]
@@ -242,28 +250,34 @@ async def test_user_active_session_limit_is_atomic_across_repositories() -> None
         assert len(successes) == 1
         assert len(failures) == 1
         assert isinstance(failures[0], ActiveSessionLimitError)
-        first = successes[0]
-        assert failures[0].active_session_ids == [first.session_id]
-        created_ids.append(UUID(first.session_id))
+        winner = successes[0]
+        loser = second if winner.session_id == first.session_id else first
+        winner_repository = (
+            first_repository if winner.session_id == first.session_id else second_repository
+        )
+        loser_repository = (
+            second_repository if winner.session_id == first.session_id else first_repository
+        )
+        assert failures[0].active_session_ids == [winner.session_id]
+        assert (await loser_repository.get(loser.session_id)).status == SessionStatus.CREATED
 
-        first.status = SessionStatus.SCENARIO_READY
-        await first_repository.save(first)
+        winner.status = SessionStatus.SCENARIO_READY
+        await winner_repository.save(winner)
         with pytest.raises(ActiveSessionLimitError):
-            await second_repository.create(owner)
+            await loser_repository.save(loser)
 
-        first.status = SessionStatus.FAILED
-        await first_repository.save(first)
-        second = await second_repository.create(owner)
-        created_ids.append(UUID(second.session_id))
-        first.status = SessionStatus.READY
+        winner.status = SessionStatus.FAILED
+        await winner_repository.save(winner)
+        await loser_repository.save(loser)
+        winner.status = SessionStatus.READY
         with pytest.raises(ActiveSessionLimitError):
-            await first_repository.save(first)
-        assert (await first_repository.get(first.session_id)).status == SessionStatus.FAILED
+            await winner_repository.save(winner)
+        assert (await winner_repository.get(winner.session_id)).status == SessionStatus.FAILED
 
-        second.status = SessionStatus.CANCELLED
-        await second_repository.save(second)
-        await first_repository.save(first)
-        assert (await first_repository.get(first.session_id)).status == SessionStatus.READY
+        loser.status = SessionStatus.CANCELLED
+        await loser_repository.save(loser)
+        await winner_repository.save(winner)
+        assert (await winner_repository.get(winner.session_id)).status == SessionStatus.READY
     finally:
         async with first_repository.session_factory.begin() as session:
             if created_ids:
@@ -275,7 +289,7 @@ async def test_user_active_session_limit_is_atomic_across_repositories() -> None
 
 
 @pytest.mark.asyncio
-async def test_session_create_api_reports_limit_and_releases_on_cancel(tmp_path) -> None:
+async def test_machine_information_api_reports_limit_and_releases_on_cancel(tmp_path) -> None:
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("TEST_DATABASE_URL is not set")
@@ -299,27 +313,47 @@ async def test_session_create_api_reports_limit_and_releases_on_cancel(tmp_path)
             ) as client,
         ):
             first = await client.post("/v1/sessions", headers=headers)
-            assert first.status_code == 201
-            session_id = first.json()["session_id"]
-            created_ids.append(UUID(session_id))
             second = await client.post("/v1/sessions", headers=headers)
-            assert second.status_code == 201
-            created_ids.append(UUID(second.json()["session_id"]))
-            blocked = await client.post("/v1/sessions", headers=headers)
+            third = await client.post("/v1/sessions", headers=headers)
+            assert [response.status_code for response in (first, second, third)] == [201] * 3
+            session_ids = [response.json()["session_id"] for response in (first, second, third)]
+            created_ids.extend(UUID(session_id) for session_id in session_ids)
+            machine_information = {
+                "name": "Limit test",
+                "visibility": "private",
+                "theme": "concurrency",
+                "difficulty": "Easy",
+            }
+            for session_id in session_ids[:2]:
+                admitted = await client.put(
+                    f"/v1/sessions/{session_id}/machine-information",
+                    headers=headers,
+                    json=machine_information,
+                )
+                assert admitted.status_code == 200
+                assert admitted.json()["status"] == "ready"
+            blocked = await client.put(
+                f"/v1/sessions/{session_ids[2]}/machine-information",
+                headers=headers,
+                json=machine_information,
+            )
             assert blocked.status_code == 409
             assert "at most 2 active sessions" in blocked.json()["detail"]
             assert blocked.json()["code"] == "active_session_limit"
             assert blocked.json()["limit"] == 2
-            assert set(blocked.json()["active_session_ids"]) == {
-                session_id,
-                second.json()["session_id"],
-            }
-            cancelled = await client.post(f"/v1/sessions/{session_id}/cancel", headers=headers)
+            assert set(blocked.json()["active_session_ids"]) == set(session_ids[:2])
+            assert (await repository.get(session_ids[2])).status == SessionStatus.CREATED
+            cancelled = await client.post(f"/v1/sessions/{session_ids[0]}/cancel", headers=headers)
             assert cancelled.status_code == 200
             assert cancelled.json()["status"] == "cancelled"
-            third = await client.post("/v1/sessions", headers=headers)
-            assert third.status_code == 201
-            created_ids.append(UUID(third.json()["session_id"]))
+            admitted = await client.put(
+                f"/v1/sessions/{session_ids[2]}/machine-information",
+                headers=headers,
+                json=machine_information,
+            )
+            assert admitted.status_code == 200
+            assert admitted.json()["status"] == "ready"
+
     finally:
         async with repository.session_factory.begin() as session:
             if created_ids:

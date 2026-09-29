@@ -24,15 +24,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
-        '409':
-          description: ユーザーの同時実行セッション数が上限に達しています。
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      description: セッションを作成します。X-Authenticated-User-ID を省略した場合の所有者は local-user です。完了・失敗・キャンセル以外のセッションが上限に達している場合は 409 です。
+      description: セッションを作成します。X-Authenticated-User-ID を省略した場合の所有者は local-user です。作成直後の created 状態は同時実行数に含まれません。
   /v1/sessions/{session_id}:
     get:
       summary: Get Session
@@ -98,13 +96,15 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
+        '409':
+          description: ユーザーの同時実行セッション数が上限に達しています。
         '422':
           description: Validation Error
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-      description: 生成条件を保存し、既存のシナリオと生成結果を破棄して ready に戻します。
+      description: 生成条件を保存し、既存のシナリオと生成結果を破棄して ready に戻します。ready への遷移時に同時実行数を確認します。
   /v1/sessions/{session_id}/skills:
     get:
       summary: Skill Selection Report
