@@ -70,7 +70,7 @@ export function SiteSidebar({ user }: SiteSidebarProps) {
 
   return (
     <aside className="slsg-sidebar fixed inset-y-0 left-0 z-20 flex w-[240px] flex-col text-[#eef5ff] max-lg:static max-lg:w-full">
-      <SlsgBrand className="mx-6 mt-6 mb-9 shrink-0" />
+      <SlsgBrand className="mx-6 mt-6 mb-4 shrink-0" />
 
       <nav
         aria-label="主要ナビゲーション"

@@ -15,9 +15,20 @@ const notoSansJp = Noto_Sans_JP({
 })
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://slsg.konekotech.com"),
   title: "UNSAFE",
   description: "セキュリティ学習用のシナリオ作成ジェネレーター",
-  icons: { icon: { url: "/logo.svg", type: "image/svg+xml" } },
+  icons: {
+    icon: { url: "/logo.png", type: "image/png", sizes: "1254x1254" },
+    apple: { url: "/logo.png", type: "image/png" },
+  },
+  openGraph: {
+    images: [{ url: "/thumb-share.png", width: 1926, height: 816, alt: "UNSAFE" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: ["/thumb-share.png"],
+  },
 }
 
 export default function RootLayout({

@@ -38,11 +38,11 @@ export function SlsgBrand({
       <Image
         alt=""
         className="slsg-brand-image"
-        height={60}
+        height={816}
         preload
-        src="/thumb.svg"
-        unoptimized
-        width={211}
+        sizes="240px"
+        src="/thumb.png"
+        width={1926}
       />
     </Link>
   )

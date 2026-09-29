@@ -275,6 +275,7 @@
     display: block;
     width: 190px;
     height: auto;
+    transform: scale(1.28);
   }
   .slsg-brand-mark {
     position: relative;
@@ -349,7 +350,7 @@
     background: linear-gradient(180deg, #131627 0%, #101624 45%, #131725 100%);
   }
   .slsg-shell-machines .slsg-sidebar .slsg-brand {
-    margin: 28px 32px 46px;
+    margin: 28px 32px 26px;
   }
   .slsg-shell-machines .slsg-sidebar-link {
     min-height: 64px;
@@ -2252,7 +2253,7 @@
     );
   }
   .slsg-chat-shell .slsg-sidebar .slsg-brand {
-    margin: 28px 32px 46px;
+    margin: 28px 32px 26px;
   }
   .slsg-chat-shell .slsg-sidebar-link {
     min-height: 64px;
