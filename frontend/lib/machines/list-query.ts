@@ -1,9 +1,12 @@
+import { MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import type { MachineRecord } from "@/types/postgres"
 
 export const MACHINE_PAGE_SIZE = 10
+export const MAX_MACHINE_TAGS = 5
 export type MachineListQuery = {
   page: number
   q: string
+  tags: string[]
   level: MachineRecord["level"][]
   owned: boolean
   solved: "" | "yes" | "no"
@@ -34,11 +37,19 @@ export function parseMachineListQuery(
   const rawPage = value("page")
   const page = /^\d+$/.test(rawPage) ? Number(rawPage) : 1
   const rawLevels = Array.isArray(params.level) ? params.level : [params.level]
-  const levels = (["easy", "medium", "hard"] as const).filter((level) => rawLevels.includes(level))
+  const levels = MACHINE_LEVELS.filter((level) => rawLevels.includes(level))
+  const rawTags = Array.isArray(params.tag) ? params.tag : [params.tag]
+  const tags: string[] = []
+  for (const rawTag of rawTags) {
+    if (tags.length === MAX_MACHINE_TAGS) break
+    const tag = rawTag?.trim().slice(0, 100)
+    if (tag && !tags.includes(tag)) tags.push(tag)
+  }
   const solved = value("solved")
   return {
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
     q: value("q").trim().slice(0, 100),
+    tags,
     level: levels,
     owned: value("owned") === "1",
     solved: solved === "yes" || solved === "no" ? solved : "",
@@ -49,6 +60,7 @@ export function parseMachineListQuery(
 export function machineListHref(query: MachineListQuery, page = query.page) {
   const params = new URLSearchParams()
   if (query.q) params.set("q", query.q)
+  for (const tag of query.tags) params.append("tag", tag)
   for (const level of query.level) params.append("level", level)
   if (query.owned) params.set("owned", "1")
   if (query.solved) params.set("solved", query.solved)
@@ -68,6 +80,7 @@ export function selectMachinePage(
       (item.published === true || item.isOwned) &&
       (!query.owned || item.isOwned) &&
       (query.level.length === 0 || query.level.includes(item.level)) &&
+      query.tags.every((tag) => item.tags.includes(tag)) &&
       (!query.solved || item.isSolved === (query.solved === "yes")) &&
       (!needle ||
         [item.name, ...item.tags].some((text) => text.toLocaleLowerCase("ja-JP").includes(needle))),

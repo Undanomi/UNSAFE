@@ -134,7 +134,7 @@ export const SEED_MACHINES = [
     createdBy: "seed-user-alice",
     name: "セッションCookie演習",
     description: "ログイン後のCookieを確認し、セッションの保護に必要な設定を学ぶ公開マシンです。",
-    level: "medium",
+    level: "very_easy",
     systemFlag: "flag{seed-session-cookie-system}",
     userFlag: "flag{seed-session-cookie-user}",
     tags: ["Web セキュリティ", "セッション管理"],
