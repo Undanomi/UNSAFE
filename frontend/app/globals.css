@@ -972,6 +972,7 @@
   .slsg-detail-heading {
     position: relative;
     z-index: 2;
+    min-width: 0;
     max-width: 720px;
     padding-top: 0;
   }
@@ -986,13 +987,79 @@
       0 0 7px rgba(210, 244, 250, 0.2),
       0 0 20px rgba(121, 190, 210, 0.24);
   }
-  .slsg-detail-heading > p:last-child {
-    max-width: 700px;
+  .slsg-detail-tags {
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
     margin-top: 16px;
+  }
+  .slsg-detail-tags li {
+    max-width: 100%;
+    border: 1px solid #3a4c69;
+    border-radius: 6px;
+    padding: 6px 12px;
+    background: #18243a;
     color: #a8b5cc;
-    font-size: clamp(1rem, 1.15vw, 1.3125rem);
-    font-weight: 400;
-    line-height: 1.65;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+  .slsg-detail-edit-form {
+    border: 1px solid #536d87;
+    border-radius: 8px;
+    padding: 24px;
+    background: #1b2b42;
+    color: #d9e2f3;
+  }
+  .slsg-detail-edit-form h2 {
+    margin-bottom: 18px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .slsg-detail-edit-fields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .slsg-detail-edit-fields label {
+    display: grid;
+    gap: 8px;
+    color: #a8b5cc;
+    font-size: 14px;
+  }
+  .slsg-detail-edit-fields input {
+    min-width: 0;
+    border: 1px solid #536d87;
+    border-radius: 6px;
+    padding: 10px 12px;
+    background: #111c2d;
+    color: #fcfcfc;
+  }
+  .slsg-detail-edit-fields input:focus-visible {
+    outline: 2px solid #79adff;
+    outline-offset: 2px;
+  }
+  .slsg-detail-edit-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .slsg-detail-edit-actions button {
+    border: 1px solid #536d87;
+    border-radius: 6px;
+    padding: 10px 20px;
+    color: #fcfcfc;
+  }
+  .slsg-detail-edit-actions button:first-child {
+    background: #31527e;
+  }
+  .slsg-detail-edit-actions button:disabled {
+    opacity: 0.5;
+  }
+  .slsg-detail-edit-error {
+    margin-top: 14px;
+    color: #ffb3b3;
   }
   .slsg-detail-actions {
     position: relative;
@@ -3392,6 +3459,21 @@
 }
 
 @media (max-width: 1279px) {
+  .slsg-detail-hero.is-editable {
+    display: grid;
+    min-height: auto;
+    gap: 24px;
+    padding-bottom: 4px;
+  }
+  .slsg-detail-hero.is-editable .slsg-detail-actions {
+    width: 100%;
+    margin-left: 0;
+    padding-top: 0;
+  }
+  .slsg-detail-hero.is-editable .slsg-detail-action {
+    min-width: 0;
+    flex: 1;
+  }
   .slsg-detail-overview {
     grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.8fr);
     gap: 20px;
@@ -3579,6 +3661,9 @@
     min-width: 0;
     min-height: 60px;
     flex: 1;
+  }
+  .slsg-detail-edit-fields {
+    grid-template-columns: 1fr;
   }
   .slsg-detail-flags-card {
     min-height: auto;

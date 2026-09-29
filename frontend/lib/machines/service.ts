@@ -178,9 +178,9 @@ export async function getMachineDetailService(
     author: machine.owner_name || "ユーザー",
     createdAt: formatCreatedAt(machine.created_at),
     visibility: machine.published ? "公開" : "非公開",
-    theme: machine.tags[0] ?? "セキュリティ",
+    tags: machine.tags,
     difficulty: toDifficulty(machine.level),
-    summary: machine.summary,
+    canEdit: isOwner && machine.status === "ready",
     description,
     buildProgress: machine.build_progress ?? 0,
     buildFailure,
@@ -204,6 +204,35 @@ export async function getMachineDetailService(
         }
       : null,
   }
+}
+
+export type MachineEditableFields = Pick<MachineRecord, "name" | "level" | "published">
+
+export async function updateMachineDetailsService(
+  ownerUserId: string,
+  machineId: string,
+  fields: MachineEditableFields,
+): Promise<(MachineEditableFields & { chatSessionId: string | null }) | null> {
+  return withDatabaseTransaction(async (client) => {
+    const updated = await client.query<MachineEditableFields>(
+      `UPDATE machines SET name = $3, level = $4, published = $5, updated_at = now()
+       WHERE id = $1 AND created_by = $2 AND status = 'ready'
+       RETURNING name, level, published`,
+      [machineId, ownerUserId, fields.name, fields.level, fields.published],
+    )
+    if (!updated.rows[0]) return null
+
+    const chat = await client.query<{ ai_session_id: string }>(
+      `UPDATE chat_sessions SET
+         name = $2::text,
+         answers = jsonb_set(answers, '{name}', to_jsonb($2::text), true),
+         updated_at = now()
+       WHERE machine_id = $1 AND owner_user_id = $3
+       RETURNING ai_session_id`,
+      [machineId, fields.name, ownerUserId],
+    )
+    return { ...updated.rows[0], chatSessionId: chat.rows[0]?.ai_session_id ?? null }
+  })
 }
 
 export async function generateMachineGuidanceService(
@@ -356,6 +385,8 @@ export async function verifyMachineFlagService(
   const correct = timingSafeEqual(expectedDigest, answerDigest)
   if (correct) {
     await withDatabaseTransaction(async (client) => {
+      // Serialize simultaneous flag submissions so the second one sees the first.
+      await client.query("SELECT id FROM machines WHERE id = $1 FOR UPDATE", [machineId])
       await client.query(
         `INSERT INTO machine_flag_solutions (user_id, machine_id, flag_kind)
          VALUES ($1, $2, $3)
@@ -363,9 +394,19 @@ export async function verifyMachineFlagService(
         [viewerUserId, machineId, kind],
       )
       await client.query(
-        `INSERT INTO machine_solutions (user_id, machine_id)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id, machine_id) DO NOTHING`,
+        `INSERT INTO machine_solutions (user_id, machine_id, solved_at)
+         SELECT $1, $2, MAX(fs.solved_at)
+         FROM machines m
+         JOIN machine_flag_solutions fs ON fs.machine_id = m.id AND fs.user_id = $1
+         WHERE m.id = $2 AND m.created_by <> $1
+           AND (
+             (fs.flag_kind = 'user' AND m.user_flag <> '')
+             OR (fs.flag_kind = 'system' AND m.system_flag <> '')
+           )
+         GROUP BY m.id, m.user_flag, m.system_flag
+         HAVING COUNT(*) = (m.user_flag <> '')::integer + (m.system_flag <> '')::integer
+         ON CONFLICT (user_id, machine_id) DO UPDATE SET
+           solved_at = EXCLUDED.solved_at`,
         [viewerUserId, machineId],
       )
     })

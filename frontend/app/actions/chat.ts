@@ -10,6 +10,7 @@ import {
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
 import {
+  canModifyMachineCreationService,
   createChatSessionService,
   createMachineDocumentService,
   saveChatProgressService,
@@ -175,7 +176,9 @@ export async function prepareMachineCreationAction(
     if (!saved) return { success: false, message: SESSION_ERROR_MESSAGE }
 
     await saveMachineInformationService(user.uid, sessionId, answers)
-    await setChatCreationStatusService(user.uid, sessionId, "generating_scenario")
+    if (!(await setChatCreationStatusService(user.uid, sessionId, "generating_scenario"))) {
+      return { success: false, message: SESSION_ERROR_MESSAGE }
+    }
     return { success: true, sessionId }
   } catch (error) {
     console.error("Failed to prepare machine creation.", error)
@@ -194,6 +197,9 @@ export async function startMachineBuildAction(
   }
 
   try {
+    if (!(await canModifyMachineCreationService(user.uid, sessionId))) {
+      return { success: false, message: SESSION_ERROR_MESSAGE }
+    }
     const started = await startMachineBuildService(user.uid, sessionId, scenarioId)
     const machineId = await createMachineDocumentService(user.uid, sessionId, {
       userFlag: started.user_flag,
@@ -236,6 +242,9 @@ export async function cancelMachineCreationAction(sessionId: string): Promise<Ch
   if (!user) return { success: false, message: "ログインし直してください。" }
 
   try {
+    if (!(await canModifyMachineCreationService(user.uid, sessionId))) {
+      return { success: false, message: SESSION_ERROR_MESSAGE }
+    }
     await cancelAiSessionService(user.uid, sessionId)
     const updated = await setChatCreationCancelledService(user.uid, sessionId)
     return updated

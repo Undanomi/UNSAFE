@@ -38,9 +38,9 @@
 - セッション Cookie を検証した利用者 ID をサーバーの一覧サービスへ渡す。クライアントから所有者 ID を受け付けない。
 - PostgreSQLの `machines` は `status in [created, building, ready, failed, cancelled, preparing]` かつ、通常は `published = true` または自分が作成したものを取得する。「自分が作成したマシンのみ」を指定した場合は自作だけを取得する。
 - `machines.id` を正とし、`status = deleted` はDBクエリで除外する。
-- 一覧取得では `name`, `summary`, `description`, `tags`, `level`, `created_at`, `created_by`, `published`, `status` だけを取得する。フラグ正解値・成果物パス・AI セッション ID は読み出さない。
-- 回答済みは `machine_solutions` のユーザーIDとマシンIDの組で判定する。いずれか 1 つのフラグに正解した時点で回答済みとし、不正解や空回答は保存しない。
-- 正解時は複合主キーと `ON CONFLICT DO NOTHING` で冪等に記録する。フラグを持たないマシンは未回答になる。
+- 一覧取得では `name`, `description`, `tags`, `level`, `created_at`, `created_by`, `published`, `status` だけを取得する。フラグ正解値・成果物パス・AI セッション ID は読み出さない。
+- 回答済みは、そのマシンに存在する全フラグの正解履歴が `machine_flag_solutions` に揃った場合に `machine_solutions` へ記録する。自分が作成したマシンとフラグを持たないマシンは未回答として扱う。
+- 不正解や空回答は記録せず、正解時は複合主キーでフラグごとの履歴とマシンの完了履歴を冪等に保存する。
 - 作成者は `users` と結合して取得する。
 - 一覧から移動した詳細が同名 ID のダミーデータにならないよう、詳細取得も DB を正とする。
 

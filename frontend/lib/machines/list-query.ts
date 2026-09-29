@@ -11,7 +11,7 @@ export type MachineListQuery = {
 }
 export type MachineListItem = Pick<
   MachineRecord,
-  "description" | "id" | "level" | "name" | "published" | "status" | "summary" | "tags"
+  "description" | "id" | "level" | "name" | "published" | "status" | "tags"
 > & {
   created_at: string
   authorId: string
