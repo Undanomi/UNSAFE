@@ -5,16 +5,20 @@ import {
   ArrowLeft,
   BookOpenText,
   CheckCircle2,
+  ChevronDown,
   Download,
   Lightbulb,
   LoaderCircle,
+  Pencil,
   RefreshCw,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 import {
   generateMachineGuidanceAction,
   retryMachineBuildAction,
+  updateMachineDetailsAction,
   verifyMachineFlagAction,
 } from "@/app/actions/machines"
 import { FlagCorrectEffect } from "@/components/flag-correct-effect"
@@ -348,6 +352,16 @@ export function MachineDetailView({
   backLabel = "マシン一覧へ戻る",
   machine,
 }: MachineDetailProps) {
+  const router = useRouter()
+  const [savedFields, setSavedFields] = useState(() => ({
+    name: machine.name,
+    difficulty: machine.difficulty,
+    visibility: machine.visibility,
+  }))
+  const [draftFields, setDraftFields] = useState(savedFields)
+  const [isEditing, setIsEditing] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [saveError, setSaveError] = useState("")
   const [buildState, setBuildState] = useState<MachineBuildState>({
     status: machine.status ?? "ready",
     progress: machine.buildProgress ?? 0,
@@ -366,6 +380,60 @@ export function MachineDetailView({
   const isBuilding = buildState.status === "building" || buildState.status === "preparing"
   const canDownload = machine.status !== undefined && buildState.status === "ready"
   const showFlags = machine.status !== undefined && buildState.status === "ready"
+
+  function startEditing() {
+    setDraftFields(savedFields)
+    setSaveError("")
+    setIsEditing(true)
+  }
+
+  function cancelEditing() {
+    setDraftFields(savedFields)
+    setSaveError("")
+    setIsEditing(false)
+  }
+
+  async function saveDetails() {
+    if (isSaving) return
+    setIsSaving(true)
+    setSaveError("")
+    const formData = new FormData()
+    formData.set("name", draftFields.name)
+    formData.set(
+      "level",
+      draftFields.difficulty === "High"
+        ? "hard"
+        : draftFields.difficulty === "Medium"
+          ? "medium"
+          : "easy",
+    )
+    formData.set("published", draftFields.visibility === "公開" ? "true" : "false")
+    try {
+      const result = await updateMachineDetailsAction(machine.id, formData)
+      if (!result.success) {
+        setSaveError(result.message)
+        return
+      }
+      const nextFields = {
+        name: result.machine.name,
+        difficulty:
+          result.machine.level === "hard"
+            ? "High"
+            : result.machine.level === "medium"
+              ? "Medium"
+              : "Easy",
+        visibility: result.machine.published ? "公開" : "非公開",
+      } as const
+      setSavedFields(nextFields)
+      setDraftFields(nextFields)
+      setIsEditing(false)
+      router.refresh()
+    } catch {
+      setSaveError("マシン情報を保存できませんでした。もう一度お試しください。")
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!isBuilding) return
@@ -435,7 +503,13 @@ export function MachineDetailView({
     }
   }
 
-  const descriptionParagraphs = description.match(/[^。]+。?/g) ?? [description]
+  const descriptionParagraphs = Array.from(description.matchAll(/[^。]+。?/g), (match) => ({
+    text: match[0],
+    start: match.index,
+  }))
+  if (descriptionParagraphs.length === 0) {
+    descriptionParagraphs.push({ text: description, start: 0 })
+  }
 
   return (
     <section className="slsg-machine-detail-page">
@@ -443,12 +517,30 @@ export function MachineDetailView({
         <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
         {backLabel}
       </Link>
-      <header className="slsg-detail-hero">
+      <header className={`slsg-detail-hero${machine.canEdit ? " is-editable" : ""}`}>
         <div className="slsg-detail-heading">
-          <h1>{machine.name}</h1>
-          <p>{machine.summary}</p>
+          <h1>{savedFields.name}</h1>
+          {machine.tags.length > 0 ? (
+            <ul aria-label="タグ" className="slsg-detail-tags">
+              {[...new Set(machine.tags)].map((tag) => (
+                <li key={tag}>{tag}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         <div className="slsg-detail-actions">
+          {machine.canEdit ? (
+            <button
+              aria-label="マシン情報を編集"
+              className="slsg-detail-action"
+              disabled={isEditing}
+              onClick={startEditing}
+              type="button"
+            >
+              <Pencil aria-hidden="true" size={22} strokeWidth={1.8} />
+              編集
+            </button>
+          ) : null}
           {canDownload ? (
             <a
               className="slsg-detail-action"
@@ -479,6 +571,94 @@ export function MachineDetailView({
         </div>
       </header>
 
+      {isEditing ? (
+        <form
+          className="slsg-detail-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void saveDetails()
+          }}
+        >
+          <h2>マシン情報を編集</h2>
+          <div className="slsg-detail-edit-fields">
+            <label>
+              マシン名
+              <input
+                maxLength={40}
+                onChange={(event) =>
+                  setDraftFields((current) => ({ ...current, name: event.target.value }))
+                }
+                required
+                type="text"
+                value={draftFields.name}
+              />
+            </label>
+            <label>
+              難易度
+              <span className="relative block">
+                <select
+                  className="slsg-machine-filter-field block h-11 w-full appearance-none rounded-lg border px-3 pr-12 text-sm font-normal outline-none"
+                  onChange={(event) =>
+                    setDraftFields((current) => ({
+                      ...current,
+                      difficulty: event.target.value as MachineDetail["difficulty"],
+                    }))
+                  }
+                  value={draftFields.difficulty}
+                >
+                  <option value="Easy">Easy</option>
+                  <option value="Medium">Medium</option>
+                  <option value="High">High</option>
+                </select>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2"
+                  size={18}
+                  strokeWidth={1.8}
+                />
+              </span>
+            </label>
+            <label>
+              公開設定
+              <span className="relative block">
+                <select
+                  className="slsg-machine-filter-field block h-11 w-full appearance-none rounded-lg border px-3 pr-12 text-sm font-normal outline-none"
+                  onChange={(event) =>
+                    setDraftFields((current) => ({
+                      ...current,
+                      visibility: event.target.value as MachineDetail["visibility"],
+                    }))
+                  }
+                  value={draftFields.visibility}
+                >
+                  <option value="公開">公開</option>
+                  <option value="非公開">非公開</option>
+                </select>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-1/2 right-4 -translate-y-1/2"
+                  size={18}
+                  strokeWidth={1.8}
+                />
+              </span>
+            </label>
+          </div>
+          {saveError ? (
+            <p className="slsg-detail-edit-error" role="alert">
+              {saveError}
+            </p>
+          ) : null}
+          <div className="slsg-detail-edit-actions">
+            <button disabled={isSaving} type="submit">
+              {isSaving ? "保存中…" : "保存"}
+            </button>
+            <button disabled={isSaving} onClick={cancelEditing} type="button">
+              取消
+            </button>
+          </div>
+        </form>
+      ) : null}
+
       {guidanceError ? (
         <div className="slsg-detail-notice is-error" role="alert">
           <AlertCircle aria-hidden="true" size={20} />
@@ -501,7 +681,7 @@ export function MachineDetailView({
           <h2 className="slsg-detail-card-heading">マシンの説明</h2>
           <div className="slsg-detail-description-body">
             {descriptionParagraphs.map((paragraph) => (
-              <p key={paragraph}>{paragraph}</p>
+              <p key={paragraph.start}>{paragraph.text}</p>
             ))}
           </div>
         </section>
@@ -510,9 +690,8 @@ export function MachineDetailView({
           <h2 className="slsg-detail-card-heading">マシン情報</h2>
           <dl className="slsg-detail-info-list">
             {[
-              ["公開状態", machine.visibility],
-              ["難易度", machine.difficulty],
-              ["テーマ", machine.theme],
+              ["公開状態", savedFields.visibility],
+              ["難易度", savedFields.difficulty],
               ["作成者", machine.author],
               ["作成日", formatDisplayDate(machine.createdAt)],
             ].map(([label, value]) => (
@@ -522,15 +701,17 @@ export function MachineDetailView({
                   {label === "公開状態" ? (
                     <span
                       className={
-                        machine.visibility === "公開" ? "slsg-status-public" : "slsg-status-private"
+                        savedFields.visibility === "公開"
+                          ? "slsg-status-public"
+                          : "slsg-status-private"
                       }
                     >
                       {value}
-                      {machine.visibility === "非公開" ? " · 自分" : ""}
+                      {savedFields.visibility === "非公開" ? " · 自分" : ""}
                     </span>
                   ) : null}
                   {label === "難易度" ? (
-                    <span className={`slsg-difficulty ${DIFFICULTY_CLASS[machine.difficulty]}`}>
+                    <span className={`slsg-difficulty ${DIFFICULTY_CLASS[savedFields.difficulty]}`}>
                       {value}
                     </span>
                   ) : null}
@@ -557,7 +738,7 @@ export function MachineDetailView({
                   />
                 ) : null}
                 <FlagPanel
-                  challengeName={machine.name}
+                  challengeName={savedFields.name}
                   flag={machine.userFlag}
                   index={1}
                   onCorrect={() => setUserFlagAcquired(true)}
@@ -576,7 +757,7 @@ export function MachineDetailView({
                   />
                 ) : null}
                 <FlagPanel
-                  challengeName={machine.name}
+                  challengeName={savedFields.name}
                   flag={{ ...machine.systemFlag, acquired: systemFlagAcquired }}
                   index={machine.userFlag ? 2 : 1}
                   onCorrect={() => setSystemFlagAcquired(true)}

@@ -35,16 +35,10 @@ export type MachineBuildState = {
 
 export type MachineDetail = Pick<
   MachineSummary,
-  | "id"
-  | "name"
-  | "author"
-  | "createdAt"
-  | "visibility"
-  | "theme"
-  | "difficulty"
-  | "summary"
-  | "description"
+  "id" | "name" | "author" | "createdAt" | "visibility" | "difficulty" | "description"
 > & {
+  tags: string[]
+  canEdit: boolean
   buildProgress?: number
   buildFailure?: MachineBuildFailure | null
   canRetry?: boolean

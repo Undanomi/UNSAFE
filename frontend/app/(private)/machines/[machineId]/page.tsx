@@ -35,7 +35,12 @@ export default async function MachineDetailPage({ params, searchParams }: Machin
   return (
     <AppShell artworkVariant="machines" layoutVariant="machine-detail">
       {machine ? (
-        <MachineDetailView backHref={backHref} backLabel={backLabel} machine={machine} />
+        <MachineDetailView
+          backHref={backHref}
+          backLabel={backLabel}
+          key={machine.id}
+          machine={machine}
+        />
       ) : (
         <MissingMachine backHref={backHref} backLabel={backLabel} />
       )}

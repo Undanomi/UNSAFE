@@ -13,6 +13,7 @@ export const CHAT_STEPS = {
 export const CHAT_CONFIG = {
   machineNameMinLength: 1,
   machineNameMaxLength: 40,
+  scenarioPromptMaxLength: 500,
   newChatPath: "/machines/chat",
   progressMinimum: 0,
   progressPercentage: 100,
@@ -105,7 +106,7 @@ export const CHAT_COPY = {
     machineNamePlaceholder: "例: Nginx Engine",
     systemFlagDetails: "システムフラグの取得条件",
     systemFlagDetailsPlaceholder: "権限や必要な操作を詳しく入力してください。",
-    scenarioPrompt: "作成したいシナリオの要望（500文字まで）",
+    scenarioPrompt: `作成したいシナリオの要望（${CHAT_CONFIG.scenarioPromptMaxLength}文字まで）`,
     scenarioPromptPlaceholder:
       "例: 社内ポータルの設定不備を調査し、Webから初期侵入して権限昇格まで学べるシナリオにしてください。",
     userFlagDetails: "ユーザーフラグの取得条件",

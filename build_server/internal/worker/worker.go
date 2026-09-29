@@ -3,6 +3,7 @@ package worker
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -36,6 +37,9 @@ const (
 	driveConversionMessage  = "converting hard drive image"
 )
 
+var launcherFiles = []string{"README-Windows.pdf", "README-macOS.pdf", "Start-Windows.ps1", "start-macos.sh"}
+var distributionFiles = []string{"image.qcow2", "README-Windows.pdf", "README-macOS.pdf", "Start-Windows.ps1", "start-macos.sh"}
+
 type Worker struct {
 	cfg    config.Worker
 	store  *postgres.Store
@@ -47,8 +51,8 @@ func New(cfg config.Worker, store *postgres.Store, logger *slog.Logger) *Worker 
 }
 
 func (w *Worker) Run(ctx context.Context) error {
-	if err := w.migrateLegacyArtifacts(ctx); err != nil {
-		return fmt.Errorf("migrate legacy artifacts: %w", err)
+	if err := w.migrateDistributionArtifacts(ctx); err != nil {
+		return fmt.Errorf("migrate distribution artifacts: %w", err)
 	}
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
@@ -64,29 +68,31 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) migrateLegacyArtifacts(ctx context.Context) error {
-	artifacts, err := w.store.LegacyDistributionArtifacts(ctx)
+func (w *Worker) migrateDistributionArtifacts(ctx context.Context) error {
+	artifacts, err := w.store.DistributionArtifacts(ctx)
 	if err != nil {
 		return err
 	}
 	for _, artifact := range artifacts {
-		if err := w.migrateLegacyArtifact(ctx, artifact); err != nil {
+		var migrationErr error
+		switch artifact.Type {
+		case "tar.zst":
+			migrationErr = w.migrateLegacyArtifact(ctx, artifact)
+		case "zip":
+			migrationErr = w.migrateZipArtifact(ctx, artifact)
+		}
+		if err := migrationErr; err != nil {
 			if errors.Is(err, context.Canceled) {
 				return err
 			}
 			w.logger.Error(
-				"legacy artifact migration failed",
+				"distribution artifact migration failed",
 				"artifact_id", artifact.ID,
 				"build_id", artifact.BuildID,
 				"error", err,
 			)
 			continue
 		}
-		w.logger.Info(
-			"legacy artifact migrated to zip",
-			"artifact_id", artifact.ID,
-			"build_id", artifact.BuildID,
-		)
 	}
 	return nil
 }
@@ -97,7 +103,7 @@ func (w *Worker) migrateLegacyArtifact(ctx context.Context, artifact domain.Arti
 	zipName := distributionFileName(artifact.ID)
 	zipPath := filepath.Join(artifactDir, zipName)
 	if _, err := os.Stat(zipPath); errors.Is(err, os.ErrNotExist) {
-		if err := convertLegacyTarZst(ctx, legacyPath, zipPath); err != nil {
+		if err := convertLegacyTarZst(ctx, legacyPath, zipPath, w.cfg.LauncherRoot); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -134,7 +140,7 @@ func (w *Worker) migrateLegacyArtifact(ctx context.Context, artifact domain.Arti
 	return nil
 }
 
-func convertLegacyTarZst(ctx context.Context, legacyPath, zipPath string) error {
+func convertLegacyTarZst(ctx context.Context, legacyPath, zipPath, launcherRoot string) error {
 	expected, err := legacyTarEntries(ctx, legacyPath)
 	if err != nil {
 		return err
@@ -158,9 +164,13 @@ func convertLegacyTarZst(ctx context.Context, legacyPath, zipPath string) error 
 		return fmt.Errorf("extract legacy artifact: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	sourceDir := filepath.Join(stagingDir, "slsg-machine")
-	names, err := artifactFileNames(sourceDir)
+	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
 		return err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
 	}
 	if len(names) != len(expected) {
 		return fmt.Errorf("legacy artifact entries changed during extraction")
@@ -169,6 +179,20 @@ func convertLegacyTarZst(ctx context.Context, legacyPath, zipPath string) error 
 		if names[index] != expected[index] {
 			return fmt.Errorf("legacy artifact entry mismatch: got %q, want %q", names[index], expected[index])
 		}
+	}
+	for _, name := range names {
+		if name != "image.qcow2" {
+			if err := os.Remove(filepath.Join(sourceDir, name)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := copyLauncherAssets(launcherRoot, sourceDir); err != nil {
+		return err
+	}
+	names, err = artifactFileNames(sourceDir)
+	if err != nil {
+		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(zipPath), ".artifact-*.zip")
 	if err != nil {
@@ -186,6 +210,174 @@ func convertLegacyTarZst(ctx context.Context, legacyPath, zipPath string) error 
 		return err
 	}
 	return os.Rename(temporaryPath, zipPath)
+}
+
+func (w *Worker) migrateZipArtifact(ctx context.Context, artifact domain.Artifact) error {
+	zipPath := filepath.Join(w.cfg.BuildRoot, artifact.BuildID, "artifacts", filepath.Base(artifact.FileName))
+	current, err := distributionZipIsCurrent(zipPath, w.cfg.LauncherRoot)
+	if err != nil {
+		return err
+	}
+	if !current {
+		temporary, err := os.CreateTemp(filepath.Dir(zipPath), ".artifact-*.zip")
+		if err != nil {
+			return err
+		}
+		temporaryPath := temporary.Name()
+		if err := temporary.Close(); err != nil {
+			return err
+		}
+		if err := os.Remove(temporaryPath); err != nil {
+			return err
+		}
+		defer os.Remove(temporaryPath)
+		if err := repackDistributionZip(ctx, zipPath, temporaryPath, w.cfg.LauncherRoot); err != nil {
+			return err
+		}
+		if err := validateDistributionZip(temporaryPath); err != nil {
+			return err
+		}
+		if err := os.Rename(temporaryPath, zipPath); err != nil {
+			return err
+		}
+	}
+	info, err := os.Stat(zipPath)
+	if err != nil {
+		return err
+	}
+	if current && info.Size() == artifact.FileSize {
+		return nil
+	}
+	checksum, err := fileChecksum(zipPath)
+	if err != nil {
+		return err
+	}
+	artifact.FileSize = info.Size()
+	artifact.Checksum = checksum
+	return w.store.UpdateArtifactFile(ctx, artifact)
+}
+
+func distributionZipIsCurrent(zipPath, launcherRoot string) (bool, error) {
+	if err := validateDistributionZip(zipPath); err != nil {
+		return false, err
+	}
+	archive, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return false, err
+	}
+	defer archive.Close()
+	if len(archive.File) != len(distributionFiles) {
+		return false, nil
+	}
+	byName := make(map[string]*zip.File, len(archive.File))
+	for _, file := range archive.File {
+		byName[file.Name] = file
+	}
+	for _, name := range launcherFiles {
+		asset, err := os.ReadFile(filepath.Join(launcherRoot, name))
+		if err != nil {
+			return false, err
+		}
+		file := byName["slsg-machine/"+name]
+		if file == nil || file.UncompressedSize64 != uint64(len(asset)) {
+			return false, nil
+		}
+		reader, err := file.Open()
+		if err != nil {
+			return false, err
+		}
+		contents, readErr := io.ReadAll(io.LimitReader(reader, int64(len(asset))+1))
+		closeErr := reader.Close()
+		if readErr != nil {
+			return false, readErr
+		}
+		if closeErr != nil {
+			return false, closeErr
+		}
+		if !bytes.Equal(contents, asset) {
+			return false, nil
+		}
+	}
+	return byName["slsg-machine/image.qcow2"] != nil, nil
+}
+
+func repackDistributionZip(ctx context.Context, sourcePath, destinationPath, launcherRoot string) error {
+	original, err := zip.OpenReader(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer original.Close()
+	output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	if err != nil {
+		return err
+	}
+	archive := zip.NewWriter(output)
+	closeWithError := func(original error) error {
+		_ = archive.Close()
+		_ = output.Close()
+		return original
+	}
+	imageFound := false
+	for _, file := range original.File {
+		if file.Name == "slsg-machine/image.qcow2" {
+			if err := ctx.Err(); err != nil {
+				return closeWithError(err)
+			}
+			entry, err := archive.CreateRaw(&file.FileHeader)
+			if err != nil {
+				return closeWithError(err)
+			}
+			raw, err := file.OpenRaw()
+			if err != nil {
+				return closeWithError(err)
+			}
+			if _, err := copyWithContext(ctx, entry, raw); err != nil {
+				return closeWithError(err)
+			}
+			imageFound = true
+			break
+		}
+	}
+	if !imageFound {
+		return closeWithError(errors.New("zip does not contain image.qcow2"))
+	}
+	for _, name := range launcherFiles {
+		if err := addDistributionFile(ctx, archive, filepath.Join(launcherRoot, name), name); err != nil {
+			return closeWithError(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		_ = output.Close()
+		return err
+	}
+	return output.Close()
+}
+
+func addDistributionFile(ctx context.Context, archive *zip.Writer, sourcePath, name string) error {
+	input, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	info, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("distribution file %q is not a regular file", name)
+	}
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = "slsg-machine/" + name
+	header.Method = zip.Deflate
+	entry, err := archive.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	_, err = copyWithContext(ctx, entry, input)
+	return err
 }
 
 func legacyTarEntries(ctx context.Context, archivePath string) ([]string, error) {
@@ -550,27 +742,26 @@ func copyTree(source, destination string) error {
 }
 
 func copyLauncherAssets(source, destination string) error {
-	entries, err := os.ReadDir(source)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
-			return fmt.Errorf("launcher directory contains unsupported entry %q", entry.Name())
+	for _, name := range launcherFiles {
+		inputPath := filepath.Join(source, name)
+		info, err := os.Lstat(inputPath)
+		if err != nil {
+			return fmt.Errorf("launcher asset %q: %w", name, err)
 		}
-		inputPath := filepath.Join(source, entry.Name())
-		outputPath := filepath.Join(destination, entry.Name())
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("launcher asset %q is not a regular file", name)
+		}
 		input, err := os.Open(inputPath)
 		if err != nil {
 			return err
 		}
 		mode := os.FileMode(0o640)
-		if strings.EqualFold(filepath.Ext(entry.Name()), ".sh") {
+		if filepath.Ext(name) == ".sh" {
 			mode = 0o750
 		}
-		output, err := os.OpenFile(outputPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		output, err := os.OpenFile(filepath.Join(destination, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
-			input.Close()
+			_ = input.Close()
 			return err
 		}
 		_, copyErr := io.Copy(output, input)
@@ -617,25 +808,22 @@ func artifactFileNames(sourceDir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) == 0 {
-		return nil, errors.New("artifact directory is empty")
+	allowed := make(map[string]bool, len(distributionFiles))
+	for _, name := range distributionFiles {
+		allowed[name] = false
 	}
-	names := make([]string, 0, len(entries))
-	hasImage := false
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+		if _, ok := allowed[entry.Name()]; !ok || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("artifact directory contains unsupported entry %q", entry.Name())
 		}
-		if entry.Name() == "image.qcow2" {
-			hasImage = true
+		allowed[entry.Name()] = true
+	}
+	for _, name := range distributionFiles {
+		if !allowed[name] {
+			return nil, fmt.Errorf("artifact directory does not contain %s", name)
 		}
-		names = append(names, entry.Name())
 	}
-	if !hasImage {
-		return nil, errors.New("artifact directory does not contain image.qcow2")
-	}
-	sort.Strings(names)
-	return names, nil
+	return distributionFiles, nil
 }
 
 func distributionFileName(artifactID string) string {
@@ -654,39 +842,8 @@ func createDistributionZip(ctx context.Context, sourceDir, destination string, n
 		return original
 	}
 	for _, name := range names {
-		select {
-		case <-ctx.Done():
-			return closeWithError(ctx.Err())
-		default:
-		}
-		input, err := os.Open(filepath.Join(sourceDir, name))
-		if err != nil {
+		if err := addDistributionFile(ctx, archive, filepath.Join(sourceDir, name), name); err != nil {
 			return closeWithError(err)
-		}
-		info, err := input.Stat()
-		if err != nil {
-			_ = input.Close()
-			return closeWithError(err)
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			_ = input.Close()
-			return closeWithError(err)
-		}
-		header.Name = "slsg-machine/" + name
-		header.Method = zip.Deflate
-		entry, err := archive.CreateHeader(header)
-		if err != nil {
-			_ = input.Close()
-			return closeWithError(err)
-		}
-		_, copyErr := copyWithContext(ctx, entry, input)
-		closeErr := input.Close()
-		if copyErr != nil {
-			return closeWithError(copyErr)
-		}
-		if closeErr != nil {
-			return closeWithError(closeErr)
 		}
 	}
 	if err := archive.Close(); err != nil {
@@ -750,7 +907,7 @@ func artifactType(name string) string {
 		return "iso"
 	case ".sh", ".ps1":
 		return "launcher"
-	case ".md":
+	case ".md", ".pdf":
 		return "documentation"
 	default:
 		return "file"

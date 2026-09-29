@@ -30,13 +30,14 @@ export async function AppShell({
     ? await getUserDocumentService(authenticatedUser.uid)
     : null
   const sidebarUser = {
+    id: authenticatedUser?.uid ?? "",
     name: userDocument?.name || authenticatedUser?.name || "ユーザー",
     avatarUrl: userDocument ? userDocument.icon_url : authenticatedUser?.picture || "",
   }
 
   return (
     <div
-      className={`slsg-shell min-h-screen ${artworkVariant === "machines" ? "slsg-shell-machines" : ""} ${layoutVariant === "machine-detail" ? "slsg-machine-detail-shell" : ""} ${layoutVariant === "chat" ? "slsg-chat-shell" : ""} ${layoutVariant === "profile" ? "slsg-profile-shell" : ""}`}
+      className={`slsg-shell slsg-app-shell ${layoutVariant === "chat" ? "slsg-chat-shell" : "min-h-screen"} ${artworkVariant === "machines" ? "slsg-shell-machines" : ""} ${layoutVariant === "machine-detail" ? "slsg-machine-detail-shell" : ""} ${layoutVariant === "profile" ? "slsg-profile-shell" : ""}`}
     >
       <SiteSidebar user={sidebarUser} />
       {artworkVariant === "machines" ? (
@@ -49,7 +50,7 @@ export async function AppShell({
       )}
       <DesignArtwork variant={artworkVariant} />
       <main
-        className={`slsg-main relative z-[1] ml-[240px] min-h-screen px-[clamp(26px,3vw,54px)] py-9 pb-16 max-lg:ml-0 max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
+        className={`slsg-main slsg-app-main relative z-[1] ${layoutVariant === "chat" ? "" : "min-h-screen"} px-[clamp(26px,3vw,54px)] py-9 pb-16 max-lg:px-6 max-lg:py-8 max-sm:px-4 ${contentClassName}`}
       >
         {children}
       </main>

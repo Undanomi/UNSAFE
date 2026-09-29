@@ -12,7 +12,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react"
+import { type KeyboardEvent, useCallback, useEffect, useId, useRef, useState } from "react"
 import {
   cancelMachineCreationAction,
   markMachineCreationFailedAction,
@@ -196,7 +196,12 @@ async function waitForScenario(
 }
 
 function buildInitialAnswers(session: ChatSession): ChatAnswers {
-  return { ...EMPTY_CHAT_ANSWERS, ...session.initialAnswers }
+  const answers = { ...EMPTY_CHAT_ANSWERS, ...session.initialAnswers }
+  return {
+    ...answers,
+    name: answers.name.slice(0, CHAT_CONFIG.machineNameMaxLength),
+    theme: answers.theme.slice(0, CHAT_CONFIG.scenarioPromptMaxLength),
+  }
 }
 
 function isChatStepComplete(step: number, answers: ChatAnswers) {
@@ -233,6 +238,15 @@ function getNextChatStep(step: number, answers: ChatAnswers) {
     return answers.needsSystemFlag ? CHAT_STEPS.systemFlagDetails : CHAT_STEPS.complete
   }
   return step + CHAT_CONFIG.stepIncrement
+}
+
+function isTextInputStep(step: number) {
+  return (
+    step === CHAT_STEPS.machineName ||
+    step === CHAT_STEPS.theme ||
+    step === CHAT_STEPS.userFlagDetails ||
+    step === CHAT_STEPS.systemFlagDetails
+  )
 }
 
 function getFlagDetailsStep(step: number, answers: ChatAnswers) {
@@ -303,7 +317,6 @@ function formatFlagSetting(value: boolean | null) {
 export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const router = useRouter()
   const [answers, setAnswers] = useState<ChatAnswers>(() => buildInitialAnswers(session))
-  const [confirmedMachineName, setConfirmedMachineName] = useState(session.name)
   const [step, setStep] = useState(session.initialStep)
   const [basicReady, setBasicReady] = useState(() => session.status === "基本設定完了")
   const [sessionId, setSessionId] = useState<string | null>(() =>
@@ -319,12 +332,18 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const [editingError, setEditingError] = useState("")
   const [isSaving, setIsSaving] = useState(false)
   const [isCancelling, setIsCancelling] = useState(false)
+  const [isConfirmingCancel, setIsConfirmingCancel] = useState(false)
+  const [cancelDialogError, setCancelDialogError] = useState("")
   const [showRebuildButton, setShowRebuildButton] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
   const editingAnswersSnapshotRef = useRef<ChatAnswers | null>(null)
   const creationStartedRef = useRef(false)
   const creationAbortRef = useRef<AbortController | null>(null)
   const cancellationRequestedRef = useRef(false)
+  const cancelDialogRef = useRef<HTMLDialogElement>(null)
+  const cancelConfirmingRef = useRef(false)
+  const choiceSubmissionRef = useRef(false)
+  const progressSavingRef = useRef(false)
 
   const progress = Math.min(step, CHAT_STEPS.systemFlagDetails)
   const isFinalStep = step === CHAT_STEPS.complete
@@ -332,6 +351,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const transcriptStep = editingStep === null ? step : Math.max(step, editingStep + 1)
   const transcript = buildChatTranscript(transcriptStep, basicReady, answers)
   const chatProgress = `${step}:${basicReady}`
+
+  useEffect(() => {
+    if (!chatProgress) return
+    choiceSubmissionRef.current = false
+  }, [chatProgress])
 
   useEffect(() => {
     if (!chatProgress) return
@@ -350,25 +374,55 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setEditingError("")
   }
 
-  async function persistProgress(nextStep: number, nextBasicReady: boolean) {
+  async function persistProgress(
+    nextStep: number,
+    nextBasicReady: boolean,
+    answersToSave: ChatAnswers = answers,
+  ) {
+    if (progressSavingRef.current) return false
+    progressSavingRef.current = true
     setIsSaving(true)
-    const result = await saveChatProgressAction({
-      sessionId,
-      answers,
-      currentStep: nextStep,
-      basicReady: nextBasicReady,
-    })
-    setIsSaving(false)
-    if (!result.success) {
-      setError(result.message)
-      return false
-    }
+    try {
+      const result = await saveChatProgressAction({
+        sessionId,
+        answers: answersToSave,
+        currentStep: nextStep,
+        basicReady: nextBasicReady,
+      })
+      if (!result.success) {
+        setError(result.message)
+        return false
+      }
 
-    if (!sessionId) {
-      setSessionId(result.sessionId)
-      router.replace(`/machines/chat/${result.sessionId}`)
+      if (!sessionId) {
+        setSessionId(result.sessionId)
+        router.replace(`/machines/chat/${result.sessionId}`)
+      }
+      return true
+    } catch {
+      setError("回答を保存できませんでした。もう一度お試しください。")
+      return false
+    } finally {
+      progressSavingRef.current = false
+      setIsSaving(false)
     }
-    return true
+  }
+
+  async function selectChoice(values: Partial<ChatAnswers>) {
+    if (choiceSubmissionRef.current || isSaving) return
+    choiceSubmissionRef.current = true
+    const selectedAnswers = { ...answers, ...values }
+    setAnswers(selectedAnswers)
+    setError("")
+
+    const nextBasicReady = step === CHAT_STEPS.difficulty
+    const nextStep = nextBasicReady ? step : getNextChatStep(step, selectedAnswers)
+    if (!(await persistProgress(nextStep, nextBasicReady, selectedAnswers))) {
+      choiceSubmissionRef.current = false
+      return
+    }
+    if (nextBasicReady) setBasicReady(true)
+    else setStep(nextStep)
   }
 
   async function advance() {
@@ -383,7 +437,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     }
     const nextStep = getNextChatStep(step, answers)
     if (!(await persistProgress(nextStep, false))) return
-    if (step === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     setStep(nextStep)
   }
 
@@ -489,15 +542,32 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   }
 
   async function handleCancel() {
-    if (creationStatus === "completed") return
+    if (creationStatus === "completed") return false
     if (!sessionId || creationStatus === "input") {
       router.push("/machines")
-      return
+      return true
     }
 
-    if (!(await cancelActiveCreation())) return
+    if (!(await cancelActiveCreation())) return false
     router.push("/machines")
     router.refresh()
+    return true
+  }
+
+  async function confirmCancel() {
+    if (cancelConfirmingRef.current) return
+    cancelConfirmingRef.current = true
+    setIsConfirmingCancel(true)
+    setCancelDialogError("")
+    try {
+      if (await handleCancel()) cancelDialogRef.current?.close()
+      else setCancelDialogError("中止できませんでした。もう一度お試しください。")
+    } catch {
+      setCancelDialogError("中止できませんでした。もう一度お試しください。")
+    } finally {
+      cancelConfirmingRef.current = false
+      setIsConfirmingCancel(false)
+    }
   }
 
   async function cancelActiveCreation() {
@@ -511,14 +581,21 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setError("")
-    const result = await cancelMachineCreationAction(sessionId)
-    setIsCancelling(false)
-    if (result.success) return true
+    let cancelError = "中止できませんでした。もう一度お試しください。"
+    try {
+      const result = await cancelMachineCreationAction(sessionId)
+      if (result.success) return true
+      cancelError = result.message
+    } catch {
+      // Restore the chat state so the user can retry the cancellation.
+    } finally {
+      setIsCancelling(false)
+    }
 
     cancellationRequestedRef.current = false
     setCreationStatus(previousCreationStatus)
     setCreationMessage(previousCreationMessage)
-    setError(result.message)
+    setError(cancelError)
     return false
   }
 
@@ -570,7 +647,6 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
     setCreationMessage("")
     setCreationFailure(null)
     setShowRebuildButton(true)
-    if (editingStep === CHAT_STEPS.machineName) setConfirmedMachineName(answers.name)
     editingAnswersSnapshotRef.current = null
     setEditingStep(null)
   }
@@ -578,35 +654,29 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   return (
     <div className="slsg-chat-workspace">
       <header className="slsg-chat-header">
-        <div className="slsg-chat-heading">
-          <p className="slsg-page-eyebrow">MACHINE CREATION</p>
-          <h1 className="slsg-heading-offset-up">{confirmedMachineName}</h1>
-          <p className="slsg-heading-offset-up">
-            対話形式で設定を進めて、学習用のマシンを作成します。
-          </p>
+        <h1 className="sr-only">マシン作成チャット</h1>
+        <div className="slsg-chat-panel-header">
+          <span className="slsg-chat-progress-copy">
+            {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
+          </span>
+          <ChatProgress progress={progress} />
+          <button
+            className="slsg-chat-cancel"
+            disabled={isCancelling || isConfirmingCancel || creationStatus === "completed"}
+            onClick={() => {
+              setCancelDialogError("")
+              cancelDialogRef.current?.showModal()
+            }}
+            type="button"
+          >
+            {isCancelling || isConfirmingCancel ? "中止しています…" : "中止する"}
+          </button>
         </div>
       </header>
 
       <div className="slsg-chat-layout">
         <section className="slsg-chat-conversation">
           <div className="slsg-chat-conversation-inner">
-            <header className="slsg-chat-panel-header">
-              <div>
-                <h2>マシン作成チャット</h2>
-              </div>
-              <div className="slsg-chat-panel-progress">
-                <ChatProgress progress={progress} />
-                <button
-                  className="slsg-chat-cancel"
-                  disabled={isCancelling || creationStatus === "completed"}
-                  onClick={() => void handleCancel()}
-                  type="button"
-                >
-                  {isCancelling ? "中止しています…" : "中止する"}
-                </button>
-              </div>
-            </header>
-
             <div className="slsg-chat-panel-body">
               <div className="slsg-chat-message-list" ref={conversationRef}>
                 {transcript.map((message) => (
@@ -642,25 +712,57 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                   <div className="slsg-chat-current-input">
                     <StepInput
                       answers={answers}
+                      choicesDisabled={isSaving}
+                      inlineSubmit={isTextInputStep(step) && step !== CHAT_STEPS.machineName}
                       onChange={updateAnswers}
-                      onSubmit={isSaving ? undefined : () => void advance()}
+                      onChoiceSelect={(values) => void selectChoice(values)}
+                      onSubmit={() => void advance()}
                       step={step}
+                      submitting={isSaving}
                     />
+                    {step === CHAT_STEPS.machineName ? (
+                      <ChatSendButton
+                        disabled={isSaving}
+                        onSubmit={advance}
+                        submitting={isSaving}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
                 {error ? <p className="slsg-chat-error">{error}</p> : null}
 
-                <div className="slsg-chat-actions">
-                  {creationStatus !== "input" ? (
-                    <CreationStatusPanel
-                      failure={creationFailure}
-                      machineId={session.machineId}
-                      message={creationMessage || "マシンを作成しています…"}
-                      onRetry={handleMachineCreation}
-                      status={creationStatus}
-                    />
-                  ) : basicReady ? (
-                    <div className="slsg-chat-actions-group">
+                {creationStatus !== "input" || basicReady || isFinalStep ? (
+                  <div className="slsg-chat-actions">
+                    {creationStatus !== "input" ? (
+                      <CreationStatusPanel
+                        failure={creationFailure}
+                        machineId={session.machineId}
+                        message={creationMessage || "マシンを作成しています…"}
+                        onRetry={handleMachineCreation}
+                        status={creationStatus}
+                      />
+                    ) : basicReady ? (
+                      <div className="slsg-chat-actions-group">
+                        <button
+                          className="slsg-chat-action-primary"
+                          disabled={isSaving}
+                          onClick={handleMachineCreation}
+                          type="button"
+                        >
+                          {showRebuildButton
+                            ? "改めてマシンをビルドする"
+                            : CHAT_COPY.buttons.createBasic}
+                        </button>
+                        <button
+                          className="slsg-chat-action-secondary"
+                          disabled={isSaving}
+                          onClick={continueDetails}
+                          type="button"
+                        >
+                          {CHAT_COPY.buttons.continueDetails}
+                        </button>
+                      </div>
+                    ) : isFinalStep ? (
                       <button
                         className="slsg-chat-action-primary"
                         disabled={isSaving}
@@ -669,53 +771,54 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                       >
                         {showRebuildButton
                           ? "改めてマシンをビルドする"
-                          : CHAT_COPY.buttons.createBasic}
+                          : CHAT_COPY.buttons.createComplete}
                       </button>
-                      <button
-                        className="slsg-chat-action-secondary"
-                        disabled={isSaving}
-                        onClick={continueDetails}
-                        type="button"
-                      >
-                        {CHAT_COPY.buttons.continueDetails}
-                      </button>
-                    </div>
-                  ) : isFinalStep ? (
-                    <button
-                      className="slsg-chat-action-primary"
-                      disabled={isSaving}
-                      onClick={handleMachineCreation}
-                      type="button"
-                    >
-                      {showRebuildButton
-                        ? "改めてマシンをビルドする"
-                        : CHAT_COPY.buttons.createComplete}
-                    </button>
-                  ) : (
-                    <button
-                      aria-label={
-                        step === CHAT_STEPS.difficulty
-                          ? CHAT_COPY.buttons.setBasic
-                          : CHAT_COPY.buttons.next
-                      }
-                      className="slsg-chat-send-button"
-                      disabled={isSaving}
-                      onClick={advance}
-                      type="button"
-                    >
-                      {isSaving ? (
-                        <LoaderCircle aria-hidden="true" className="animate-spin" size={19} />
-                      ) : (
-                        <ArrowRight aria-hidden="true" size={20} strokeWidth={2} />
-                      )}
-                    </button>
-                  )}
-                </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
         </section>
       </div>
+      <dialog
+        aria-describedby="slsg-chat-cancel-description"
+        aria-labelledby="slsg-chat-cancel-title"
+        className="slsg-chat-cancel-dialog"
+        onCancel={(event) => {
+          if (cancelConfirmingRef.current) event.preventDefault()
+        }}
+        onClose={() => setCancelDialogError("")}
+        ref={cancelDialogRef}
+      >
+        <h2 id="slsg-chat-cancel-title">作成を中止しますか？</h2>
+        <p id="slsg-chat-cancel-description">
+          マシン一覧に戻ります。生成中の処理がある場合は停止します。
+        </p>
+        {cancelDialogError ? (
+          <p className="slsg-chat-cancel-dialog-error" role="alert">
+            {cancelDialogError}
+          </p>
+        ) : null}
+        <div className="slsg-chat-cancel-dialog-actions">
+          <button
+            className="slsg-chat-action-secondary"
+            disabled={isConfirmingCancel}
+            onClick={() => cancelDialogRef.current?.close()}
+            type="button"
+          >
+            続ける
+          </button>
+          <button
+            className="slsg-chat-action-primary"
+            disabled={isConfirmingCancel}
+            onClick={() => void confirmCancel()}
+            type="button"
+          >
+            {isConfirmingCancel ? "中止しています…" : "中止する"}
+          </button>
+        </div>
+      </dialog>
       <TerminalTelemetry />
     </div>
   )
@@ -753,9 +856,6 @@ function ChatProgress({ progress }: { progress: number }) {
           </div>
         ),
       )}
-      <span className="slsg-chat-progress-copy">
-        {CHAT_COPY.progress} {progress} / {CHAT_STEPS.systemFlagDetails}
-      </span>
     </div>
   )
 }
@@ -931,9 +1031,39 @@ function AnswerEditor({
 
 type StepInputProps = {
   answers: ChatAnswers
+  choicesDisabled?: boolean
+  inlineSubmit?: boolean
   onChange: (values: Partial<ChatAnswers>) => void
+  onChoiceSelect?: (values: Partial<ChatAnswers>) => void
   onSubmit?: () => void
   step: number
+  submitting?: boolean
+}
+
+function ChatSendButton({
+  disabled = false,
+  onSubmit,
+  submitting = false,
+}: {
+  disabled?: boolean
+  onSubmit: () => void
+  submitting?: boolean
+}) {
+  return (
+    <button
+      aria-label={CHAT_COPY.buttons.next}
+      className="slsg-chat-send-button"
+      disabled={disabled}
+      onClick={onSubmit}
+      type="button"
+    >
+      {submitting ? (
+        <LoaderCircle aria-hidden="true" className="animate-spin" size={19} />
+      ) : (
+        <ArrowRight aria-hidden="true" size={20} strokeWidth={2} />
+      )}
+    </button>
+  )
 }
 
 function submitChatInputOnEnter(
@@ -953,7 +1083,27 @@ function submitChatInputOnEnter(
   onSubmit()
 }
 
-function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
+function limitChatInputValue(input: HTMLInputElement | HTMLTextAreaElement, maxLength: number) {
+  const value = input.value.slice(0, maxLength)
+  if (input.value !== value) input.value = value
+  return value
+}
+
+function StepInput({
+  answers,
+  choicesDisabled = false,
+  inlineSubmit = false,
+  onChange,
+  onChoiceSelect,
+  onSubmit,
+  step,
+  submitting = false,
+}: StepInputProps) {
+  const selectChoice = onChoiceSelect ?? onChange
+  const updateMachineName = (input: HTMLInputElement) => {
+    onChange({ name: limitChatInputValue(input, CHAT_CONFIG.machineNameMaxLength) })
+  }
+
   if (step === CHAT_STEPS.machineName) {
     return (
       <label className="slsg-chat-field">
@@ -961,8 +1111,9 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
         <input
           className="slsg-input slsg-chat-input"
           maxLength={CHAT_CONFIG.machineNameMaxLength}
-          onChange={(event) => onChange({ name: event.target.value })}
-          onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
+          onChange={(event) => updateMachineName(event.currentTarget)}
+          onCompositionEnd={(event) => updateMachineName(event.currentTarget)}
+          onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
           placeholder={CHAT_COPY.fields.machineNamePlaceholder}
           value={answers.name}
         />
@@ -975,7 +1126,8 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   if (step === CHAT_STEPS.visibility) {
     return (
       <OptionButtons
-        onSelect={(visibility) => onChange({ visibility })}
+        disabled={choicesDisabled}
+        onSelect={(visibility) => selectChoice({ visibility })}
         options={VISIBILITY_OPTIONS}
         value={answers.visibility}
       />
@@ -996,26 +1148,25 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
             </button>
           ))}
         </div>
-        <label className="slsg-chat-field">
-          <span>{CHAT_COPY.fields.scenarioPrompt}</span>
-          <textarea
-            className="slsg-input slsg-chat-textarea"
-            maxLength={500}
-            onChange={(event) => onChange({ theme: event.target.value })}
-            onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
-            placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
-            rows={5}
-            value={answers.theme}
-          />
-          <small className="slsg-chat-character-count">{answers.theme.length} / 500</small>
-        </label>
+        <ChatTextareaField
+          inlineSubmit={inlineSubmit}
+          label={CHAT_COPY.fields.scenarioPrompt}
+          maxLength={CHAT_CONFIG.scenarioPromptMaxLength}
+          onChange={(theme) => onChange({ theme })}
+          onSubmit={onSubmit}
+          placeholder={CHAT_COPY.fields.scenarioPromptPlaceholder}
+          rows={5}
+          submitting={submitting}
+          value={answers.theme}
+        />
       </div>
     )
   }
   if (step === CHAT_STEPS.difficulty) {
     return (
       <OptionButtons
-        onSelect={(difficulty) => onChange({ difficulty })}
+        disabled={choicesDisabled}
+        onSelect={(difficulty) => selectChoice({ difficulty })}
         options={DIFFICULTY_OPTIONS}
         value={answers.difficulty}
       />
@@ -1024,7 +1175,8 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   if (step === CHAT_STEPS.userFlagChoice) {
     return (
       <YesNoButtons
-        onSelect={(needsUserFlag) => onChange({ needsUserFlag })}
+        disabled={choicesDisabled}
+        onSelect={(needsUserFlag) => selectChoice({ needsUserFlag })}
         value={answers.needsUserFlag}
       />
     )
@@ -1033,9 +1185,11 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
     return (
       <DetailInput
         label={CHAT_COPY.fields.userFlagDetails}
+        inlineSubmit={inlineSubmit}
         onChange={(userFlagDetails) => onChange({ userFlagDetails })}
         onSubmit={onSubmit}
         placeholder={CHAT_COPY.fields.userFlagDetailsPlaceholder}
+        submitting={submitting}
         value={answers.userFlagDetails}
       />
     )
@@ -1043,7 +1197,8 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   if (step === CHAT_STEPS.systemFlagChoice) {
     return (
       <YesNoButtons
-        onSelect={(needsSystemFlag) => onChange({ needsSystemFlag })}
+        disabled={choicesDisabled}
+        onSelect={(needsSystemFlag) => selectChoice({ needsSystemFlag })}
         value={answers.needsSystemFlag}
       />
     )
@@ -1051,46 +1206,113 @@ function StepInput({ answers, onChange, onSubmit, step }: StepInputProps) {
   return (
     <DetailInput
       label={CHAT_COPY.fields.systemFlagDetails}
+      inlineSubmit={inlineSubmit}
       onChange={(systemFlagDetails) => onChange({ systemFlagDetails })}
       onSubmit={onSubmit}
       placeholder={CHAT_COPY.fields.systemFlagDetailsPlaceholder}
+      submitting={submitting}
       value={answers.systemFlagDetails}
     />
   )
 }
 
 function DetailInput({
+  inlineSubmit,
   label,
   onChange,
   onSubmit,
   placeholder,
+  submitting,
   value,
 }: {
+  inlineSubmit: boolean
   label: string
   onChange: (value: string) => void
   onSubmit?: () => void
   placeholder: string
+  submitting: boolean
   value: string
 }) {
   return (
-    <label className="slsg-chat-field">
-      <span>{label}</span>
-      <textarea
-        className="slsg-input slsg-chat-textarea"
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => submitChatInputOnEnter(event, onSubmit)}
-        placeholder={placeholder}
-        value={value}
-      />
-    </label>
+    <ChatTextareaField
+      inlineSubmit={inlineSubmit}
+      label={label}
+      onChange={onChange}
+      onSubmit={onSubmit}
+      placeholder={placeholder}
+      submitting={submitting}
+      value={value}
+    />
+  )
+}
+
+function ChatTextareaField({
+  inlineSubmit,
+  label,
+  maxLength,
+  onChange,
+  onSubmit,
+  placeholder,
+  rows,
+  submitting,
+  value,
+}: {
+  inlineSubmit: boolean
+  label: string
+  maxLength?: number
+  onChange: (value: string) => void
+  onSubmit?: () => void
+  placeholder: string
+  rows?: number
+  submitting: boolean
+  value: string
+}) {
+  const textareaId = useId()
+  const updateValue = (textarea: HTMLTextAreaElement) => {
+    onChange(maxLength === undefined ? textarea.value : limitChatInputValue(textarea, maxLength))
+  }
+
+  return (
+    <div className="slsg-chat-field">
+      <label htmlFor={textareaId}>{label}</label>
+      <div className="slsg-input slsg-chat-textarea-shell">
+        <textarea
+          className="slsg-chat-textarea"
+          id={textareaId}
+          maxLength={maxLength}
+          onChange={(event) => updateValue(event.currentTarget)}
+          onCompositionEnd={(event) => {
+            if (maxLength !== undefined) updateValue(event.currentTarget)
+          }}
+          onKeyDown={(event) => submitChatInputOnEnter(event, submitting ? undefined : onSubmit)}
+          placeholder={placeholder}
+          rows={rows}
+          value={value}
+        />
+        {maxLength !== undefined || inlineSubmit ? (
+          <div className="slsg-chat-textarea-footer">
+            {maxLength !== undefined ? (
+              <small className="slsg-chat-textarea-count">
+                {value.length} / {maxLength}
+              </small>
+            ) : null}
+            {inlineSubmit && onSubmit ? (
+              <ChatSendButton disabled={submitting} onSubmit={onSubmit} submitting={submitting} />
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
 function OptionButtons<T extends string>({
+  disabled = false,
   onSelect,
   options,
   value,
 }: {
+  disabled?: boolean
   onSelect: (value: T) => void
   options: readonly T[]
   value: T | ""
@@ -1100,6 +1322,7 @@ function OptionButtons<T extends string>({
       {options.map((option) => (
         <button
           className={`slsg-chat-option ${value === option ? "is-selected" : ""}`}
+          disabled={disabled}
           key={option}
           onClick={() => onSelect(option)}
           type="button"
@@ -1112,9 +1335,11 @@ function OptionButtons<T extends string>({
 }
 
 function YesNoButtons({
+  disabled = false,
   onSelect,
   value,
 }: {
+  disabled?: boolean
   onSelect: (value: boolean) => void
   value: boolean | null
 }) {
@@ -1122,6 +1347,7 @@ function YesNoButtons({
     <div className="slsg-chat-option-grid">
       <button
         className={`slsg-chat-option ${value === true ? "is-selected" : ""}`}
+        disabled={disabled}
         onClick={() => onSelect(true)}
         type="button"
       >
@@ -1129,6 +1355,7 @@ function YesNoButtons({
       </button>
       <button
         className={`slsg-chat-option ${value === false ? "is-selected" : ""}`}
+        disabled={disabled}
         onClick={() => onSelect(false)}
         type="button"
       >

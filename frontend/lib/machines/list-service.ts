@@ -11,15 +11,7 @@ import type { MachineRecord } from "@/types/postgres"
 
 type MachineListRow = Pick<
   MachineRecord,
-  | "created_at"
-  | "description"
-  | "id"
-  | "level"
-  | "name"
-  | "published"
-  | "status"
-  | "summary"
-  | "tags"
+  "created_at" | "description" | "id" | "level" | "name" | "published" | "status" | "tags"
 > & {
   author_id: string
   author: string
@@ -27,6 +19,11 @@ type MachineListRow = Pick<
   is_owned: boolean
   is_solved: boolean
 }
+
+const solvedCondition = `m.created_by <> $1 AND EXISTS (
+  SELECT 1 FROM machine_solutions s
+  WHERE s.user_id = $1 AND s.machine_id = m.id
+)`
 
 function escapeLike(value: string) {
   return value.replace(/[\\%_]/g, "\\$&")
@@ -54,10 +51,7 @@ function buildFilters(viewerUserId: string, query: MachineListQuery) {
     )`)
   }
   if (query.solved) {
-    conditions.push(`${query.solved === "no" ? "NOT " : ""}EXISTS (
-      SELECT 1 FROM machine_solutions s
-      WHERE s.user_id = $1 AND s.machine_id = m.id
-    )`)
+    conditions.push(`${query.solved === "no" ? "NOT " : ""}(${solvedCondition})`)
   }
   return { values, where: conditions.join(" AND ") }
 }
@@ -81,14 +75,11 @@ export async function getMachineListService(
 
   const result = await queryDatabase<MachineListRow>(
     `SELECT
-       m.id, m.name, m.summary, m.description, m.tags, m.level, m.created_at,
+       m.id, m.name, m.description, m.tags, m.level, m.created_at,
        m.published, m.status, m.created_by AS author_id, u.name AS author,
        u.icon_url AS author_icon_url,
        (m.created_by = $1) AS is_owned,
-       EXISTS (
-         SELECT 1 FROM machine_solutions s
-         WHERE s.user_id = $1 AND s.machine_id = m.id
-       ) AS is_solved
+       (${solvedCondition}) AS is_solved
      FROM machines m
      JOIN users u ON u.id = m.created_by
      WHERE ${filters.where}
@@ -99,7 +90,6 @@ export async function getMachineListService(
   const machines: MachineListItem[] = result.rows.map((row) => ({
     id: row.id,
     name: row.name,
-    summary: row.summary,
     description: row.description,
     tags: row.tags,
     level: row.level,

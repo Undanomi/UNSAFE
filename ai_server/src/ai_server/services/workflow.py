@@ -205,12 +205,6 @@ class MachineWorkflow:
                     state = await self.repository.save(state)
         if state.status != SessionStatus.COMPLETED:
             return state
-        if (
-            state.artifact is not None
-            and state.artifact.artifact_type == DISTRIBUTION_ARTIFACT_TYPE
-            and state.artifact.file_name == f"{state.artifact.artifact_id}.zip"
-        ):
-            return state
         artifacts = await self.build_client.artifacts(state.build_id)
         artifact = next(
             (item for item in artifacts if item.artifact_type == DISTRIBUTION_ARTIFACT_TYPE),

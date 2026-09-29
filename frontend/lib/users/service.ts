@@ -98,6 +98,7 @@ export async function getUserProfileService(
      JOIN users author
        ON author.id = m.created_by
      WHERE s.user_id = $2
+       AND m.created_by <> $2
        AND m.status <> 'deleted'
        AND (
          m.published = true

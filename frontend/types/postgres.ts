@@ -13,7 +13,6 @@ export type MachineRecord = {
   id: string
   created_by: string
   name: string
-  summary: string
   description: string
   file_path: string
   level: "easy" | "medium" | "hard"
