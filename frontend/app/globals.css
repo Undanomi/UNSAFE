@@ -1163,6 +1163,9 @@
     border-color: rgba(222, 107, 116, 0.54);
     color: #e88e96;
   }
+  .slsg-detail-build-status.is-limit {
+    border-color: rgba(222, 166, 107, 0.62);
+  }
   .slsg-detail-build-status.is-cancelled {
     border-color: rgba(120, 151, 183, 0.58);
     background:
@@ -3056,6 +3059,43 @@
     box-shadow:
       inset 0 1px rgba(205, 228, 244, 0.06),
       0 0 18px rgba(99, 179, 201, 0.12);
+  }
+  .slsg-active-session-limit {
+    padding: 14px 18px;
+    border: 1px solid rgba(222, 166, 107, 0.62);
+    border-radius: 10px;
+    background: rgba(78, 55, 37, 0.42);
+    color: #ffd5a5;
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+  .slsg-active-session-limit-links {
+    margin-top: 10px;
+  }
+  .slsg-active-session-limit-links ul {
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
+    padding-left: 20px;
+    list-style: disc;
+  }
+  .slsg-active-session-limit-links a {
+    color: #d8e9ff;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .slsg-active-session-limit-links a:hover {
+    color: #fff;
+  }
+
+  .slsg-chat-composer .slsg-active-session-limit {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .slsg-detail-build-status.is-limit .slsg-active-session-limit {
+    padding: 0;
+    border: 0;
+    background: transparent;
   }
   .slsg-chat-creation-status.is-success {
     border-color: rgba(95, 196, 159, 0.5);

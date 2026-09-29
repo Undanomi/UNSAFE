@@ -63,6 +63,16 @@ type DownloadURLResponse = {
   download_url: string
 }
 
+export class AiActiveSessionLimitError extends Error {
+  constructor(
+    readonly limit: number,
+    readonly activeSessionIds: string[],
+  ) {
+    super(`User has reached the active session limit of ${limit}.`)
+    this.name = "AiActiveSessionLimitError"
+  }
+}
+
 function getAiServerUrl(): string {
   const configuredUrl = process.env.AI_SERVER_URL?.trim()
   if (!configuredUrl) {
@@ -78,6 +88,25 @@ function getAiServerUrl(): string {
 async function parseAiResponse(response: Response): Promise<AiSessionResponse> {
   if (!response.ok) {
     const body = await response.text()
+    if (response.status === 409) {
+      try {
+        const error = JSON.parse(body) as Record<string, unknown>
+        if (
+          error.code === "active_session_limit" &&
+          typeof error.limit === "number" &&
+          Number.isInteger(error.limit) &&
+          error.limit >= 1 &&
+          Array.isArray(error.active_session_ids)
+        ) {
+          throw new AiActiveSessionLimitError(
+            error.limit,
+            error.active_session_ids.filter((id): id is string => typeof id === "string"),
+          )
+        }
+      } catch (error) {
+        if (error instanceof AiActiveSessionLimitError) throw error
+      }
+    }
     throw new Error(`AI server returned ${response.status}: ${body.slice(0, 500)}`)
   }
   return (await response.json()) as AiSessionResponse

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .api import router
 from .config import Settings, get_settings
-from .repository import SessionNotFoundError, SessionRepository
+from .repository import ActiveSessionLimitError, SessionNotFoundError, SessionRepository
 from .services.ai import GeminiGenerator, OpenAIGenerator
 from .services.build_client import BuildClient
 from .services.download_signing import DownloadSigner
@@ -37,7 +37,9 @@ def create_app(
         resolved.database_url,
         resolved.database_pool_min_size,
         resolved.database_pool_max_size,
+        resolved.max_active_sessions_per_user,
     )
+    repository.max_active_sessions_per_user = resolved.max_active_sessions_per_user
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -152,6 +154,18 @@ def create_app(
     @app.exception_handler(SessionNotFoundError)
     async def session_not_found(_: Request, __: SessionNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": "session not found"})
+
+    @app.exception_handler(ActiveSessionLimitError)
+    async def active_session_limit(_: Request, error: ActiveSessionLimitError) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "active_session_limit",
+                "detail": str(error),
+                "limit": error.limit,
+                "active_session_ids": error.active_session_ids,
+            },
+        )
 
     return app
 

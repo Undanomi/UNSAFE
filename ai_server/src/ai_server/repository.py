@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, select, text, update
+from sqlalchemy import and_, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -31,8 +31,29 @@ class SessionNotFoundError(Exception):
     pass
 
 
+class ActiveSessionLimitError(Exception):
+    def __init__(self, limit: int, active_session_ids: list[str]) -> None:
+        self.limit = limit
+        self.active_session_ids = active_session_ids
+        super().__init__(f"user may have at most {limit} active sessions")
+
+
+ACTIVE_SESSION_STATUSES = tuple(
+    status.value
+    for status in SessionStatus
+    if status not in {SessionStatus.COMPLETED, SessionStatus.FAILED, SessionStatus.CANCELLED}
+)
+
+
 class SessionRepository:
-    def __init__(self, database_url: str, min_size: int = 1, max_size: int = 10) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        min_size: int = 1,
+        max_size: int = 10,
+        max_active_sessions_per_user: int = 1,
+    ) -> None:
+        self.max_active_sessions_per_user = max_active_sessions_per_user
         self.engine: AsyncEngine = create_database_engine(database_url, min_size, max_size)
         self.session_factory: async_sessionmaker = create_session_factory(self.engine)
 
@@ -100,6 +121,39 @@ class SessionRepository:
             if result.rowcount == 0:
                 raise SessionNotFoundError(session_id)
 
+    async def _check_active_limit(
+        self, session: AsyncSession, owner_user_id: str, exclude_session_id: UUID | None = None
+    ) -> None:
+        # The transaction lock serializes admissions for this user across API processes.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:owner_user_id, 0))"),
+            {"owner_user_id": owner_user_id},
+        )
+        statement = (
+            select(func.count())
+            .select_from(AISessionRecord)
+            .where(
+                AISessionRecord.owner_user_id == owner_user_id,
+                AISessionRecord.status.in_(ACTIVE_SESSION_STATUSES),
+            )
+        )
+        if exclude_session_id is not None:
+            statement = statement.where(AISessionRecord.session_id != exclude_session_id)
+        count = (await session.execute(statement)).scalar_one()
+        if count >= self.max_active_sessions_per_user:
+            active_rows = await session.execute(
+                select(AISessionRecord.session_id)
+                .where(
+                    AISessionRecord.owner_user_id == owner_user_id,
+                    AISessionRecord.status.in_(ACTIVE_SESSION_STATUSES),
+                )
+                .order_by(AISessionRecord.created_at)
+            )
+            raise ActiveSessionLimitError(
+                self.max_active_sessions_per_user,
+                [str(session_id) for session_id in active_rows.scalars()],
+            )
+
     async def create(self, owner_user_id: str) -> SessionState:
         state = SessionState(session_id=str(uuid4()), owner_user_id=owner_user_id)
         record = AISessionRecord(
@@ -110,6 +164,7 @@ class SessionRepository:
             updated_at=state.updated_at,
         )
         async with self.session_factory.begin() as session:
+            await self._check_active_limit(session, owner_user_id)
             session.add(record)
         return state
 
@@ -195,6 +250,24 @@ class SessionRepository:
             raise SessionNotFoundError(state.session_id) from error
         state.updated_at = utcnow()
         async with self.session_factory.begin() as session:
+            if state.status.value in ACTIVE_SESSION_STATUSES:
+                # A failed or cancelled session may be restarted. Admit that transition
+                # under the same user lock used when a new session is created.
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtextextended(:owner_user_id, 0))"),
+                    {"owner_user_id": state.owner_user_id},
+                )
+                current_status = (
+                    await session.execute(
+                        select(AISessionRecord.status)
+                        .where(AISessionRecord.session_id == session_id)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if current_status is None:
+                    raise SessionNotFoundError(state.session_id)
+                if current_status not in ACTIVE_SESSION_STATUSES:
+                    await self._check_active_limit(session, state.owner_user_id, session_id)
             if state.scenario:
                 await self._save_scenario(session, state)
             result = await session.execute(

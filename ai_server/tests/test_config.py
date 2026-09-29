@@ -59,3 +59,13 @@ def test_settings_reject_unknown_ai_provider() -> None:
 def test_settings_reject_invalid_rockyou_window() -> None:
     with pytest.raises(ValidationError, match="ROCKYOU_MIN_LINE"):
         Settings(rockyou_min_line=200, rockyou_max_line=100, _env_file=None)
+
+
+def test_active_session_limit_defaults_to_one_and_reads_environment(monkeypatch) -> None:
+    monkeypatch.delenv("MAX_ACTIVE_SESSIONS_PER_USER", raising=False)
+    assert Settings(_env_file=None).max_active_sessions_per_user == 1
+    monkeypatch.setenv("MAX_ACTIVE_SESSIONS_PER_USER", "2")
+    assert Settings(_env_file=None).max_active_sessions_per_user == 2
+    monkeypatch.setenv("MAX_ACTIVE_SESSIONS_PER_USER", "0")
+    with pytest.raises(ValidationError, match="max_active_sessions_per_user"):
+        Settings(_env_file=None)

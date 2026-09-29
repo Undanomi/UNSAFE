@@ -2,6 +2,11 @@
 
 import { revalidatePath } from "next/cache"
 import { cookies } from "next/headers"
+import {
+  type ActiveSessionLimitFailure,
+  activeSessionLimitResult,
+} from "@/lib/ai/active-session-limit"
+import { AiActiveSessionLimitError } from "@/lib/ai/service"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
 import {
@@ -109,6 +114,7 @@ export async function generateMachineGuidanceAction(
 export type RetryMachineBuildResult =
   | { success: true; state: MachineBuildState }
   | { success: false; message: string }
+  | ActiveSessionLimitFailure
 
 export async function retryMachineBuildAction(machineId: string): Promise<RetryMachineBuildResult> {
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
@@ -124,6 +130,9 @@ export async function retryMachineBuildAction(machineId: string): Promise<RetryM
       ? { success: true, state }
       : { success: false, message: "このマシンを再ビルドする権限がありません。" }
   } catch (error) {
+    if (error instanceof AiActiveSessionLimitError) {
+      return activeSessionLimitResult(user.uid, error)
+    }
     console.error("Failed to retry machine build.", error)
     return {
       success: false,
