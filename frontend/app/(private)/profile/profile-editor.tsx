@@ -6,7 +6,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { updateProfileAction } from "@/app/actions/profile"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { MACHINE_DIFFICULTY_LABELS } from "@/lib/machines/difficulty"
 import type { ProfileMachine, UserProfile } from "@/types/profile"
 
 type ProfileEditorProps = {
@@ -90,7 +90,9 @@ export function ProfileEditor({
   }
 
   return (
-    <section className={`slsg-profile-page ${canEdit ? "is-own-profile" : "is-public-profile"}`}>
+    <section
+      className={`slsg-profile-page ${canEdit ? "is-own-profile" : "is-public-profile"} ${isEditing ? "is-editing" : ""}`}
+    >
       <header className="slsg-profile-header">
         {showBackLink ? (
           <Link className="slsg-profile-back" href="/machines">
@@ -289,24 +291,14 @@ export function ProfileEditor({
       </section>
 
       {!isEditing ? (
-        <>
-          <div className="slsg-profile-history-grid">
-            <MachineRecordList
-              items={profile.createdMachines}
-              kind="created"
-              profileId={profile.id}
-              title="作成したマシン"
-            />
-            <MachineRecordList
-              items={profile.solvedMachines}
-              kind="solved"
-              profileId={profile.id}
-              title="解いたマシン"
-            />
-          </div>
-
-          <TerminalTelemetry />
-        </>
+        <div className="slsg-profile-history-grid">
+          <MachineRecordList
+            items={profile.createdMachines}
+            kind="created"
+            title="作成したマシン"
+          />
+          <MachineRecordList items={profile.solvedMachines} kind="solved" title="解いたマシン" />
+        </div>
       ) : null}
     </section>
   )
@@ -315,17 +307,11 @@ export function ProfileEditor({
 type MachineRecordListProps = {
   items: ProfileMachine[]
   kind: "created" | "solved"
-  profileId: string
   title: string
 }
 
-const profileDifficultyLabels = {
-  easy: "Easy",
-  medium: "Medium",
-  hard: "High",
-} as const
-
 const profileDifficultyClasses = {
+  very_easy: "slsg-difficulty-very-easy",
   easy: "slsg-difficulty-easy",
   medium: "slsg-difficulty-medium",
   hard: "slsg-difficulty-high",
@@ -335,7 +321,7 @@ function formatProfileDate(value: string) {
   return value.replaceAll("/", ".").replaceAll("-", ".")
 }
 
-function MachineRecordList({ items, kind, profileId, title }: MachineRecordListProps) {
+function MachineRecordList({ items, kind, title }: MachineRecordListProps) {
   return (
     <section className={`slsg-profile-history-card is-${kind}`}>
       <ProfileCardGlow />
@@ -356,7 +342,7 @@ function MachineRecordList({ items, kind, profileId, title }: MachineRecordListP
                 <Link
                   aria-label={`${machine.name}の詳細を見る`}
                   className="slsg-profile-machine-row-hit-area"
-                  href={`/machines/${encodeURIComponent(machine.id)}?from=profile&profileId=${encodeURIComponent(profileId)}`}
+                  href={`/machines/${encodeURIComponent(machine.id)}`}
                 />
                 <span className="slsg-profile-machine-copy">
                   <strong>{machine.name}</strong>
@@ -364,7 +350,7 @@ function MachineRecordList({ items, kind, profileId, title }: MachineRecordListP
                 <span
                   className={`slsg-difficulty slsg-profile-difficulty ${profileDifficultyClasses[machine.level]}`}
                 >
-                  {profileDifficultyLabels[machine.level]}
+                  {MACHINE_DIFFICULTY_LABELS[machine.level]}
                 </span>
                 {kind === "solved" ? (
                   <Link

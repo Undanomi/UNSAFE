@@ -6,15 +6,17 @@ import {
   CirclePlus,
   List,
   SearchX,
+  X,
 } from "lucide-react"
 import Form from "next/form"
 import Image from "next/image"
 import Link from "next/link"
 import type { ReactNode } from "react"
 import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filter-reset-button"
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
+import { MACHINE_DIFFICULTY_LABELS, MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import {
   MACHINE_PAGE_SIZE,
+  MAX_MACHINE_TAGS,
   type MachineListQuery,
   type MachineListResult,
   machineListHref,
@@ -23,8 +25,8 @@ import {
 const paginationClass =
   "slsg-pagination-button grid size-11 shrink-0 place-items-center rounded-md border text-sm font-bold sm:size-12 sm:text-base"
 
-const difficultyLabels = { easy: "Easy", medium: "Medium", hard: "High" }
 const difficultyClasses = {
+  very_easy: "slsg-difficulty-very-easy",
   easy: "slsg-difficulty-easy",
   medium: "slsg-difficulty-medium",
   hard: "slsg-difficulty-high",
@@ -97,6 +99,9 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
         className="slsg-machine-filter-panel grid gap-4 rounded-[14px] border p-4 sm:p-5"
         aria-label="マシンの検索条件"
       >
+        {query.tags.map((tag) => (
+          <input key={tag} name="tag" type="hidden" value={tag} />
+        ))}
         <label className="flex min-w-0 flex-col gap-2 text-sm leading-5 font-bold">
           キーワード
           <input
@@ -108,11 +113,35 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
             placeholder="マシン名・タグで検索"
           />
         </label>
+        {query.tags.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[#a8b5cc]">
+            <span>タグで絞り込み中:</span>
+            {query.tags.map((tag) => (
+              <span
+                className="inline-flex max-w-full items-center gap-1 rounded-md border border-[#78bfd5] bg-[#23445c] py-1 pr-1 pl-2 text-[#d8f6ff]"
+                key={tag}
+              >
+                <span className="min-w-0 [overflow-wrap:anywhere]">{tag}</span>
+                <Link
+                  aria-label={`タグ「${tag}」の絞り込みを解除`}
+                  className="grid size-6 shrink-0 place-items-center rounded hover:bg-[#3a6478] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9cecfc]"
+                  href={machineListHref(
+                    { ...query, tags: query.tags.filter((selected) => selected !== tag) },
+                    1,
+                  )}
+                  prefetch={false}
+                >
+                  <X aria-hidden="true" size={14} />
+                </Link>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr]">
           <fieldset className="min-w-0 sm:col-span-2 xl:col-span-1">
             <legend className="mb-2 p-0 text-sm leading-5 font-bold">難易度</legend>
             <div className="slsg-machine-filter-options flex min-h-11 flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border px-3">
-              {(["easy", "medium", "hard"] as const).map((level) => (
+              {MACHINE_LEVELS.map((level) => (
                 <label
                   key={level}
                   className="flex min-h-[42px] shrink-0 items-center gap-2 text-sm leading-5"
@@ -124,7 +153,7 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
                     value={level}
                     defaultChecked={query.level.includes(level)}
                   />
-                  {difficultyLabels[level]}
+                  {MACHINE_DIFFICULTY_LABELS[level]}
                 </label>
               ))}
             </div>
@@ -193,7 +222,6 @@ export function MachineList({ query, children }: { query: MachineListQuery; chil
       </Form>
 
       {children}
-      <TerminalTelemetry />
     </section>
   )
 }
@@ -242,10 +270,10 @@ export function MachineListResults({
                   <th scope="col" className="w-[30%] px-9 py-5">
                     マシン名
                   </th>
-                  <th scope="col" className="w-[20%] px-4 py-5">
+                  <th scope="col" className="w-[17%] px-4 py-5">
                     タグ
                   </th>
-                  <th scope="col" className="w-[10%] px-4 py-5">
+                  <th scope="col" className="w-[13%] px-4 py-5">
                     難易度
                   </th>
                   <th scope="col" className="w-[12%] px-4 py-5">
@@ -283,21 +311,36 @@ export function MachineListResults({
                         <span className="text-xs text-[#8292aa]">—</span>
                       ) : null}
                       <ul className="flex flex-wrap gap-1.5" aria-label="タグ">
-                        {[...new Set(machine.tags)].map((tag) => (
-                          <li
-                            className="max-w-full rounded-md border border-[#3a4c69] bg-[#18243a] px-2 py-1 text-xs text-[#a8b5cc] [overflow-wrap:anywhere]"
-                            key={tag}
-                          >
-                            {tag}
-                          </li>
-                        ))}
+                        {[...new Set(machine.tags)].map((tag) => {
+                          const selected = query.tags.includes(tag)
+                          const tagClass = `inline-block max-w-full rounded-md border px-2 py-1 text-xs [overflow-wrap:anywhere] ${selected ? "border-[#78bfd5] bg-[#23445c] text-[#d8f6ff]" : "border-[#3a4c69] bg-[#18243a] text-[#a8b5cc]"}`
+                          return (
+                            <li className="max-w-full" key={tag}>
+                              {selected || query.tags.length >= MAX_MACHINE_TAGS ? (
+                                <span className={tagClass}>{tag}</span>
+                              ) : (
+                                <Link
+                                  aria-label={`タグ「${tag}」で絞り込む`}
+                                  className={`${tagClass} hover:border-[#78bfd5] hover:text-[#d8f6ff] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9cecfc]`}
+                                  href={machineListHref(
+                                    { ...query, tags: [...query.tags, tag] },
+                                    1,
+                                  )}
+                                  prefetch={false}
+                                >
+                                  {tag}
+                                </Link>
+                              )}
+                            </li>
+                          )
+                        })}
                       </ul>
                     </td>
                     <td className="px-4 py-5">
                       <span
                         className={`slsg-difficulty inline-flex rounded-full px-3 py-1.5 text-xs font-bold ${difficultyClasses[machine.level]}`}
                       >
-                        {difficultyLabels[machine.level]}
+                        {MACHINE_DIFFICULTY_LABELS[machine.level]}
                       </span>
                     </td>
                     <td className="px-4 py-5">

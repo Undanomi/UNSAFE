@@ -113,7 +113,7 @@ erDiagram
 | `summary` | `text` | — | — | 不可 | 旧サマリー（現行アプリでは未使用） |
 | `description` | `text` | — | — | 不可 | 詳細説明 |
 | `file_path` | `text` | — | — | 不可 | 成果物のパス |
-| `level` | `varchar(6)` | — | — | 不可 | 難易度（easy / medium / hard） |
+| `level` | `varchar(9)` | — | — | 不可 | 難易度（very_easy / easy / medium / hard） |
 | `published` | `boolean` | — | — | 不可 | 公開状態 |
 | `status` | `varchar(10)` | — | — | 不可 | 状態（created / building / ready / failed / cancelled / preparing / deleted） |
 | `build_progress` | `integer` | — | — | 不可 | ビルド進捗（0〜100） |

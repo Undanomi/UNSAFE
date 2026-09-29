@@ -1,5 +1,3 @@
-import { TerminalTelemetry } from "@/components/terminal-telemetry"
-
 export function ChatLoadingSkeleton() {
   return (
     <div className="slsg-chat-workspace slsg-chat-loading">
@@ -37,7 +35,6 @@ export function ChatLoadingSkeleton() {
           </div>
         </div>
       </div>
-      <TerminalTelemetry />
     </div>
   )
 }
