@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  MAX_MACHINE_TAGS,
   type MachineListItem,
   machineListHref,
   parseMachineListQuery,
@@ -24,6 +25,19 @@ function machine(id: string, name: string, tags: string[]): MachineListItem {
     isSolved: false,
   }
 }
+
+test("tag query accepts at most five distinct nonempty tags", () => {
+  const query = parseMachineListQuery({
+    tag: [" first ", "first", "", "second", "third", "fourth", "fifth", "sixth"],
+  })
+
+  assert.equal(MAX_MACHINE_TAGS, 5)
+  assert.deepEqual(query.tags, ["first", "second", "third", "fourth", "fifth"])
+  assert.deepEqual(
+    new URL(machineListHref(query), "http://localhost").searchParams.getAll("tag"),
+    query.tags,
+  )
+})
 
 test("tag links add selections, keep other conditions, and restart at page one", () => {
   const query = parseMachineListQuery({

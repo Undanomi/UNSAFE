@@ -16,6 +16,7 @@ import { MachineFilterResetButton } from "@/app/(private)/machines/machine-filte
 import { MACHINE_DIFFICULTY_LABELS, MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import {
   MACHINE_PAGE_SIZE,
+  MAX_MACHINE_TAGS,
   type MachineListQuery,
   type MachineListResult,
   machineListHref,
@@ -310,21 +311,29 @@ export function MachineListResults({
                         <span className="text-xs text-[#8292aa]">—</span>
                       ) : null}
                       <ul className="flex flex-wrap gap-1.5" aria-label="タグ">
-                        {[...new Set(machine.tags)].map((tag) => (
-                          <li className="max-w-full" key={tag}>
-                            <Link
-                              aria-label={`タグ「${tag}」で絞り込む`}
-                              className={`inline-block max-w-full rounded-md border px-2 py-1 text-xs [overflow-wrap:anywhere] hover:border-[#78bfd5] hover:text-[#d8f6ff] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9cecfc] ${query.tags.includes(tag) ? "border-[#78bfd5] bg-[#23445c] text-[#d8f6ff]" : "border-[#3a4c69] bg-[#18243a] text-[#a8b5cc]"}`}
-                              href={machineListHref(
-                                { ...query, tags: [...new Set([...query.tags, tag])] },
-                                1,
+                        {[...new Set(machine.tags)].map((tag) => {
+                          const selected = query.tags.includes(tag)
+                          const tagClass = `inline-block max-w-full rounded-md border px-2 py-1 text-xs [overflow-wrap:anywhere] ${selected ? "border-[#78bfd5] bg-[#23445c] text-[#d8f6ff]" : "border-[#3a4c69] bg-[#18243a] text-[#a8b5cc]"}`
+                          return (
+                            <li className="max-w-full" key={tag}>
+                              {selected || query.tags.length >= MAX_MACHINE_TAGS ? (
+                                <span className={tagClass}>{tag}</span>
+                              ) : (
+                                <Link
+                                  aria-label={`タグ「${tag}」で絞り込む`}
+                                  className={`${tagClass} hover:border-[#78bfd5] hover:text-[#d8f6ff] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9cecfc]`}
+                                  href={machineListHref(
+                                    { ...query, tags: [...query.tags, tag] },
+                                    1,
+                                  )}
+                                  prefetch={false}
+                                >
+                                  {tag}
+                                </Link>
                               )}
-                              prefetch={false}
-                            >
-                              {tag}
-                            </Link>
-                          </li>
-                        ))}
+                            </li>
+                          )
+                        })}
                       </ul>
                     </td>
                     <td className="px-4 py-5">

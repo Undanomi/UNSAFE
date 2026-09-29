@@ -2,6 +2,7 @@ import { MACHINE_LEVELS } from "@/lib/machines/difficulty"
 import type { MachineRecord } from "@/types/postgres"
 
 export const MACHINE_PAGE_SIZE = 10
+export const MAX_MACHINE_TAGS = 5
 export type MachineListQuery = {
   page: number
   q: string
@@ -38,11 +39,12 @@ export function parseMachineListQuery(
   const rawLevels = Array.isArray(params.level) ? params.level : [params.level]
   const levels = MACHINE_LEVELS.filter((level) => rawLevels.includes(level))
   const rawTags = Array.isArray(params.tag) ? params.tag : [params.tag]
-  const tags = [
-    ...new Set(
-      rawTags.map((tag) => tag?.trim().slice(0, 100)).filter((tag): tag is string => Boolean(tag)),
-    ),
-  ]
+  const tags: string[] = []
+  for (const rawTag of rawTags) {
+    if (tags.length === MAX_MACHINE_TAGS) break
+    const tag = rawTag?.trim().slice(0, 100)
+    if (tag && !tags.includes(tag)) tags.push(tag)
+  }
   const solved = value("solved")
   return {
     page: Number.isSafeInteger(page) && page > 0 ? page : 1,
