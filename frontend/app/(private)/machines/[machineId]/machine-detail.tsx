@@ -21,6 +21,10 @@ import {
   updateMachineDetailsAction,
   verifyMachineFlagAction,
 } from "@/app/actions/machines"
+import {
+  type ActiveLimitNotice,
+  ActiveSessionLimitPanel,
+} from "@/components/active-session-limit-panel"
 import { FlagCorrectEffect } from "@/components/flag-correct-effect"
 import { MarkdownContent } from "@/components/markdown-content"
 import { toMachineDifficulty, toMachineLevel } from "@/lib/machines/difficulty"
@@ -364,6 +368,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   const [description, setDescription] = useState(machine.description)
   const [isRetrying, setIsRetrying] = useState(false)
   const [retryError, setRetryError] = useState("")
+  const [retryLimitNotice, setRetryLimitNotice] = useState<ActiveLimitNotice | null>(null)
   const [guidance, setGuidance] = useState(machine.guidance)
   const [isGuidanceGenerating, setIsGuidanceGenerating] = useState(false)
   const [guidanceError, setGuidanceError] = useState("")
@@ -452,10 +457,15 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
   async function handleRetryBuild() {
     setIsRetrying(true)
     setRetryError("")
+    setRetryLimitNotice(null)
     try {
       const result = await retryMachineBuildAction(machine.id)
       if (!result.success) {
-        setRetryError(result.message)
+        if ("code" in result && result.code === "active_session_limit") {
+          setRetryLimitNotice({ message: result.message, activeChats: result.activeChats })
+        } else {
+          setRetryError(result.message)
+        }
         return
       }
       setBuildState(result.state)
@@ -651,6 +661,7 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
 
       {machine.status !== undefined && (buildState.status !== "ready" || machine.isOwner) ? (
         <BuildStatusPanel
+          activeLimitNotice={retryLimitNotice}
           canRetry={machine.canRetry === true}
           error={retryError}
           isRetrying={isRetrying}
@@ -755,12 +766,14 @@ export function MachineDetailView({ machine }: MachineDetailProps) {
 }
 
 function BuildStatusPanel({
+  activeLimitNotice,
   canRetry,
   error,
   isRetrying,
   onRetry,
   state,
 }: {
+  activeLimitNotice: ActiveLimitNotice | null
   canRetry: boolean
   error: string
   isRetrying: boolean
@@ -779,6 +792,19 @@ function BuildStatusPanel({
       <section className="slsg-detail-build-status is-ready">
         <CheckCircle2 aria-hidden="true" size={20} />
         <p>マシンのビルドが完了しています。</p>
+      </section>
+    )
+  }
+
+  if (activeLimitNotice) {
+    return (
+      <section className="slsg-detail-build-status is-limit">
+        <ActiveSessionLimitPanel notice={activeLimitNotice} />
+        {canRetry ? (
+          <button disabled={isRetrying} onClick={onRetry} type="button">
+            {isRetrying ? "再ビルドを開始中…" : "もう一度ビルドする"}
+          </button>
+        ) : null}
       </section>
     )
   }

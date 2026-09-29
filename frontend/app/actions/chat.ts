@@ -1,7 +1,9 @@
 "use server"
 
 import { cookies } from "next/headers"
+import { activeSessionLimitResult } from "@/lib/ai/active-session-limit"
 import {
+  AiActiveSessionLimitError,
   cancelAiSessionService,
   createAiSessionService,
   saveMachineInformationService,
@@ -20,6 +22,7 @@ import {
   setChatCreationStatusService,
 } from "@/lib/chat/service"
 import {
+  type ActiveChatLink,
   CHAT_CONFIG,
   CHAT_STEPS,
   type ChatAnswers,
@@ -32,7 +35,12 @@ const GENERIC_ERROR_MESSAGE = "処理に失敗しました。しばらくして�
 const SESSION_ERROR_MESSAGE = "このチャットを操作する権限がないか、チャットが見つかりません。"
 
 type ChatActionSuccess = { success: true; sessionId: string }
-type ChatActionFailure = { success: false; message: string }
+type ChatActionFailure = {
+  success: false
+  message: string
+  code?: "active_session_limit"
+  activeChats?: ActiveChatLink[]
+}
 export type ChatActionResult = ChatActionSuccess | ChatActionFailure
 
 type SaveChatProgressInput = {
@@ -40,6 +48,19 @@ type SaveChatProgressInput = {
   answers: ChatAnswers
   currentStep: number
   basicReady: boolean
+}
+
+async function activeLimitForExistingChat(
+  ownerUserId: string,
+  sessionId: string,
+  error: AiActiveSessionLimitError,
+): Promise<ChatActionFailure> {
+  try {
+    await setChatCreationStatusService(ownerUserId, sessionId, "input")
+  } catch (resetError) {
+    console.error("Failed to reset chat status after limit rejection.", resetError)
+  }
+  return activeSessionLimitResult(ownerUserId, error)
 }
 
 async function getAuthenticatedUser() {
@@ -147,6 +168,9 @@ export async function saveChatProgressAction(
       ? { success: true, sessionId: session.id }
       : { success: false, message: SESSION_ERROR_MESSAGE }
   } catch (error) {
+    if (error instanceof AiActiveSessionLimitError) {
+      return activeSessionLimitResult(user.uid, error)
+    }
     console.error("Failed to save chat progress.", error)
     return { success: false, message: GENERIC_ERROR_MESSAGE }
   }
@@ -181,6 +205,9 @@ export async function prepareMachineCreationAction(
     }
     return { success: true, sessionId }
   } catch (error) {
+    if (error instanceof AiActiveSessionLimitError) {
+      return activeLimitForExistingChat(user.uid, sessionId, error)
+    }
     console.error("Failed to prepare machine creation.", error)
     return { success: false, message: GENERIC_ERROR_MESSAGE }
   }
@@ -210,6 +237,9 @@ export async function startMachineBuildAction(
       ? { success: true, sessionId, machineId }
       : { success: false, message: SESSION_ERROR_MESSAGE }
   } catch (error) {
+    if (error instanceof AiActiveSessionLimitError) {
+      return activeLimitForExistingChat(user.uid, sessionId, error)
+    }
     console.error("Failed to start machine build.", error)
     return { success: false, message: GENERIC_ERROR_MESSAGE }
   }

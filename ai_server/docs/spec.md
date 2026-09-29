@@ -67,6 +67,9 @@ stateDiagram-v2
 
 `POST /v1/sessions` はボディなしでセッションを作り、`201` と `status=created` のセッションを返します。続けて `PUT /v1/sessions/{session_id}/machine-information` に条件を送ります。
 
+`MAX_ACTIVE_SESSIONS_PER_USER`（既定値 `1`）は同じユーザーが保持できる生成セッションの上限です。`ready` からビルド中までと `scenario_ready` を使用中として数え、`created`・`completed`・`failed`・`cancelled` は数えません。`created` から `ready` への遷移と終了済みセッションの再開時に上限を適用します。マシン情報の登録と `POST /machines` の再開では `409`、シナリオ生成の SSE が開始した後の再開では `scenario.error` を返します。
+上限エラーの JSON には `code=active_session_limit`、設定値の `limit`、所有者の利用中セッションを列挙した `active_session_ids` を含めます。フロントエンドはこの ID を本人のチャット一覧に照合し、続行できるチャットへのリンクを表示します。
+
 ```json
 {
   "name": "Nginx Engine",

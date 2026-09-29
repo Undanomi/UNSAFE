@@ -145,6 +145,13 @@ RUNTIME_LIMITS = (
         "Random delay added to temporary provider retry intervals.",
     ),
     RuntimeLimit(
+        "max_active_sessions_per_user",
+        "MAX_ACTIVE_SESSIONS_PER_USER",
+        "Active sessions per user",
+        "1 or more",
+        "Maximum sessions held by one user until completion, failure, or cancellation.",
+    ),
+    RuntimeLimit(
         "build_repair_max_attempts",
         "BUILD_REPAIR_MAX_ATTEMPTS",
         "Build repair attempts",

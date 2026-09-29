@@ -57,6 +57,7 @@ export type ChatCreationStatus =
   | "failed"
   | "cancelled"
 export type ChatSessionSummary = Pick<ChatSession, "id" | "name" | "status">
+export type ActiveChatLink = Pick<ChatSessionSummary, "id" | "name">
 
 export type ChatAnswers = {
   name: string

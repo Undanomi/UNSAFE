@@ -42,6 +42,7 @@ class RuntimeLimitSettings(DatabaseSettings):
 
     build_timeout_seconds: float = Field(default=30, gt=0)
     build_repair_max_attempts: int = Field(default=3, ge=0, le=10)
+    max_active_sessions_per_user: int = Field(default=1, ge=1)
     source_workbench_action_limit: int = Field(default=20, ge=1, le=60)
     source_sandbox_timeout_seconds: float = Field(default=660, gt=0, le=3600)
     download_url_ttl_seconds: int = Field(default=1800, ge=60, le=86400)
