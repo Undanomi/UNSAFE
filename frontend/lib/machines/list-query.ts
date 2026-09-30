@@ -17,7 +17,7 @@ export type MachineListItem = Pick<
   "description" | "id" | "level" | "name" | "published" | "status" | "tags"
 > & {
   created_at: string
-  authorId: string
+  authorPublicId: string
   author: string
   authorAvatarUrl: string
   isOwned: boolean

@@ -70,6 +70,7 @@ export async function updateProfileAction(formData: FormData): Promise<UpdatePro
     const iconUrl = iconMode === "google" ? user.picture || currentProfile.icon_url : ""
     await updateUserProfileService(user.uid, { name, bio, icon_url: iconUrl })
     revalidatePath("/profile")
+    revalidatePath(`/users/${currentProfile.public_id}`)
     return { success: true, profile: { name, bio, iconUrl } }
   } catch (error) {
     console.error("Failed to update user profile.", error)
@@ -107,6 +108,7 @@ export async function completeProfileAction(
       name,
       profile_completed: true,
     })
+    revalidatePath(`/users/${currentProfile.public_id}`)
     revalidatePath("/", "layout")
     return { success: true }
   } catch (error) {

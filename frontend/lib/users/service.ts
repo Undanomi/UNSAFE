@@ -13,13 +13,17 @@ type ProfileMachineRow = {
   id: string
   name: string
   level: MachineRecord["level"]
-  author_id: string
+  author_public_id: string
   author_name: string
   created_at: Date
 }
 
 type SolvedProfileMachineRow = ProfileMachineRow & {
   solved_at: Date
+}
+
+function isUserPublicId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 }
 
 function formatProfileDate(value: Date): string {
@@ -54,6 +58,17 @@ export async function getUserDocumentService(uid: string): Promise<UserRecord | 
   return result.rows[0] ?? null
 }
 
+export async function getUserDocumentByPublicIdService(
+  publicId: string,
+): Promise<UserRecord | null> {
+  if (!isUserPublicId(publicId)) return null
+
+  const result = await queryDatabase<UserRecord>("SELECT * FROM users WHERE public_id = $1", [
+    publicId,
+  ])
+  return result.rows[0] ?? null
+}
+
 export async function getUserProfileService(
   viewerUserId: string,
   targetUserId: string,
@@ -67,7 +82,7 @@ export async function getUserProfileService(
        m.id,
        m.name,
        m.level,
-       author.id AS author_id,
+       author.public_id AS author_public_id,
        author.name AS author_name,
        m.created_at
      FROM machines m
@@ -88,7 +103,7 @@ export async function getUserProfileService(
        m.id,
        m.name,
        m.level,
-       author.id AS author_id,
+       author.public_id AS author_public_id,
        author.name AS author_name,
        m.created_at,
        s.solved_at
@@ -109,7 +124,7 @@ export async function getUserProfileService(
   )
 
   return {
-    id: user.id,
+    publicId: user.public_id,
     name: user.name,
     initial: user.name.trim().charAt(0).toUpperCase() || "U",
     bio: user.bio,
@@ -118,7 +133,7 @@ export async function getUserProfileService(
       id: machine.id,
       name: machine.name,
       level: machine.level,
-      authorId: machine.author_id,
+      authorPublicId: machine.author_public_id,
       authorName: machine.author_name || "ユーザー",
       createdAt: formatProfileDate(machine.created_at),
     })),
@@ -126,7 +141,7 @@ export async function getUserProfileService(
       id: machine.id,
       name: machine.name,
       level: machine.level,
-      authorId: machine.author_id,
+      authorPublicId: machine.author_public_id,
       authorName: machine.author_name || "ユーザー",
       createdAt: formatProfileDate(machine.created_at),
       solvedAt: formatProfileDate(machine.solved_at),

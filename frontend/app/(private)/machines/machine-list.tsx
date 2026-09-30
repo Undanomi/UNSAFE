@@ -353,7 +353,7 @@ export function MachineListResults({
                     <td className="px-4 py-5">
                       <Link
                         className="slsg-machine-author flex items-center gap-3 font-medium"
-                        href={`/users/${encodeURIComponent(machine.authorId)}`}
+                        href={`/users/${encodeURIComponent(machine.authorPublicId)}`}
                         prefetch={false}
                       >
                         <span

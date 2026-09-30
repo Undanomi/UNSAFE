@@ -7,6 +7,7 @@
 ```mermaid
 erDiagram
     users {
+        uuid public_id UK
         varchar id PK
         varchar name
         varchar bio
@@ -87,11 +88,14 @@ erDiagram
 
 ## users
 
-ログイン利用者のプロフィール。`id` には Firebase UID を保存する。
+ログイン利用者のプロフィール。`id` には Firebase UID を保存する。公開プロフィール URL には、認証 UID とは独立した `public_id` を使う。
+
+`008_user_public_id.sql` は既存行にも行ごとに UUID を格納する。新規 INSERT は DB の DEFAULT に任せ、再ログイン・プロフィール更新・シード再実行で UUID を変更しない。アプリの配信前にマイグレーションを適用する。
 
 | カラム名 | 型 | 主キー | 外部キー | nullable | 説明 |
 |---|---|---|---|---|---|
 | `id` | `varchar(128)` | ○ | — | 不可 | Firebase UID |
+| `public_id` | `uuid` | — | — | 不可 | 公開 URL 用。一意。既存行・新規行ともに `gen_random_uuid()` で生成 |
 | `name` | `varchar(256)` | — | — | 不可 | 表示名（1〜256文字） |
 | `bio` | `varchar(500)` | — | — | 不可 | 自己紹介 |
 | `icon_url` | `varchar(2048)` | — | — | 不可 | プロフィール画像 URL |
