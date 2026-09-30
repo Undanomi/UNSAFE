@@ -15,6 +15,7 @@ import {
   updateMachineDetailsService,
   verifyMachineFlagService,
 } from "@/lib/machines/service"
+import { getUserDocumentService } from "@/lib/users/service"
 import type { MachineBuildState, MachineGuidance } from "@/types/machine-detail"
 import type { MachineRecord } from "@/types/postgres"
 
@@ -73,7 +74,8 @@ export async function updateMachineDetailsAction(
     revalidatePath(`/machines/${machineId}`)
     revalidatePath("/machines")
     revalidatePath("/profile")
-    revalidatePath(`/users/${user.uid}`)
+    const profile = await getUserDocumentService(user.uid)
+    if (profile) revalidatePath(`/users/${profile.public_id}`)
     revalidatePath("/machines/chat")
     if (updated.chatSessionId) revalidatePath(`/machines/chat/${updated.chatSessionId}`)
     return {
@@ -173,7 +175,8 @@ export async function verifyMachineFlagAction(
     if (correct) {
       revalidatePath("/machines")
       revalidatePath("/profile")
-      revalidatePath(`/users/${user.uid}`)
+      const profile = await getUserDocumentService(user.uid)
+      if (profile) revalidatePath(`/users/${profile.public_id}`)
     }
 
     return correct === null ? { success: false } : { success: true, correct }

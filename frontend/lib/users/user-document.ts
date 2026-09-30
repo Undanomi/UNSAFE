@@ -11,7 +11,7 @@ export type UserIdentity = {
 export function buildInitialUserDocument(
   identity: UserIdentity,
   createdAt = new Date(),
-): UserRecord {
+): Omit<UserRecord, "public_id"> {
   return {
     id: identity.uid,
     name: typeof identity.name === "string" && identity.name.trim() ? identity.name : "ユーザー",

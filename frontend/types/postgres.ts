@@ -1,5 +1,6 @@
 export type UserRecord = {
   id: string
+  public_id: string
   name: string
   bio: string
   icon_url: string

@@ -18,7 +18,7 @@ function machine(id: string, name: string, tags: string[]): MachineListItem {
     published: true,
     status: "ready",
     created_at: "2026-09-29T00:00:00.000Z",
-    authorId: "author",
+    authorPublicId: "8bd50faf-354e-4c98-b911-c171072db27e",
     author: "Author",
     authorAvatarUrl: "",
     isOwned: false,

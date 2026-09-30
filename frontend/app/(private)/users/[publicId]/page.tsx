@@ -5,26 +5,29 @@ import { ProfileEditor } from "@/app/(private)/profile/profile-editor"
 import { AppShell } from "@/components/app-shell"
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants"
 import { verifySessionCookieService } from "@/lib/auth/service"
-import { getUserProfileService } from "@/lib/users/service"
+import { getUserDocumentByPublicIdService, getUserProfileService } from "@/lib/users/service"
 
 type UserPageProps = {
-  params: Promise<{ userId: string }>
+  params: Promise<{ publicId: string }>
 }
 
 export default async function UserPage({ params }: UserPageProps) {
-  const { userId } = await params
+  const { publicId } = await params
 
   const sessionCookie = (await cookies()).get(SESSION_COOKIE_NAME)?.value ?? ""
   const authenticatedUser = await verifySessionCookieService(sessionCookie)
 
   if (!authenticatedUser) redirect("/login")
-  if (userId === authenticatedUser.uid) redirect("/profile")
+  const targetUser = await getUserDocumentByPublicIdService(publicId)
+  if (targetUser?.id === authenticatedUser.uid) redirect("/profile")
 
-  const profile = await getUserProfileService(authenticatedUser.uid, userId)
+  const profile = targetUser
+    ? await getUserProfileService(authenticatedUser.uid, targetUser.id)
+    : null
   return (
     <AppShell artworkVariant="machines" layoutVariant="profile">
       {profile ? (
-        <ProfileEditor canEdit={false} key={profile.id} profile={profile} />
+        <ProfileEditor canEdit={false} key={profile.publicId} profile={profile} />
       ) : (
         <section className="slsg-panel slsg-state-card">
           <div className="slsg-state-card-content">

@@ -13,7 +13,7 @@ type MachineListRow = Pick<
   MachineRecord,
   "created_at" | "description" | "id" | "level" | "name" | "published" | "status" | "tags"
 > & {
-  author_id: string
+  author_public_id: string
   author: string
   author_icon_url: string
   is_owned: boolean
@@ -80,7 +80,7 @@ export async function getMachineListService(
   const result = await queryDatabase<MachineListRow>(
     `SELECT
        m.id, m.name, m.description, m.tags, m.level, m.created_at,
-       m.published, m.status, m.created_by AS author_id, u.name AS author,
+       m.published, m.status, u.public_id AS author_public_id, u.name AS author,
        u.icon_url AS author_icon_url,
        (m.created_by = $1) AS is_owned,
        (${solvedCondition}) AS is_solved
@@ -100,7 +100,7 @@ export async function getMachineListService(
     created_at: row.created_at.toISOString(),
     published: row.published,
     status: row.status,
-    authorId: row.author_id,
+    authorPublicId: row.author_public_id,
     author: row.author || "ユーザー",
     authorAvatarUrl: row.author_icon_url,
     isOwned: row.is_owned,

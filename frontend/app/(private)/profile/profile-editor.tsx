@@ -355,7 +355,7 @@ function MachineRecordList({ items, kind, title }: MachineRecordListProps) {
                 {kind === "solved" ? (
                   <Link
                     className="slsg-profile-machine-author"
-                    href={`/users/${encodeURIComponent(machine.authorId)}`}
+                    href={`/users/${encodeURIComponent(machine.authorPublicId)}`}
                   >
                     {machine.authorName}
                   </Link>

@@ -6,7 +6,7 @@ export type MachineSummary = {
   name: string
   description: string
   author: string
-  authorId: string
+  authorPublicId: string
   createdAt: string
   visibility: MachineVisibility
   isOwned: boolean

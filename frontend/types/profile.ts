@@ -4,14 +4,14 @@ export type ProfileMachine = {
   id: string
   name: string
   level: MachineRecord["level"]
-  authorId: string
+  authorPublicId: string
   authorName: string
   createdAt: string
   solvedAt?: string
 }
 
 export type UserProfile = {
-  id: string
+  publicId: string
   name: string
   initial: string
   bio: string

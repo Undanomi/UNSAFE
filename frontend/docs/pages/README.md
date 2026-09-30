@@ -12,25 +12,26 @@
 | --- | --- | --- | --- | --- |
 | [01_login.md](./01_login.md) | #23 | ログイン | `/login` | 未認証・認証済み |
 | [06_privacy.md](./06_privacy.md) | なし | プライバシーポリシー | `/privacy` | 公開 |
+| [07_terms.md](./07_terms.md) | なし | 利用規約 | `/terms` | 公開 |
 | [02_machine_list.md](./02_machine_list.md) | #24 | マシン一覧 | `/machines` | 認証必須 |
 | [03_machine_detail.md](./03_machine_detail.md) | #22 | マシン詳細 | `/machines/[machineId]` | 認証必須 |
 | [04_machine_creation_chat.md](./04_machine_creation_chat.md) | #25 | マシン作成チャット | `/machines/chat`、`/machines/chat/[sessionId]` | 認証必須 |
 | [05_user_profile.md](./05_user_profile.md) | #21 | ユーザー情報 | `/profile` | 認証必須 |
-| [05_user_profile.md](./05_user_profile.md) | #21 | ユーザー公開プロフィール | `/users/[userId]` | 認証必須 |
+| [05_user_profile.md](./05_user_profile.md) | #21 | ユーザー公開プロフィール | `/users/[publicId]` | 認証必須 |
 
 
 ## 認証と共通遷移
 
-- `/machines`、`/machines/[machineId]`、`/machines/chat`、`/machines/chat/[sessionId]`、`/profile`、`/users/[userId]` は認証必須とする。未認証でアクセスした場合は `/login` へ遷移する。
+- `/machines`、`/machines/[machineId]`、`/machines/chat`、`/machines/chat/[sessionId]`、`/profile`、`/users/[publicId]` は認証必須とする。未認証でアクセスした場合は `/login` へ遷移する。
 - 認証済みで `/login` を開いた場合は `/machines` へ遷移する。
-- `/privacy` は認証状態によらず表示できる。ログイン画面から遷移できる。
+- `/privacy` と `/terms` は認証状態によらず表示できる。ログイン画面の案内文から遷移できる。利用規約の本文からもプライバシーポリシーへ遷移できる。
 - ログイン成功後は `/machines` へ遷移する。
 - 一覧からマシンを選択した場合は `/machines/[machineId]` へ遷移する。
-- 一覧で作成者を選択した場合は `/users/[userId]` へ遷移する。
+- 一覧で作成者を選択した場合は `/users/[publicId]` へ遷移する。
 - 一覧の「マシン作成」から `/machines/chat` へ遷移し、新規チャットを直接表示する。サイドバーで既存セッションを選択した場合は `/machines/chat/[sessionId]` を表示する。
 - サイドバー下部のアカウント設定メニューで「ログアウト」を選択した場合は、セッションを破棄して `/login` へ遷移する。
 - チャットでマシン生成・ビルドを開始し、対象マシンを特定できる状態になった場合は `/machines/[machineId]` へ遷移する。
-- 詳細画面および公開プロフィール画面（`/users/[userId]`）の「戻る」は `/machines` へ遷移する。自分のプロフィール（`/profile`）には戻る導線を表示しない。
+- 詳細画面および公開プロフィール画面（`/users/[publicId]`）の「戻る」は `/machines` へ遷移する。自分のプロフィール（`/profile`）には戻る導線を表示しない。
 
 ## 実装上の共通方針
 
