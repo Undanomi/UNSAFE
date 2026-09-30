@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Undanomi/SLSG/build_server/internal/config"
-	"github.com/Undanomi/SLSG/build_server/internal/postgres"
-	"github.com/Undanomi/SLSG/build_server/internal/worker"
+	"github.com/Undanomi/UNSAFE/build_server/internal/config"
+	"github.com/Undanomi/UNSAFE/build_server/internal/postgres"
+	"github.com/Undanomi/UNSAFE/build_server/internal/worker"
 )
 
 func main() {
