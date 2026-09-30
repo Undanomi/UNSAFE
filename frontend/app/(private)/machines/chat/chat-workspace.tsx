@@ -6,6 +6,7 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  CircleHelp,
   LoaderCircle,
   Pencil,
   XCircle,
@@ -26,6 +27,7 @@ import {
   type ActiveLimitNotice,
   ActiveSessionLimitPanel,
 } from "@/components/active-session-limit-panel"
+import { FlagHelpDialog } from "@/components/flag-help-dialog"
 
 import {
   type ActiveChatLink,
@@ -285,6 +287,15 @@ function getChatPrompt(step: number, isBasicReady: boolean) {
   return CHAT_PROMPTS[step] ?? CHAT_COPY.completePrompt
 }
 
+function isFlagStep(step: number) {
+  return (
+    step === CHAT_STEPS.userFlagChoice ||
+    step === CHAT_STEPS.userFlagDetails ||
+    step === CHAT_STEPS.systemFlagChoice ||
+    step === CHAT_STEPS.systemFlagDetails
+  )
+}
+
 function buildChatTranscript(currentStep: number, isBasicReady: boolean, answers: ChatAnswers) {
   return Object.values(CHAT_STEPS)
     .filter((step) => step < CHAT_STEPS.complete)
@@ -357,6 +368,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
   const creationAbortRef = useRef<AbortController | null>(null)
   const cancellationRequestedRef = useRef(false)
   const cancelDialogRef = useRef<HTMLDialogElement>(null)
+  const flagHelpDialogRef = useRef<HTMLDialogElement>(null)
   const cancelConfirmingRef = useRef(false)
   const choiceSubmissionRef = useRef(false)
   const progressSavingRef = useRef(false)
@@ -729,7 +741,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
               <div className="slsg-chat-message-list" ref={conversationRef}>
                 {transcript.map((message) => (
                   <article className="slsg-chat-message" key={message.step}>
-                    <AssistantMessage prompt={message.prompt} />
+                    <AssistantMessage
+                      onFlagHelp={() => flagHelpDialogRef.current?.showModal()}
+                      prompt={message.prompt}
+                      showFlagHelp={isFlagStep(message.step)}
+                    />
                     <UserMessage
                       answer={message.answer}
                       disabled={isCancelling}
@@ -751,7 +767,11 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                   </article>
                 ))}
                 <article className="slsg-chat-message is-current">
-                  <AssistantMessage prompt={prompt} />
+                  <AssistantMessage
+                    onFlagHelp={() => flagHelpDialogRef.current?.showModal()}
+                    prompt={prompt}
+                    showFlagHelp={basicReady || isFlagStep(step)}
+                  />
                 </article>
               </div>
 
@@ -793,14 +813,17 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                     ) : basicReady ? (
                       <div className="slsg-chat-actions-group">
                         <button
-                          className="slsg-chat-action-primary"
+                          className="slsg-chat-action-primary slsg-chat-create-button"
                           disabled={isSaving}
                           onClick={handleMachineCreation}
                           type="button"
                         >
-                          {showRebuildButton
-                            ? "改めてマシンをビルドする"
-                            : CHAT_COPY.buttons.createBasic}
+                          <span>
+                            {showRebuildButton
+                              ? "改めてマシンをビルドする"
+                              : CHAT_COPY.buttons.createBasic}
+                          </span>
+                          <small>マシン作成には数十分程度かかります。</small>
                         </button>
                         <button
                           className="slsg-chat-action-secondary"
@@ -813,14 +836,17 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
                       </div>
                     ) : isFinalStep ? (
                       <button
-                        className="slsg-chat-action-primary"
+                        className="slsg-chat-action-primary slsg-chat-create-button"
                         disabled={isSaving}
                         onClick={handleMachineCreation}
                         type="button"
                       >
-                        {showRebuildButton
-                          ? "改めてマシンをビルドする"
-                          : CHAT_COPY.buttons.createComplete}
+                        <span>
+                          {showRebuildButton
+                            ? "改めてマシンをビルドする"
+                            : CHAT_COPY.buttons.createComplete}
+                        </span>
+                        <small>マシン作成には数十分程度かかります。</small>
                       </button>
                     ) : null}
                   </div>
@@ -868,6 +894,7 @@ export function ChatWorkspace({ session }: ChatWorkspaceProps) {
           </button>
         </div>
       </dialog>
+      <FlagHelpDialog dialogRef={flagHelpDialogRef} />
     </div>
   )
 }
@@ -1002,7 +1029,15 @@ function CreationStatusPanel({
   )
 }
 
-function AssistantMessage({ prompt }: { prompt: { help: string; question: string } }) {
+function AssistantMessage({
+  onFlagHelp,
+  prompt,
+  showFlagHelp = false,
+}: {
+  onFlagHelp: () => void
+  prompt: { help: string; question: string }
+  showFlagHelp?: boolean
+}) {
   return (
     <div className="slsg-chat-assistant">
       <span aria-label="UNSAFEチャットボット" className="slsg-chat-assistant-avatar" role="img">
@@ -1012,6 +1047,12 @@ function AssistantMessage({ prompt }: { prompt: { help: string; question: string
         <span className="slsg-chat-assistant-name">UNSAFE</span>
         <h2>{prompt.question}</h2>
         {prompt.help ? <p>{prompt.help}</p> : null}
+        {showFlagHelp ? (
+          <button className="slsg-chat-flag-help-button" onClick={onFlagHelp} type="button">
+            <CircleHelp aria-hidden="true" size={16} strokeWidth={1.9} />
+            フラグとは？
+          </button>
+        ) : null}
       </div>
     </div>
   )
