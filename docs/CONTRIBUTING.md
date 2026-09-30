@@ -1,6 +1,6 @@
 # Contributing
 
-SLSG への貢献を歓迎します。Issue や PR の出し方と、開発環境の準備を案内します。
+UNSAFE への貢献を歓迎します。Issue や PR の出し方と、開発環境の準備を案内します。
 
 ## 目次
 
@@ -13,8 +13,8 @@ SLSG への貢献を歓迎します。Issue や PR の出し方と、開発環�
 
 ## Issue を作成する
 
-1. [既存の Issue](https://github.com/Undanomi/SLSG/issues) を検索し、重複がないか確認します。
-2. [新しい Issue](https://github.com/Undanomi/SLSG/issues/new/choose) を開き、内容に合うテンプレートを選びます。
+1. [既存の Issue](https://github.com/Undanomi/UNSAFE/issues) を検索し、重複がないか確認します。
+2. [新しい Issue](https://github.com/Undanomi/UNSAFE/issues/new/choose) を開き、内容に合うテンプレートを選びます。
 
 | テンプレート | 使う場面 |
 | --- | --- |

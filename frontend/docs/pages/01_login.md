@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| 対応 Issue | [#23: フロント／タイトル画面の機能設計](https://github.com/Undanomi/SLSG/issues/23) |
+| 対応 Issue | [#23: フロント／タイトル画面の機能設計](https://github.com/Undanomi/UNSAFE/issues/23) |
 | ルート | `/login` |
 | アクセス条件 | 未認証の利用者が表示する。認証済みの場合は `/machines` へ遷移する。 |
 | 目的 | 利用者を認証し、マシン一覧の利用を開始できる状態にする。 |
