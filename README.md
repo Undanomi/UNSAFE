@@ -1,6 +1,6 @@
 # UNSAFE
 
-[![デモサイト](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://unsafe.konekotech.com/) [![YouTube 動画を見る](https://img.shields.io/badge/YouTube-Watch-red?style=flat&logo=youtube&logoColor=white)](https://www.youtube.com)
+[![デモサイト](https://img.shields.io/badge/%E3%83%87%E3%83%A2%E3%82%B5%E3%82%A4%E3%83%88-Active-blue?style=flat)](https://unsafe.konekotech.com/)
 
 UNSAFE（UN-danomi Security AI Framework for Education）へようこそ！現在デモサイト公開中です。
 
