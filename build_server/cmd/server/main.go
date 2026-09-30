@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Undanomi/SLSG/build_server/internal/config"
-	"github.com/Undanomi/SLSG/build_server/internal/httpapi"
-	"github.com/Undanomi/SLSG/build_server/internal/postgres"
+	"github.com/Undanomi/UNSAFE/build_server/internal/config"
+	"github.com/Undanomi/UNSAFE/build_server/internal/httpapi"
+	"github.com/Undanomi/UNSAFE/build_server/internal/postgres"
 )
 
 func main() {

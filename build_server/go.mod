@@ -1,4 +1,4 @@
-module github.com/Undanomi/SLSG/build_server
+module github.com/Undanomi/UNSAFE/build_server
 
 go 1.25.0
 
