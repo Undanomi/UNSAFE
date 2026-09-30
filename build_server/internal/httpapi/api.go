@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Undanomi/SLSG/build_server/internal/archive"
-	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
-	"github.com/Undanomi/SLSG/build_server/internal/identity"
-	"github.com/Undanomi/SLSG/build_server/internal/postgres"
+	"github.com/Undanomi/UNSAFE/build_server/internal/archive"
+	"github.com/Undanomi/UNSAFE/build_server/internal/buildlog"
+	"github.com/Undanomi/UNSAFE/build_server/internal/identity"
+	"github.com/Undanomi/UNSAFE/build_server/internal/postgres"
 )
 
 var identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)

@@ -21,12 +21,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Undanomi/SLSG/build_server/internal/archive"
-	"github.com/Undanomi/SLSG/build_server/internal/buildlog"
-	"github.com/Undanomi/SLSG/build_server/internal/config"
-	"github.com/Undanomi/SLSG/build_server/internal/domain"
-	"github.com/Undanomi/SLSG/build_server/internal/identity"
-	"github.com/Undanomi/SLSG/build_server/internal/postgres"
+	"github.com/Undanomi/UNSAFE/build_server/internal/archive"
+	"github.com/Undanomi/UNSAFE/build_server/internal/buildlog"
+	"github.com/Undanomi/UNSAFE/build_server/internal/config"
+	"github.com/Undanomi/UNSAFE/build_server/internal/domain"
+	"github.com/Undanomi/UNSAFE/build_server/internal/identity"
+	"github.com/Undanomi/UNSAFE/build_server/internal/postgres"
 )
 
 const (
