@@ -56,14 +56,6 @@ export function FlagHelpDialog({ dialogRef }: FlagHelpDialogProps) {
           </p>
         </section>
       </div>
-
-      <button
-        className="slsg-chat-action-primary slsg-flag-help-dialog-done"
-        onClick={() => dialogRef.current?.close()}
-        type="button"
-      >
-        閉じる
-      </button>
     </dialog>
   )
 }
