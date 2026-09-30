@@ -1,39 +1,23 @@
 "use client"
 
-import { ArrowLeft } from "lucide-react"
-import Link from "next/link"
-import type { ReactNode } from "react"
-import { useEffect, useState } from "react"
-import { DesignArtwork, MachineListHud } from "@/components/design-artwork"
-import { SlsgBrand } from "@/components/slsg-brand"
+import { LegalDocument, type LegalSection } from "@/components/legal-document"
 
-type PrivacySection = {
-  title: string
-  body: ReactNode
-}
-
-const PRIVACY_SECTIONS: PrivacySection[] = [
+const PRIVACY_SECTIONS: LegalSection[] = [
   {
     title: "1. 取得する情報",
     body: (
       <>
         <p>
-          利用者がGoogleアカウントでログインする際、本サービスはFirebase
-          Authenticationを通じてGoogleのOAuth 2.0およびOpenID
-          Connectを利用し、Googleアカウントを識別するための一意な識別子、メールアドレス、表示名、プロフィール画像および認証に必要な情報を取得します。また、本サービスの認証基盤で発行される利用者識別子やログイン日時を取り扱います。
-        </p>
-        <p>本サービスは、Googleアカウントのパスワードを取得または保存しません。</p>
-        <p>
-          Google
-          SSOは、ログイン、アカウント識別およびアカウント情報の初期設定のために使用します。Gmail、Google
-          Drive、Google
-          Calendarなど他のサービスのデータへのアクセス権限は要求せず、これらのデータにはアクセスしません。
+          Googleアカウントでログインする際は、認証サービスであるFirebase
+          Authenticationを利用します。アカウントの識別情報、メールアドレス、表示名、プロフィール画像、ログイン日時などの認証情報を取得します。Googleアカウントのパスワードは取得・保存しません。Gmail、Google
+          Drive、Google Calendarなどのデータへのアクセス権限も要求しません。
         </p>
         <p>
-          本サービスは、利用者が登録・入力したプロフィール情報、画面表示設定、セキュリティ学習用マシンの作成内容（チャットへの入力を含みます）、ビルド履歴、成果物および学習履歴を取得します。
+          利用者が入力したユーザー名や自己紹介、アイコンの表示方法、チャットへの入力内容を取得します。また、セキュリティ学習用マシンの作成条件、生成したシナリオやファイル、ビルド・検証・修復の記録、フラグの取得状況、学習支援のために生成した問題やヒントを保存します。
         </p>
         <p>
-          また、本サービスへのアクセスに伴う情報として、IPアドレス、ブラウザなどの利用環境に関する情報、アクセス日時、操作履歴を取得します。エラー、障害および不正利用の調査に必要なログも、調査に必要な範囲で記録します。
+          Firebase
+          Authenticationは、不正利用の防止などのため、利用者のIPアドレスとブラウザなどの種類を示す情報（User-Agent）を取り扱います。本サービスでも、エラーやマシンの生成・ビルドに関するログを記録します。
         </p>
       </>
     ),
@@ -42,21 +26,18 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     title: "2. 利用目的",
     body: (
       <>
-        <p>本サービスが1で取得した情報は、以下の目的に必要な範囲で使用します。</p>
+        <p>取得した情報は、次の目的に必要な範囲で使用します。</p>
         <ul>
-          <li>Google SSOによる認証とログイン処理</li>
-          <li>利用者のアカウントの作成と識別およびプロフィールの初期設定と表示</li>
-          <li>セキュリティ学習環境の作成、提供および管理</li>
-          <li>利用状況や学習履歴の表示</li>
-          <li>利用者が公開を選択した情報の、選択した範囲での共有</li>
-          <li>利用者からのお問い合わせへの対応</li>
-          <li>障害の調査およびサービス品質の改善</li>
-          <li>不正アクセス、不正利用その他のセキュリティ上の問題の検知と防止</li>
-          <li>法令または公的機関からの適法な要請への対応</li>
+          <li>ログイン処理とアカウントの識別</li>
+          <li>プロフィールの初期設定、編集、表示</li>
+          <li>セキュリティ学習用マシンの作成、提供、管理</li>
+          <li>学習履歴の表示と、問題やヒントによる学習支援</li>
+          <li>利用者間での公開マシンやプロフィールなどの共有</li>
+          <li>お問い合わせへの対応</li>
+          <li>障害の調査、サービスの改善、不正利用の防止</li>
+          <li>法令や公的機関からの適法な要請への対応</li>
         </ul>
-        <p>
-          取得した情報を、上記と無関係な目的には使用しません。Googleログインで取得した情報の利用は、認証、アカウントの作成、識別、初期設定・表示、お問い合わせへの対応、安全管理および法令への対応に必要な範囲に限定します。
-        </p>
+        <p>取得した情報を、これらと無関係な目的には使用しません。</p>
       </>
     ),
   },
@@ -65,87 +46,47 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     body: (
       <>
         <p>
-          本サービスがGoogleログイン（Firebase
-          Authentication経由）で取得したGoogleユーザーデータの使用および他のアプリケーションへの提供は、Limited
-          Use要件を含む
-          <a
-            href="https://developers.google.com/terms/api-services-user-data-policy"
-            target="_blank"
-            rel="noopener"
-          >
-            Google API Services User Data Policy
-          </a>
-          に従います。
+          Googleログインで取得した情報は、認証、アカウントの識別、プロフィールの初期設定・表示、お問い合わせへの対応、安全管理、法令への対応に使用します。広告配信やAIモデルの学習には使用しません。
         </p>
         <p>
-          本項は、Googleログインで取得した情報の取り扱いを定めるものです。これらの情報は、2に記載した範囲でのみ使用し、広告配信やAIモデルの学習には使用しません。
-        </p>
-        <p>
-          AIによるマシンの生成・検証・修復に利用する情報と、選択されたAIプロバイダー側での取り扱いについては、4および7に記載します。
-        </p>
-        <p>
-          運営担当者および委託先の担当者がGoogleユーザーデータを閲覧するのは、利用者から対象情報の閲覧について明示的な同意を得たサポート対応、セキュリティ上必要な調査、または法令上必要な場合に限ります。閲覧できる担当者と情報の範囲は、それぞれの対応に必要な最小限に限定します。
-        </p>
-        <p>
-          Googleユーザーデータの第三者への提供は、利用者に明示した本サービスの機能の提供・改善に必要で、利用者の同意を得た場合、セキュリティ上必要かつ法令上認められる場合、または法令に基づく場合に限定します。4に定める場合も、この制限が適用されます。
+          運営担当者がこれらの情報を閲覧するのは、利用者の明示的な同意を得たサポート対応、セキュリティ上必要な調査、法令上必要な対応に限り、必要最小限の範囲で行います。
         </p>
       </>
     ),
   },
   {
-    title: "4. 第三者への提供",
+    title: "4. 情報の公開・外部送信・第三者提供",
     body: (
       <>
-        <p>取得した個人情報を、次の場合を除いて第三者へ提供しません。</p>
-        <ul>
-          <li>提供先、提供する情報および目的を示した上で、利用者から事前に同意を得た場合</li>
-          <li>
-            本サービスの提供に必要な範囲で、秘密保持、安全管理および委託目的外の利用の禁止を義務付けた委託先へ取り扱いを委託する場合
-          </li>
-          <li>
-            不正利用やセキュリティ上の問題の調査・防止に必要であり、法令上認められる範囲で、対応に必要な相手に必要最小限の情報を提供する場合
-          </li>
-          <li>法令に基づく場合</li>
-        </ul>
-        <p>本サービスは、個人情報の販売や、第三者による行動追跡を目的とした提供を行いません。</p>
+        <h3 className="font-semibold">他の利用者への公開</h3>
         <p>
-          委託先に提供する場合も、本サービスの提供に必要な最小限の情報に限定し、委託先の取り扱いについて必要かつ適切な監督を行います。認証にはGoogleのFirebase
-          Authenticationを利用し、プロフィール、マシン、チャットおよび回答履歴は本サービスが管理するデータベースに保存します。Firebase
-          Authenticationでは、認証に伴う情報が米国で処理されます。取り扱いの詳細は
+          ユーザー名、自己紹介、アイコンは、他のログイン利用者に表示されます。Googleのプロフィール画像をアイコンに使用するかは、プロフィール画面で選択できます。
+        </p>
+        <p>
+          公開マシンとその作成者名、公開マシンの作成・クリア履歴も、他のログイン利用者が閲覧できます。マシンの公開・非公開は利用者が選択できます。
+        </p>
+        <h3 className="font-semibold">外部サービスへの送信</h3>
+        <p>
+          認証にはGoogleのFirebase
+          Authenticationを利用します。同サービスによる認証情報の処理は、米国内のデータセンターで行われます。詳細は
           <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">
             Firebaseのプライバシーとセキュリティに関する説明
           </a>
           をご確認ください。
         </p>
         <p>
-          本サービスは、セキュリティ学習用マシンの生成、検証および修復に、運用設定に応じてGoogleのGemini
-          APIまたはOpenAIのAPI（GPT-5.6
-          Lunaを含みます）のいずれかを利用します。1回の処理で送信する先は、選択されたAIプロバイダーです。この処理のため、チャットなどで入力されたマシン名、学習テーマ、難易度、対象OS、フラグの設定・取得条件を、選択されたAIプロバイダーへ送信します。また、生成したシナリオや攻撃手順、ソースコードおよび設定ファイル、検証結果、ビルド時のエラーメッセージ・ログ、修復履歴、処理対象を識別するシナリオIDを、各処理に応じて送信します。
+          マシンの生成・検証・修復や学習支援には、運用設定に応じてGoogleのGemini
+          APIまたはOpenAIのAPIを利用します。利用するAI事業者には、マシン名、学習テーマ、難易度、公開設定、フラグの設定などの作成条件を送信します。処理に応じて、生成したシナリオや攻略手順、ソースコード、設定ファイルも送信します。検証結果、エラーメッセージやログ、修復の記録、取得済みフラグの種類も送信対象になります。
         </p>
         <p>
-          Googleログインで取得したメールアドレス、表示名、プロフィール画像や利用者の認証用トークンを、マシン生成用の入力情報として付加する処理は行いません。ただし、マシンの作成条件に入力された情報や、生成ファイル・ログに含まれた情報は、上記の処理で選択されたAIプロバイダーへの送信対象になります。入力時には、実在する個人の情報や、本番環境のパスワード・APIキーなどの機密情報を含めないでください。
+          Googleログインで取得したメールアドレス、表示名、プロフィール画像、認証情報を、AIへの入力に自動で追加することはありません。ただし、利用者が入力した内容や生成ファイル・ログに含まれる情報は送信対象になります。実在する個人の情報や、本番環境のパスワード・APIキーなどの機密情報を入力しないでください。
         </p>
         <p>
-          Google側の取り扱いについては、
+          送信先でのデータの取り扱いは、
           <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener">
             Gemini APIの利用規約
           </a>
-          および
-          <a
-            href="https://ai.google.dev/gemini-api/docs/usage-policies"
-            target="_blank"
-            rel="noopener"
-          >
-            不正利用監視に関する説明
-          </a>
-          もご確認ください。保存については7に記載します。
-        </p>
-        <p>
-          OpenAI側の取り扱いについては、
-          <a href="https://openai.com/policies/services-agreement/" target="_blank" rel="noopener">
-            OpenAI Services Agreement
-          </a>
-          および
+          と
           <a
             href="https://developers.openai.com/api/docs/guides/your-data"
             target="_blank"
@@ -153,11 +94,13 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
           >
             OpenAI APIのデータ管理に関する説明
           </a>
-          もご確認ください。OpenAIの公式説明では、明示的にデータ共有へオプトインしない限り、APIへ送信されたデータはOpenAIのモデルの学習または改善には使用されません。本サービスは、当該データ共有にオプトインしません。保存については7に記載します。
+          に従います。
         </p>
+        <h3 className="font-semibold">第三者への提供</h3>
         <p>
-          利用者がプロフィール、マシンまたは学習履歴の公開を選択した場合は、公開前に対象情報と公開範囲を示し、同意を得た範囲でのみ他の利用者に表示します。
+          本サービスは、この項で説明した情報の公開と外部サービスの利用を除き、個人情報を第三者に提供しません。ただし、法令に基づく場合など、法令で認められる場合は提供することがあります。
         </p>
+        <p>個人情報の販売や、第三者による行動追跡を目的とした提供は行いません。</p>
       </>
     ),
   },
@@ -166,24 +109,13 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     body: (
       <>
         <p>
-          本サービスは、取得した情報を不正アクセス、漏えい、改ざん、消失から保護するため、次の対策を講じます。
-        </p>
-        <ul>
-          <li>HTTPSによる通信の暗号化</li>
-          <li>保存する個人情報および認証用トークンなどの機密情報の暗号化</li>
-          <li>業務上必要な担当者へのアクセス権限の制限</li>
-          <li>安全管理に必要な操作ログおよび監査ログの記録</li>
-          <li>不要になったトークンの失効および削除</li>
-          <li>セキュリティ更新と脆弱性への対応</li>
-        </ul>
-        <p>
-          マシンの作成条件、シナリオおよび処理状況は、本サービスのAIサーバーのデータベースにも保存します。生成したソースコード、検証・修復の記録およびビルド成果物は、本サービスのAIサーバーまたはビルドサーバーの保存領域にも保存します。
+          プロフィール、チャットへの入力、マシンの作成・学習履歴は、本サービスが管理するサーバーに保存します。生成したファイルやビルド成果物、検証・修復の記録も保存します。
         </p>
         <p>
-          情報は、利用目的の達成に必要な期間だけ保存します。アカウント情報は原則としてアカウントの利用中に保存し、削除申請後は7に定める手続と期間に従って削除します。
+          保存した情報には、認証や利用者ごとのアクセス制御を行います。チャットは作成した利用者が、非公開マシンはその作成者が利用できるように制限します。
         </p>
         <p>
-          法令上の保存義務または具体的な不正利用・セキュリティ上の問題への対応のために保存を継続する場合は、必要な情報と期間に限定し、他の目的には利用しません。保存の必要がなくなり次第削除します。バックアップおよび委託先に保存された情報の削除時期は7に記載します。
+          情報は、サービスの提供、お問い合わせへの対応、安全管理、法令への対応に必要な期間保存し、不要になった情報は削除します。保存済み情報の削除を希望する場合は、7の方法で申請してください。
         </p>
       </>
     ),
@@ -192,16 +124,9 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     title: "6. Googleアカウントとの連携解除",
     body: (
       <>
-        <p>利用者は、Googleアカウントの設定画面から、本サービスとの連携を解除できます。</p>
+        <p>Googleアカウントの設定画面から、本サービスとの連携を解除できます。</p>
         <p>
-          連携を解除すると、解除されたアクセス権限に基づいて本サービスがGoogleから新たな情報を取得することはできなくなります。再びGoogleでログインする場合は、改めて連携が必要になることがあります。
-        </p>
-        <p>
-          ただし、連携解除だけでは、保存済みのアカウント情報・学習履歴は削除されません。また、本サービスのログイン状態が直ちに終了するとは限りません。ログイン状態を終了する場合は本サービスからログアウトし、保存済み情報の削除を希望する場合はお問い合わせ窓口から申請してください。
-        </p>
-        <p>
-          連携解除などによりGoogleへのアクセスが不要になり、本サービスがGoogle
-          APIへのアクセス用OAuthトークンを保有している場合は、当該トークンを失効させ、削除します。
+          連携解除だけでは、本サービスに保存されたプロフィールや学習履歴は削除されません。また、本サービスから自動的にログアウトするとは限りません。利用を終える際は本サービスからログアウトし、保存済み情報の削除を希望する場合は7の方法で申請してください。
         </p>
       </>
     ),
@@ -211,59 +136,13 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     body: (
       <>
         <p>
-          利用者は、法令および本サービス所定の手続に従って、保有する個人情報について次の対応を依頼できます。
-        </p>
-        <ul>
-          <li>情報の確認</li>
-          <li>誤った情報の修正</li>
-          <li>アカウントおよび関連データの削除</li>
-          <li>Googleアカウントとの連携解除に関する案内</li>
-        </ul>
-        <p>
-          申請は10のお問い合わせ窓口で受け付けます。第三者による不正な申請を防ぐため、必要な範囲で本人確認を行います。
+          ユーザー名、自己紹介、アイコンはプロフィール画面で確認・変更できます。その他の個人情報の確認・修正や、アカウント・関連データの削除は、10のお問い合わせ窓口で受け付けます。Googleアカウントとの連携解除についても、同窓口にご相談ください。
         </p>
         <p>
-          削除申請を受け付け、本人確認を完了した後、速やかに本サービスでの対象情報の削除および委託先への削除依頼を行います。処理に時間を要する場合は、その理由と完了予定時期をお知らせします。ただし、5に定める保存が必要な情報は除きます。
+          申請を受け付けた際は、必要な範囲で本人確認を行い、法令に従って対応します。対応に時間がかかる場合は、その理由と完了予定時期をお知らせします。削除を完了した場合は、その旨を通知します。対応できない場合や、一部の情報を保存する必要がある場合は、法令上可能な範囲で理由、対象情報、保存期間または保存を終了する条件をお知らせします。
         </p>
         <p>
-          本サービスが管理するバックアップ内の対象情報は、通常利用を停止したうえで削除します。Firebase
-          Authenticationに保存された認証情報は、本サービスが同サービス上で対象利用者の削除処理を開始した後、稼働中のシステムおよびバックアップからの削除に最大180日かかります。詳細は
-          <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">
-            Firebaseのデータ処理に関する説明
-          </a>
-          をご確認ください。
-        </p>
-        <p>
-          Gemini
-          APIへ送信した入力情報、付随する文脈情報および生成結果は、Googleの標準の不正利用監視において、不正利用の検知・防止および必要な法令対応のため55日間保存されます。必要に応じて、Googleの権限を持つ担当者が確認する場合があります。この保存期間はFirebase
-          Authenticationの保存期間とは別です。本サービスでのデータ削除が、Google側の監視用記録の即時削除を意味するものではありません。詳細は
-          <a
-            href="https://ai.google.dev/gemini-api/docs/usage-policies"
-            target="_blank"
-            rel="noopener"
-          >
-            Gemini APIの不正利用監視に関する説明
-          </a>
-          をご確認ください。
-        </p>
-        <p>
-          OpenAI APIへ送信するリクエストには、生成結果をResponses
-          APIのアプリケーション状態として保存しない設定（
-          <code>store: false</code>
-          ）を使用します。ただし、通常のAPI利用では、入力情報、生成結果およびこれらから得られるメタデータが、不正利用の検知・防止および必要な法令対応のための監視ログに含まれ、最大30日間保存される場合があります。また、暗号化されたプロンプトキャッシュが最大24時間保持される場合があります。OpenAIとの契約またはプロジェクトにZero
-          Data RetentionもしくはModified Abuse
-          Monitoringが適用される場合は、保存条件が異なることがあります。本サービスでのデータ削除が、OpenAI側の監視用記録またはキャッシュの即時削除を意味するものではありません。詳細は
-          <a
-            href="https://developers.openai.com/api/docs/guides/your-data"
-            target="_blank"
-            rel="noopener"
-          >
-            OpenAI APIのデータ管理に関する説明
-          </a>
-          をご確認ください。
-        </p>
-        <p>
-          削除を完了した場合はその旨を通知します。対応できない場合や一部の情報を保存する必要がある場合は、法令上可能な範囲で、その理由、対象情報および保存期間または保存終了の条件をお知らせします。
+          外部サービスに保存された情報は、各事業者の保存・削除条件に従います。本サービスで情報を削除しても、外部サービスの記録が直ちに削除されるとは限りません。
         </p>
       </>
     ),
@@ -273,7 +152,7 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     body: (
       <>
         <p>
-          本サービスは、ログイン状態の維持、認証処理、不正利用の防止のためにCookieを使用します。広告配信や第三者による行動追跡を目的としたCookieは使用しません。
+          ログイン状態の維持と認証にCookieを使用します。広告配信や第三者による行動追跡を目的としたCookieは使用しません。ブラウザでCookieを無効にすると、ログインなどの機能を利用できないことがあります。
         </p>
         <p>
           ブラウザの設定でCookieを無効にできますが、その場合はログインなど一部の機能を利用できないことがあります。
@@ -286,10 +165,7 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
     body: (
       <>
         <p>
-          本ポリシーは、サービス内容や法令などの変更に応じて改定することがあります。このプライバシーポリシーに基づく利用者の権利を利用者の明示的な同意なく縮小することはありません。本ページにポリシーの変更内容と改定日を掲載し、過去の内容も確認できるようにします。
-        </p>
-        <p>
-          重要な変更を行う場合は、変更の適用前に利用者へ通知し、法令上必要な場合は改めて同意を取得します。Googleユーザーデータについて、従来説明していなかった情報を取得する場合や、新たな目的・方法で利用する場合は、その取得・利用を開始する前に変更内容を説明し、利用者の同意を取得します。
+          本ポリシーは、利用者への個別の通知なく変更することがあります。ただし、利用者に重大な影響を与えると判断した場合は、事前に通知または本サービス上で告知します。変更後のポリシーは、本ページに掲載した時点から効力を生じます。法令上、利用者の同意が必要な変更については、適用前に同意を得ます。
         </p>
       </>
     ),
@@ -302,7 +178,7 @@ const PRIVACY_SECTIONS: PrivacySection[] = [
           情報の取り扱い、Googleアカウントとの連携解除、アカウント削除に関するお問い合わせは、次の窓口までご連絡ください。
         </p>
         <p>
-          メールアドレス：<a href="mailto:slsg@example.com">slsg@example.com</a>
+          メールアドレス：<a href="mailto:undanomi20@gmail.com">undanomi20@gmail.com</a>
         </p>
       </>
     ),
@@ -313,148 +189,23 @@ const PRIVACY_TOC_LABELS = [
   "取得する情報",
   "利用目的",
   "Googleユーザーデータ",
-  "第三者への提供",
+  "公開・外部送信・第三者提供",
   "保存と安全管理",
   "連携解除",
   "確認・修正・削除",
-  "Cookie",
+  "Cookieなど",
   "ポリシーの変更",
   "お問い合わせ",
 ]
 
-function sectionId(index: number) {
-  return `privacy-section-${index + 1}`
-}
-
-function sectionTitle(title: string) {
-  return title.replace(/^\d+\.\s*/, "")
-}
-
-function PrivacySectionIndex({ index }: { index: number }) {
-  return (
-    <span aria-hidden="true" className="slsg-privacy-section-index">
-      <svg fill="none" viewBox="0 0 92 100">
-        <title>{`セクション${index}`}</title>
-        <path className="slsg-privacy-section-index-halo" d="M46 2 85 25v50L46 98 7 75V25Z" />
-        <path className="slsg-privacy-section-index-frame" d="M46 4 83 26v48L46 96 9 74V26Z" />
-      </svg>
-      <strong>{index}</strong>
-    </span>
-  )
-}
-
 export function PrivacyPolicy() {
-  const [activeSection, setActiveSection] = useState(1)
-
-  useEffect(() => {
-    const sections = PRIVACY_SECTIONS.map((_, index) =>
-      document.getElementById(sectionId(index)),
-    ).filter((section): section is HTMLElement => section instanceof HTMLElement)
-    let frameId: number | null = null
-
-    const updateActiveSection = () => {
-      frameId = null
-
-      if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) {
-        setActiveSection(sections.length)
-        return
-      }
-
-      const readingLine = Math.min(window.innerHeight * 0.28, 240)
-      let nextActiveSection = 1
-
-      for (const [index, section] of sections.entries()) {
-        if (section.getBoundingClientRect().top > readingLine) break
-        nextActiveSection = index + 1
-      }
-
-      setActiveSection((current) => (current === nextActiveSection ? current : nextActiveSection))
-    }
-
-    const scheduleActiveSectionUpdate = () => {
-      if (frameId !== null) return
-      frameId = window.requestAnimationFrame(updateActiveSection)
-    }
-
-    updateActiveSection()
-    window.addEventListener("scroll", scheduleActiveSectionUpdate, { passive: true })
-    window.addEventListener("resize", scheduleActiveSectionUpdate)
-
-    return () => {
-      window.removeEventListener("scroll", scheduleActiveSectionUpdate)
-      window.removeEventListener("resize", scheduleActiveSectionUpdate)
-      if (frameId !== null) window.cancelAnimationFrame(frameId)
-    }
-  }, [])
-
   return (
-    <div className="slsg-shell slsg-shell-machines slsg-privacy-page">
-      <aside className="slsg-sidebar slsg-privacy-sidebar">
-        <SlsgBrand className="slsg-privacy-brand" href="/login" />
-        <div className="slsg-privacy-sidebar-divider" />
-        <Link className="slsg-privacy-login-back" href="/login">
-          <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.8} />
-          ログイン画面に戻る
-        </Link>
-        <p className="slsg-privacy-toc-heading">このページの内容</p>
-        <nav aria-label="プライバシーポリシーの目次" className="slsg-privacy-toc">
-          {PRIVACY_TOC_LABELS.map((label, index) => {
-            const itemIndex = index + 1
-            const isActive = activeSection === itemIndex
-            return (
-              <a
-                aria-current={isActive ? "location" : undefined}
-                className={isActive ? "is-active" : ""}
-                href={`#${sectionId(index)}`}
-                key={label}
-                onClick={() => setActiveSection(itemIndex)}
-              >
-                <span>{String(itemIndex).padStart(2, "0")}</span>
-                <strong>{label}</strong>
-              </a>
-            )
-          })}
-        </nav>
-      </aside>
-
-      <MachineListHud />
-      <DesignArtwork variant="machines" />
-
-      <main className="slsg-main slsg-privacy-main">
-        <header className="slsg-privacy-header">
-          <Link className="slsg-detail-back-link slsg-privacy-header-back" href="/login">
-            <ArrowLeft aria-hidden="true" size={19} strokeWidth={1.8} />
-            ログインへ戻る
-          </Link>
-          <h1 className="slsg-machine-page-title font-bold">プライバシーポリシー</h1>
-          <p className="slsg-privacy-updated">最終更新日：2026年9月10日</p>
-          <p className="slsg-machine-page-description slsg-muted slsg-privacy-lead">
-            UNSAFE（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。
-          </p>
-        </header>
-
-        <article className="slsg-privacy-sections">
-          {PRIVACY_SECTIONS.map((section, index) => (
-            <section
-              className="slsg-privacy-section"
-              data-section-index={index + 1}
-              id={sectionId(index)}
-              key={section.title}
-            >
-              <PrivacySectionIndex index={index + 1} />
-              <div className="slsg-privacy-section-content">
-                <h2>{sectionTitle(section.title)}</h2>
-                <div className="slsg-privacy-section-body">{section.body}</div>
-              </div>
-            </section>
-          ))}
-
-          <section className="slsg-privacy-history">
-            <h2>変更履歴</h2>
-            <p>2026年9月5日：［変更内容］</p>
-          </section>
-        </article>
-      </main>
-    </div>
+    <LegalDocument
+      title="プライバシーポリシー"
+      idPrefix="privacy"
+      sections={PRIVACY_SECTIONS}
+      tocLabels={PRIVACY_TOC_LABELS}
+      lead="UNSAFE（以下「本サービス」）は、セキュリティ学習環境の提供、認証、サービスの安全な運営に必要な範囲で利用者の情報を取り扱います。"
+    />
   )
 }

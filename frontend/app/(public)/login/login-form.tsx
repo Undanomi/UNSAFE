@@ -191,8 +191,9 @@ export function LoginForm() {
             </button>
             <div className="slsg-login-divider" />
             <p className="slsg-login-consent">
-              続行すると、サービスのデータ取り扱いに同意したものとみなされます。{" "}
-              <Link href="/privacy">プライバシーポリシー</Link>
+              ログインすることで、<Link href="/privacy">プライバシーポリシー</Link>
+              に同意したものとみなされます。
+              <Link href="/terms">利用規約</Link>もご確認ください。
             </p>
           </div>
         </section>
