@@ -2514,6 +2514,85 @@
     min-height: 44px;
     padding: 0 16px;
   }
+  .slsg-flag-help-dialog {
+    width: min(680px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    margin: auto;
+    padding: 0;
+    overflow-y: auto;
+    border: 1px solid #657b9b;
+    border-radius: 12px;
+    background: linear-gradient(145deg, #29354c, #1c2538);
+    color: #e8f0fb;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  }
+  .slsg-flag-help-dialog::backdrop {
+    background: rgba(4, 9, 20, 0.76);
+  }
+  .slsg-flag-help-dialog-header {
+    position: sticky;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 26px;
+    border-bottom: 1px solid rgba(101, 123, 155, 0.55);
+    background: rgba(38, 50, 73, 0.98);
+  }
+  .slsg-flag-help-dialog-header h2 {
+    font-size: 21px;
+    font-weight: 700;
+  }
+  .slsg-flag-help-dialog-close {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    place-items: center;
+    border: 1px solid rgba(137, 157, 186, 0.55);
+    border-radius: 8px;
+    background: rgba(20, 28, 43, 0.5);
+    color: #d9e4f2;
+    font-size: 26px;
+    line-height: 1;
+  }
+  .slsg-flag-help-dialog-close:hover {
+    border-color: #8ab7ff;
+    background: rgba(52, 117, 241, 0.2);
+    color: #ffffff;
+  }
+  .slsg-flag-help-dialog-content {
+    display: grid;
+    gap: 24px;
+    padding: 26px;
+  }
+  .slsg-flag-help-dialog-content section {
+    display: grid;
+    gap: 12px;
+  }
+  .slsg-flag-help-dialog-content h3 {
+    color: #f5f8fd;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .slsg-flag-help-dialog-content p {
+    color: #c1cee0;
+    font-size: 14px;
+    line-height: 1.8;
+  }
+  .slsg-flag-help-dialog-content strong {
+    color: #f2f7ff;
+    font-weight: 700;
+  }
+  .slsg-flag-help-dialog-content hr {
+    border: 0;
+    border-top: 1px solid rgba(101, 123, 155, 0.42);
+  }
+  .slsg-flag-help-dialog-done {
+    width: calc(100% - 52px);
+    margin: 0 26px 26px;
+  }
   .slsg-chat-progress {
     display: flex;
     width: 100%;
@@ -2715,6 +2794,34 @@
     font-weight: 400;
     letter-spacing: 0.01em;
     line-height: 1.65;
+  }
+  .slsg-chat-flag-help-button {
+    display: inline-flex;
+    min-height: 32px;
+    align-items: center;
+    gap: 6px;
+    margin-top: 9px;
+    padding: 4px 9px;
+    border: 1px solid rgba(111, 158, 219, 0.62);
+    border-radius: 7px;
+    background: rgba(52, 117, 241, 0.12);
+    color: #aecdff;
+    font-size: 13px;
+    font-weight: 600;
+    transition:
+      border-color 160ms ease,
+      background 160ms ease,
+      color 160ms ease;
+  }
+  .slsg-chat-flag-help-button:hover {
+    border-color: #8ab7ff;
+    background: rgba(52, 117, 241, 0.26);
+    color: #ffffff;
+  }
+  .slsg-chat-flag-help-button:focus-visible,
+  .slsg-flag-help-dialog-close:focus-visible {
+    outline: 2px solid #9cecfc;
+    outline-offset: 2px;
   }
   .slsg-chat-answer,
   .slsg-chat-answer-editor {
@@ -3186,6 +3293,19 @@
       0 0 5px rgba(82, 133, 201, 0.96),
       0 0 22px rgba(63, 125, 223, 0.72),
       0 0 42px rgba(55, 102, 191, 0.34);
+  }
+  .slsg-chat-create-button {
+    min-width: 300px;
+    flex-direction: column;
+    gap: 3px;
+    padding: 9px 24px;
+  }
+  .slsg-chat-create-button small {
+    color: #c5d3e6;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 1.35;
   }
   .slsg-chat-action-primary:hover {
     border-color: #8ab7ff;
@@ -3794,6 +3914,9 @@
   .slsg-chat-action-primary,
   .slsg-chat-action-secondary {
     width: 100%;
+  }
+  .slsg-chat-create-button {
+    min-width: 0;
   }
   .slsg-chat-cancel-dialog {
     padding: 20px;
