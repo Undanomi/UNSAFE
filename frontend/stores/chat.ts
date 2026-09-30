@@ -84,7 +84,7 @@ export const EMPTY_CHAT_ANSWERS: ChatAnswers = {
 export const CHAT_COPY = {
   assistantLabel: "AI",
   basicReadyPrompt: {
-    help: "フラグを指定しない場合は、AIがシナリオに合わせて自動設定します。",
+    help: "より細かく調整したい場合は、フラグの取得方法の高度な設定を追加できます。特に指定しない項目は、AIがシナリオに合わせて自動で設定します。",
     question: "基本設定がそろいました。マシンを作成しますか？",
   },
   buttons: {
