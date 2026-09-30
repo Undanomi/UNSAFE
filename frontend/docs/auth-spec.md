@@ -11,7 +11,7 @@ PostgreSQL にはブラウザから直接アクセスしない。データ操作
 1. ブラウザで Google ログインを実行する。
 2. 取得した ID トークンを `createSessionAction` に送る。
 3. `createSessionService` が ID トークンを検証し、認証時刻が 1 分以内であることを確認する。
-4. Service が有効期限1日の Firebase Session Cookie を発行し、Action が `slsg-session` として保存する。ブラウザ側のCookieには `Max-Age` と `Expires` を設定せず、ブラウザ終了時に破棄されるセッションCookieとする。`HttpOnly`、`SameSite=Lax`、本番環境では `Secure` とする。
+4. Service が有効期限24時間の Firebase Session Cookie を発行し、Action が `slsg-session` として保存する。ブラウザ側のCookieには `Max-Age` と `Expires` を設定せず、セッションCookieとする。ただし、ブラウザのセッション復元機能でCookieが復元される場合があるため、ブラウザ終了によるログアウトは保証しない。サーバー側では発行から24時間で認証を無効とする。操作を続けても有効期限は延長せず、期限切れ後は再ログインを必要とする。`HttpOnly`、`SameSite=Lax`、本番環境では `Secure` とする。
 5. 初回ログイン時はPostgreSQLの `users` テーブルへFirebase UIDを主キーとするユーザーを作成する。
 
 ログアウト時は Session Cookie を削除する。クライアント側の Firebase Auth の状態はログイン後に破棄し、認証状態の正本を Cookie に一本化する。
