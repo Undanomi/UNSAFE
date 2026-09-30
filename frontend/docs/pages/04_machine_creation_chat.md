@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 | --- | --- |
-| 対応 Issue | [#25: フロント／チャット画面の機能設計](https://github.com/Undanomi/SLSG/issues/25) |
+| 対応 Issue | [#25: フロント／チャット画面の機能設計](https://github.com/Undanomi/UNSAFE/issues/25) |
 | ルート | `/machines/chat`、`/machines/chat/[sessionId]` |
 | アクセス条件 | 認証必須。未認証の場合は `/login` へ遷移する。 |
 | 目的 | AI との会話でマシン作成条件を収集し、マシン生成・ビルドを開始する。 |
